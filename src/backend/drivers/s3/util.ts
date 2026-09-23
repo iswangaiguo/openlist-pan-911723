@@ -364,6 +364,12 @@ export class S3Client {
       method,
       headers,
     }
+    // On a cold cache, Cloudflare may turn HEAD into GET when fetching the
+    // origin. SigV4 signs the method, so that rewrite makes B2/S3 reject it.
+    // Bypass the cache for metadata requests to preserve the signed method.
+    if (method === "HEAD") {
+      reqInit.cache = "no-store"
+    }
     if (
       body !== null &&
       body !== undefined &&
