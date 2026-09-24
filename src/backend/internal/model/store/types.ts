@@ -55,6 +55,11 @@ export interface Driver {
    * SQL 操作（用于 sql 格式，可选）
    */
   query?(sql: string, params: any[], env?: any): Promise<any[]>
+  /** Run independent read queries in one database round trip, preserving order. */
+  queryBatch?(
+    statements: Array<{ sql: string; params: any[] }>,
+    env?: any,
+  ): Promise<any[][]>
   execute?(sql: string, params: any[], env?: any): Promise<void>
   batch?(
     statements: Array<{ sql: string; params: any[] }>,

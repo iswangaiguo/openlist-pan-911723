@@ -338,13 +338,6 @@ fsRouter.post("/list", async (c) => {
       )
     }
 
-    const { content, provider, storage } = await listItems(
-      reqPath,
-      requestContext,
-    )
-    // write：用户写权限 + meta.write_users 白名单（对齐 Go common.CanWrite）
-    const writable = canWrite(user) && canWriteMeta(user, meta, reqPath)
-    const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
     // 下载签名（对齐 Go server/common.Sign + handles.isEncrypt）：
     //   目录不签名；sign_all（或 TS 扩展的 link_expiration）开启、
     //   或该目录被设了密码的 meta 覆盖时，为文件项签发 HMAC 签名。
@@ -357,6 +350,15 @@ fsRouter.post("/list", async (c) => {
     const signExpiresIn = signNeeded
       ? signPolicy.expiresIn || (await getSignExpiresIn(c))
       : 0
+    // Read policy before the remote listing. If B2 takes longer than the
+    // one-second config memoization window, this avoids a second D1 load.
+    const { content, provider, storage } = await listItems(
+      reqPath,
+      requestContext,
+    )
+    // write：用户写权限 + meta.write_users 白名单（对齐 Go common.CanWrite）
+    const writable = canWrite(user) && canWriteMeta(user, meta, reqPath)
+    const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
     // Normalize each item to the full Obj shape expected by the frontend
     const normalized = await Promise.all(
       content

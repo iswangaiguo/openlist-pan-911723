@@ -6,6 +6,7 @@ import { readPersistedSecret, writePersistedSecret } from "./json"
 import { mapFormat } from "./format/map"
 import { keyFormat } from "./format/key"
 import { sqlFormat } from "./format/sql"
+import { d1Driver } from "./driver/d1"
 import {
   TABLE_NAMES,
   DDL_TABLE_NAMES,
@@ -265,6 +266,74 @@ test("sql format: roundtrip via mock SQL driver (columnar)", async () => {
   const driver = createMockSqlDriver()
   assert.equal(await sqlFormat.save(SAMPLE_DB, driver), true)
   assert.deepEqual(await sqlFormat.load(driver), SAMPLE_DB)
+})
+
+test("sql format: D1 reads its initialized configuration in one batch", async () => {
+  const driver = createMockSqlDriver("d1")
+  assert.equal(await sqlFormat.save(SAMPLE_DB, driver), true)
+  const query = driver.query!
+  let batchCalls = 0
+  driver.queryBatch = async (statements) => {
+    batchCalls++
+    assert.equal(statements.length, TABLE_NAMES.length + 1)
+    assert.match(statements[0].sql, /schema_info/)
+    return Promise.all(statements.map(({ sql, params }) => query(sql, params)))
+  }
+  driver.query = async () => {
+    throw new Error("batched D1 load must not issue individual reads")
+  }
+
+  assert.deepEqual(await sqlFormat.load(driver), SAMPLE_DB)
+  assert.equal(batchCalls, 1)
+})
+
+test("sql format: batched D1 load rejects incomplete results", async () => {
+  const driver = createMockSqlDriver("d1")
+  driver.queryBatch = async () => [[{ v: "initialized" }]]
+  await assert.rejects(sqlFormat.load(driver), /incomplete result/)
+})
+
+test("D1 driver returns ordered SELECT rows from one batch call", async () => {
+  let schemaCalls = 0
+  let queryCalls = 0
+  const db = {
+    prepare(sql: string) {
+      return {
+        sql,
+        bind(...params: any[]) {
+          return { sql, params }
+        },
+        async run() {
+          return { success: true }
+        },
+      }
+    },
+    async batch(statements: Array<{ sql: string; params: any[] }>) {
+      if (statements[0].sql.startsWith("CREATE TABLE")) {
+        schemaCalls++
+        return statements.map(() => ({ success: true, results: [] }))
+      }
+      queryCalls++
+      assert.deepEqual(statements.map((s) => s.params), [["a"], ["b"]])
+      return statements.map((s) => ({
+        success: true,
+        results: [{ value: s.params[0] }],
+      }))
+    },
+  }
+
+  assert.deepEqual(
+    await d1Driver.queryBatch!(
+      [
+        { sql: "SELECT ?", params: ["a"] },
+        { sql: "SELECT ?", params: ["b"] },
+      ],
+      { DB: db },
+    ),
+    [[{ value: "a" }], [{ value: "b" }]],
+  )
+  assert.equal(schemaCalls, 1)
+  assert.equal(queryCalls, 1)
 })
 
 test("sql format: MySQL dialect uses ON DUPLICATE KEY UPDATE (no INSERT OR REPLACE)", async () => {

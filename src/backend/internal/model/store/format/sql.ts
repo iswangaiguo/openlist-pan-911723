@@ -77,6 +77,28 @@ export const sqlFormat: FormatAdapter = {
       throw new Error(`Driver ${driver.name} does not support SQL queries`)
     }
 
+    // D1 can return all seven SELECT results in one round trip and one
+    // transaction. Other SQL drivers retain their existing query path.
+    if (driver.queryBatch) {
+      const queries = [
+        { sql: "SELECT v FROM schema_info WHERE k = ?", params: [INIT_MARK] },
+        ...TABLE_NAMES.map((table) => ({
+          sql: `SELECT * FROM ${qn(table, env)}`,
+          params: [],
+        })),
+      ]
+      const results = await driver.queryBatch(queries, env)
+      if (results.length !== queries.length) {
+        throw new Error("SQL query batch returned an incomplete result")
+      }
+      if (results[0].length === 0) return null
+      const out: Record<string, any> = {}
+      TABLE_NAMES.forEach((table, index) => {
+        out[table] = results[index + 1].map((r: any) => rowToEntity(table, r))
+      })
+      return out
+    }
+
     // 检查是否已初始化（schema_info 为 TS 内部标记表，不加前缀）
     const marks = await driver.query(
       "SELECT v FROM schema_info WHERE k = ?",

@@ -47,9 +47,13 @@ const d1Inited = new WeakMap<object, boolean>()
 async function ensureSchema(db: any, env?: any): Promise<void> {
   if (d1Inited.get(db)) return
   // KV 表（map/key 格式）+ 列式表（sql 格式）一并创建
-  for (const ddl of [...KV_SCHEMA_SQLITE, ...buildDdl("sqlite", env)]) {
-    await db.prepare(ddl).run()
-  }
+  // A fresh isolate must ensure these tables exist, but nine separate D1
+  // round trips make its first directory request needlessly slow.
+  await db.batch(
+    [...KV_SCHEMA_SQLITE, ...buildDdl("sqlite", env)].map((ddl) =>
+      db.prepare(ddl),
+    ),
+  )
   d1Inited.set(db, true)
 }
 
@@ -116,6 +120,28 @@ export const d1Driver: Driver = {
     const stmt = db.prepare(sql)
     const result = await stmt.bind(...params).all()
     return result.results || []
+  },
+
+  async queryBatch(
+    statements: Array<{ sql: string; params: any[] }>,
+    env?: any,
+  ): Promise<any[][]> {
+    const db = getD1(env)
+    if (!db) throw new Error("D1 binding not found")
+
+    await ensureSchema(db, env)
+    const results = await db.batch(
+      statements.map(({ sql, params }) => db.prepare(sql).bind(...params)),
+    )
+    if (!Array.isArray(results) || results.length !== statements.length) {
+      throw new Error("D1 query batch returned an incomplete result")
+    }
+    return results.map((result: any) => {
+      if (result?.success === false || !Array.isArray(result?.results)) {
+        throw new Error("D1 query batch failed")
+      }
+      return result.results
+    })
   },
 
   async execute(sql: string, params: any[], env?: any): Promise<void> {
