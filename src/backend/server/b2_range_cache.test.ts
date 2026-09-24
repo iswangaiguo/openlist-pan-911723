@@ -128,7 +128,7 @@ test("cached ranges remain authenticated, signed to B2, and version checked", as
   assert.equal(res.headers.get("X-OpenList-Range-Cache"), "HIT")
   assert.equal(res.headers.get("Cache-Control"), "private, no-store")
   assert.equal(calls[0].cache, "no-store")
-  assert.equal(calls[1].cf.cacheTtlByStatus["200-299"], 3600)
+  assert.equal(calls[1].cf.cacheTtlByStatus["200-299"], 604800)
   assert.equal(calls[1].cf.cacheTtlByStatus["300-599"], -1)
   assert.equal(new Headers(calls[1].headers).get("range"), "bytes=100-103")
   calls.length = 0

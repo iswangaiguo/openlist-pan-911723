@@ -115,7 +115,7 @@ async function safeProxyFetch(
         ? {
             cf: {
               cacheEverything: true,
-              cacheTtlByStatus: { "200-299": 3600, "300-599": -1 },
+              cacheTtlByStatus: { "200-299": 604800, "300-599": -1 },
             },
           }
         : bypassCache || policy.target
