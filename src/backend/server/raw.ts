@@ -81,6 +81,7 @@ async function safeProxyFetch(
   url: string,
   headers: Record<string, string>,
   allowHosts?: ReadonlySet<string> | string[],
+  isVideo = false,
 ): Promise<Response> {
   const MAX_REDIRECTS = 5
   let current = url
@@ -92,9 +93,16 @@ async function safeProxyFetch(
       throw new Error(e?.message || "SSRF blocked: restricted destination")
     }
 
+    // Cold-cache B2 video ranges can trigger whole-file origin reads. Keep
+    // seeking targeted by bypassing fetch's cache only for these subrequests.
+    const bypassCache =
+      isVideo &&
+      new URL(current).hostname.endsWith(".backblazeb2.com") &&
+      new Headers(currentHeaders).has("range")
     const res = await fetch(current, {
       headers: currentHeaders,
       redirect: "manual",
+      ...(bypassCache ? { cache: "no-store" as const } : {}),
     })
 
     const location = res.headers.get("location")
@@ -216,7 +224,12 @@ async function proxyUpstream(
 
   let upstreamRes: Response
   try {
-    upstreamRes = await safeProxyFetch(fileItem.raw_url, headers, trustedHosts)
+    upstreamRes = await safeProxyFetch(
+      fileItem.raw_url,
+      headers,
+      trustedHosts,
+      fileItem.type === 2,
+    )
   } catch (ssrfErr: any) {
     return c.text(ssrfErr.message || "SSRF blocked", 403)
   }
@@ -229,7 +242,12 @@ async function proxyUpstream(
       `[rawRouter] Upstream ignored/refused Range (status=${upstreamRes.status}) for '${reqPath}', retrying without Range header...`,
     )
     delete headers["Range"]
-    upstreamRes = await safeProxyFetch(fileItem.raw_url, headers, trustedHosts)
+    upstreamRes = await safeProxyFetch(
+      fileItem.raw_url,
+      headers,
+      trustedHosts,
+      fileItem.type === 2,
+    )
   }
 
   // ---- 二次校验：按上游实际回传的大小再判一次 ----
