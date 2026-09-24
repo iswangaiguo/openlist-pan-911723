@@ -92,3 +92,6 @@ docs/code-review-*.md
 wrangler.d1.jsonc
 .wrangler-dryrun/
 .tmp-dryrun/
+
+# Local single-object cache pilot configuration
+wrangler.pilot.json
