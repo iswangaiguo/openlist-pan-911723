@@ -6,8 +6,9 @@
  * createUploadSession / uploadPart / completeUploadSession（会话式分片）。
  *
  * 说明：
- * - 会话状态存于进程内 Map（Worker 单实例存活期间可断点续传）。
- *   跨实例/冷启动恢复依赖驱动 session token 的自包含性，本层不做 KV 持久化。
+ * - D1 deployments persist sessions and each part separately, so parallel
+ *   acknowledgements survive cold starts without overwriting one another.
+ * - Non-D1 runtimes retain the existing in-process session store.
  * - chunk 按 index（0-based）桥接到驱动 uploadPart(partNumber = index + 1)，
  *   与官方前端 multipart.ts 的 chunk index 语义对齐。
  * - received 以区间数组 [number, number][] 表示，供前端断点续传跳过已收分片。
@@ -22,6 +23,9 @@ export type MultipartState =
 
 export interface MultipartSession {
   upload_id: string
+  /** Owner, actual directory and storage configuration fingerprint. */
+  scope: string
+  file_md5: string
   state: MultipartState
   attempt: number
   path: string
@@ -88,7 +92,11 @@ function intervalsOf(set: Set<number>): [number, number][] {
 
 export function snapshot(s: MultipartSession): MultipartSnapshot {
   const intervals = intervalsOf(s.received)
-  const receivedBytes = s.received.size * s.chunk_size
+  const receivedBytes = Array.from(s.received).reduce(
+    (bytes, index) =>
+      bytes + Math.min(s.chunk_size, s.size - index * s.chunk_size),
+    0,
+  )
   // frontier：连续已收的最大 index + 1（驱动顺序写入进度）
   let frontier = 0
   for (let i = 0; i < s.total_chunks; i++) {
@@ -115,33 +123,250 @@ export function snapshot(s: MultipartSession): MultipartSnapshot {
   }
 }
 
-export function getSession(uploadId: string): MultipartSession | undefined {
-  return sessions.get(uploadId)
+const initialized = new WeakMap<object, Promise<void>>()
+const SESSION_TTL = 7 * 24 * 60 * 60 * 1000
+
+async function database(env?: any): Promise<any | undefined> {
+  const binding = env?.DB || env?.OPENLIST_DB
+  if (
+    typeof binding?.prepare !== "function" ||
+    typeof binding?.batch !== "function"
+  )
+    return
+  // Read-your-writes consistency also applies when D1 read replication is enabled.
+  const db =
+    typeof binding.withSession === "function"
+      ? binding.withSession("first-primary")
+      : binding
+  let ready = initialized.get(binding)
+  if (!ready) {
+    ready = db
+      .batch([
+        db.prepare(`CREATE TABLE IF NOT EXISTS openlist_upload_sessions (
+        upload_id TEXT PRIMARY KEY, scope TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL,
+        state TEXT NOT NULL, payload TEXT NOT NULL, expires_at INTEGER NOT NULL,
+        complete_lock_until INTEGER NOT NULL DEFAULT 0)`),
+        db.prepare(`CREATE TABLE IF NOT EXISTS openlist_upload_parts (
+        upload_id TEXT NOT NULL, part_index INTEGER NOT NULL, etag TEXT,
+        PRIMARY KEY (upload_id, part_index))`),
+        db.prepare(
+          `CREATE UNIQUE INDEX IF NOT EXISTS openlist_upload_resume ON openlist_upload_sessions(scope, path, size) WHERE state IN ('receiving', 'failed_retriable')`,
+        ),
+      ])
+      .then(() => {})
+    initialized.set(binding, ready!)
+  }
+  try {
+    await ready
+  } catch (error) {
+    initialized.delete(binding)
+    throw error
+  }
+  return db
 }
 
-/** 查找同 path+size 的未完成会话（用于断点续传） */
-export function findReceivingSession(
+/** Bound memory even when Content-Length is missing or inaccurate. */
+export async function readPartBody(
+  request: Request,
+  expected: number,
+): Promise<Uint8Array | undefined> {
+  if (!request.body) return
+  const reader = request.body.getReader()
+  const bytes = new Uint8Array(expected)
+  let offset = 0
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) return offset === expected ? bytes : undefined
+      if (offset + value.length > expected) {
+        await reader.cancel().catch(() => {})
+        return
+      }
+      bytes.set(value, offset)
+      offset += value.length
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+export async function uploadScope(
+  user: any,
+  storage: any,
+  actualDir: string,
+  md5: string,
+): Promise<string> {
+  const bytes = new TextEncoder().encode(
+    JSON.stringify([
+      user.id,
+      user.base_path,
+      actualDir,
+      storage.id,
+      storage.driver,
+      storage.mount_path,
+      storage.addition,
+      md5,
+    ]),
+  )
+  const hash = await crypto.subtle.digest("SHA-256", bytes)
+  return Array.from(new Uint8Array(hash), (b) =>
+    b.toString(16).padStart(2, "0"),
+  ).join("")
+}
+
+export async function getSession(
+  uploadId: string,
+  env?: any,
+): Promise<MultipartSession | undefined> {
+  const db = await database(env)
+  if (!db) {
+    const s = sessions.get(uploadId)
+    return s && Date.now() - s.created_at < SESSION_TTL ? s : undefined
+  }
+  const row = await db
+    .prepare(
+      `SELECT payload, state FROM openlist_upload_sessions
+    WHERE upload_id = ? AND expires_at > ?`,
+    )
+    .bind(uploadId, Date.now())
+    .first()
+  if (!row) return
+  const session: MultipartSession = JSON.parse(row.payload)
+  session.state = row.state
+  session.received = new Set<number>()
+  session.partMd5s = new Array(session.total_chunks).fill(undefined)
+  const parts = await db
+    .prepare(
+      `SELECT part_index, etag FROM openlist_upload_parts
+    WHERE upload_id = ? ORDER BY part_index`,
+    )
+    .bind(uploadId)
+    .all()
+  for (const part of parts.results) {
+    session.received.add(part.part_index)
+    session.partMd5s[part.part_index] = part.etag ?? undefined
+  }
+  // Rapid uploads have no part records.
+  if (session.state === "completed" && !session.received.size) {
+    session.received = new Set(
+      Array.from({ length: session.total_chunks }, (_, i) => i),
+    )
+  }
+  return session
+}
+
+export async function findReceivingSession(
   path: string,
   size: number,
-): MultipartSession | undefined {
-  for (const s of sessions.values()) {
-    if (
-      s.path === path &&
-      s.size === size &&
-      (s.state === "receiving" || s.state === "failed_retriable")
-    ) {
-      return s
-    }
+  scope: string,
+  env?: any,
+): Promise<MultipartSession | undefined> {
+  const db = await database(env)
+  if (!db)
+    return Array.from(sessions.values()).find(
+      (s) =>
+        s.path === path &&
+        s.size === size &&
+        s.scope === scope &&
+        Date.now() - s.created_at < SESSION_TTL &&
+        (s.state === "receiving" || s.state === "failed_retriable"),
+    )
+  const row = await db
+    .prepare(
+      `SELECT upload_id FROM openlist_upload_sessions
+    WHERE scope = ? AND path = ? AND size = ? AND state IN ('receiving', 'failed_retriable')
+    AND expires_at > ? ORDER BY expires_at DESC LIMIT 1`,
+    )
+    .bind(scope, path, size, Date.now())
+    .first()
+  return row ? getSession(row.upload_id, env) : undefined
+}
+
+export async function putSession(
+  s: MultipartSession,
+  env?: any,
+): Promise<void> {
+  const db = await database(env)
+  if (!db) {
+    sessions.set(s.upload_id, s)
+    return
   }
-  return undefined
+  const payload = JSON.stringify({
+    ...s,
+    received: undefined,
+    partMd5s: undefined,
+  })
+  await db
+    .prepare(
+      `INSERT INTO openlist_upload_sessions(upload_id, scope, path, size, state, payload, expires_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(upload_id) DO UPDATE SET
+    state = excluded.state, payload = excluded.payload, expires_at = excluded.expires_at,
+    complete_lock_until = 0`,
+    )
+    .bind(
+      s.upload_id,
+      s.scope,
+      s.path,
+      s.size,
+      s.state,
+      payload,
+      Date.now() + SESSION_TTL,
+    )
+    .run()
 }
 
-export function putSession(s: MultipartSession): void {
-  sessions.set(s.upload_id, s)
+export async function recordPart(
+  s: MultipartSession,
+  index: number,
+  etag: string | undefined,
+  env?: any,
+): Promise<MultipartSession> {
+  const db = await database(env)
+  if (!db) {
+    s.received.add(index)
+    s.partMd5s[index] = etag
+    return s
+  }
+  // Never write an entire stale received set: other instances may be acknowledging parts concurrently.
+  await db.batch([
+    db
+      .prepare(
+        `INSERT INTO openlist_upload_parts(upload_id, part_index, etag)
+      VALUES (?, ?, ?) ON CONFLICT(upload_id, part_index) DO UPDATE SET etag = excluded.etag`,
+      )
+      .bind(s.upload_id, index, etag ?? null),
+    db
+      .prepare(
+        `UPDATE openlist_upload_sessions SET expires_at = ? WHERE upload_id = ?`,
+      )
+      .bind(Date.now() + SESSION_TTL, s.upload_id),
+  ])
+  return (await getSession(s.upload_id, env))!
 }
 
-export function deleteSession(uploadId: string): void {
-  sessions.delete(uploadId)
+export async function claimCompletion(
+  s: MultipartSession,
+  env?: any,
+): Promise<boolean> {
+  const db = await database(env)
+  if (!db) {
+    if (completionLocks.has(s.upload_id)) return false
+    completionLocks.add(s.upload_id)
+    return true
+  }
+  const row = await db
+    .prepare(
+      `UPDATE openlist_upload_sessions SET complete_lock_until = ?
+    WHERE upload_id = ? AND state IN ('receiving', 'failed_retriable') AND complete_lock_until < ?
+    RETURNING upload_id`,
+    )
+    .bind(Date.now() + 10 * 60 * 1000, s.upload_id, Date.now())
+    .first()
+  return !!row
+}
+const completionLocks = new Set<string>()
+export function releaseCompletion(s: MultipartSession): void {
+  completionLocks.delete(s.upload_id)
 }
 
 /** 生成 upload_id */
@@ -153,15 +378,28 @@ export function newUploadId(): string {
   return `mp_${rnd}`
 }
 
-/** 清理过期的 completed / aborted 会话（简单防内存泄漏） */
-export function pruneSessions(maxAgeMs = 60 * 60 * 1000): void {
+/** Remove expired local records. Provider-side unfinished uploads use the bucket lifecycle policy. */
+export async function pruneSessions(env?: any): Promise<void> {
   const now = Date.now()
-  for (const [id, s] of sessions) {
-    if (
-      (s.state === "completed" || s.state === "aborted") &&
-      now - s.created_at > maxAgeMs
-    ) {
-      sessions.delete(id)
+  const db = await database(env)
+  if (db) {
+    await db.batch([
+      db
+        .prepare(
+          `DELETE FROM openlist_upload_parts WHERE upload_id IN
+        (SELECT upload_id FROM openlist_upload_sessions WHERE expires_at <= ?)`,
+        )
+        .bind(now),
+      db
+        .prepare(`DELETE FROM openlist_upload_sessions WHERE expires_at <= ?`)
+        .bind(now),
+    ])
+  } else {
+    for (const [id, s] of sessions) {
+      if (now - s.created_at >= SESSION_TTL) {
+        sessions.delete(id)
+        completionLocks.delete(id)
+      }
     }
   }
 }

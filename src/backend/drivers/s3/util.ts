@@ -543,6 +543,92 @@ export class S3Client {
     }
   }
 
+  public async createMultipartUpload(key: string): Promise<string> {
+    const response = await this.fetch(
+      "POST",
+      this.getUrl(key, { uploads: "" }),
+      null,
+      {
+        "content-type": "application/octet-stream",
+      },
+    )
+    const xml = await response.text()
+    if (!response.ok) throw parseS3Error(xml, response.status)
+    return parseInitiateMultipartUpload(xml)
+  }
+
+  public async uploadPart(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: Uint8Array,
+  ): Promise<string> {
+    if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000) {
+      throw new Error("Invalid S3 part number")
+    }
+    const response = await this.fetch(
+      "PUT",
+      this.getUrl(key, {
+        uploadId,
+        partNumber: String(partNumber),
+      }),
+      body,
+      { "content-type": "application/octet-stream" },
+    )
+    if (!response.ok) throw parseS3Error(await response.text(), response.status)
+    const etag = response.headers.get("etag")
+    if (!etag) throw new Error("S3 UploadPart returned no ETag")
+    return etag
+  }
+
+  public async completeMultipartUpload(
+    key: string,
+    uploadId: string,
+    etags: string[],
+  ): Promise<void> {
+    if (!etags.length || etags.some((etag) => !etag))
+      throw new Error("Missing S3 part ETag")
+    const escape = (value: string) =>
+      value
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&apos;")
+    const body =
+      "<CompleteMultipartUpload>" +
+      etags
+        .map(
+          (etag, i) =>
+            `<Part><PartNumber>${i + 1}</PartNumber><ETag>${escape(etag)}</ETag></Part>`,
+        )
+        .join("") +
+      "</CompleteMultipartUpload>"
+    const response = await this.fetch(
+      "POST",
+      this.getUrl(key, { uploadId }),
+      body,
+      {
+        "content-type": "application/xml",
+      },
+    )
+    const xml = await response.text()
+    // S3 may report an error in a successful HTTP response.
+    if (!response.ok || /<Error[\s>]/.test(xml))
+      throw parseS3Error(xml, response.status)
+    if (!/<CompleteMultipartUploadResult[\s>]/.test(xml))
+      throw new Error("Invalid S3 completion response")
+  }
+
+  public async abortMultipartUpload(
+    key: string,
+    uploadId: string,
+  ): Promise<void> {
+    const response = await this.fetch("DELETE", this.getUrl(key, { uploadId }))
+    if (!response.ok && response.status !== 404)
+      throw parseS3Error(await response.text(), response.status)
+  }
+
   public async deleteObject(key: string): Promise<void> {
     const url = this.getUrl(key)
     const resp = await this.fetch("DELETE", url)

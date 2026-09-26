@@ -352,6 +352,8 @@ publicRouter.get("/settings", async (c) => {
     // 后端类型标识：前端据此在 GO / TS 模式间切换功能开关。
     // Go 版 OpenList 后端不返回此字段，前端缺省视为 "go"。
     backend: "ts-worker",
+    multipart_enabled: "true",
+    multipart_chunk_size: "10",
     announcement: "",
     pagination_type: "pagination",
     default_page_size: "20",
@@ -478,6 +480,17 @@ publicRouter.get("/settings", async (c) => {
       }
     }
   })
+
+  // The frontend falls back to a whole-file request below this threshold.
+  // Keep it within both the part limit and the whole-file upload limit.
+  const partCeiling = Math.min(
+    Number((c.env as any)?.MAX_UPPART) || 16 * 1024 * 1024,
+    Number((c.env as any)?.MAX_UPLOAD) || 25 * 1024 * 1024,
+    16 * 1024 * 1024,
+  ) / (1024 * 1024)
+  settingsObj.multipart_chunk_size = String(Math.max(1, Math.min(
+    Number(settingsObj.multipart_chunk_size) || 10, partCeiling,
+  )))
 
   // 动态检查是否存在且启用了 guest 账号
   const guest = (db.users || []).find((u: any) => u.username === "guest")

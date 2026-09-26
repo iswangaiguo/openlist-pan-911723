@@ -15,7 +15,7 @@ import {
   getDirName,
   isSubPath,
 } from "./util"
-import { getDogeCredentials } from "./sigv4"
+import { getDogeCredentials, hmacSha256Hex } from "./sigv4"
 
 export function normalizeS3Addition(a: any): S3Addition {
   const norm = { ...(a || {}) } as any
@@ -400,6 +400,67 @@ export class S3Driver implements StorageDriver {
       Number(this.addition.sign_url_expire) || 4,
       this.addition.direct_upload_host,
     )
+  }
+
+  // Contains only the provider upload ID and object key; credentials stay in the driver.
+  async createUploadSession(
+    _virtualDir: string,
+    physicalDir: string,
+    name: string,
+    _size: number,
+    _md5: string,
+  ) {
+    await this.checkDogeToken()
+    const key = this.getRemotePath(joinPath(physicalDir, name))
+    const uploadId = await this.client.createMultipartUpload(key)
+    const signature = await this.sessionSignature(key, uploadId)
+    return { session: JSON.stringify({ key, uploadId, signature }) }
+  }
+
+  private sessionSignature(key: string, uploadId: string) {
+    return hmacSha256Hex(
+      this.addition.secret_access_key,
+      JSON.stringify([
+        this.addition.endpoint,
+        this.addition.bucket,
+        key,
+        uploadId,
+      ]),
+    )
+  }
+
+  private async parseUploadSession(session: string) {
+    const parsed = JSON.parse(session)
+    const { key, uploadId, signature } = parsed
+    if (
+      typeof key !== "string" ||
+      typeof uploadId !== "string" ||
+      !uploadId ||
+      signature !== (await this.sessionSignature(key, uploadId))
+    ) {
+      throw new Error("Invalid S3 upload session")
+    }
+    return parsed as { key: string; uploadId: string }
+  }
+
+  async uploadPart(session: string, partNumber: number, body: Uint8Array) {
+    await this.checkDogeToken()
+    const { key, uploadId } = await this.parseUploadSession(session)
+    return {
+      partMd5: await this.client.uploadPart(key, uploadId, partNumber, body),
+    }
+  }
+
+  async completeUploadSession(session: string, etags: string[]) {
+    await this.checkDogeToken()
+    const { key, uploadId } = await this.parseUploadSession(session)
+    await this.client.completeMultipartUpload(key, uploadId, etags)
+  }
+
+  async abortUploadSession(session: string) {
+    await this.checkDogeToken()
+    const { key, uploadId } = await this.parseUploadSession(session)
+    await this.client.abortMultipartUpload(key, uploadId)
   }
 
   async other(method: string, path: string, body?: any): Promise<any> {
