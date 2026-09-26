@@ -16,6 +16,7 @@ async function harness() {
     export const State = { Initial:0, FetchingObj:1, FetchingObjs:2, FetchingMore:3, Folder:4, File:5, NeedPassword:6 };
     export const objStore = h.state;
     export const ObjStore = Object.fromEntries(['Objs','Total','Readme','Header','Write','WriteContentBypass','Provider','DirectUploadTools','State','Err','Revalidating','Obj','Related','RawUrl'].map(k=>['set'+k,v=>{h.state[k[0].toLowerCase()+k.slice(1)]=v}]));
+    ObjStore.mergeObjs=v=>{h.merges=(h.merges||0)+1;h.state.objs=v};
     export const me=()=>h.user, password=()=>h.password, shouldKeepState=()=>false;
     export const getPagination=()=>({type:'all',size:30});
     export const getHistoryKey=p=>p, hasHistory=()=>false, recoverHistory=()=>{}, clearHistory=()=>{};
@@ -102,6 +103,11 @@ test("revisit shows names synchronously while a fresh request is still pending",
   h.calls.at(-1).resolve(response("A updated"))
   await p
   assert.equal(h.state.objs[0].name, "A updated")
+  assert.equal(
+    h.merges,
+    1,
+    "background success must reconcile, not replace, rows",
+  )
   assert.equal(h.state.revalidating, false)
 })
 test("slow older navigation cannot overwrite a newer directory", async () => {
@@ -214,4 +220,70 @@ test("signature expiry and mutation endpoint classification", async () => {
   for (const endpoint of ["list", "get", "dirs", "search"])
     assert.equal(isDirectoryMutation("post", "/fs/" + endpoint), false)
   assert.equal(isDirectoryMutation("post", "/admin/user/update"), true)
+})
+
+test("real Solid store reconciliation keeps rows/selection while renewing signatures", async () => {
+  const result = await build({
+    stdin: {
+      contents: `
+        import {createStore} from 'solid-js/store';
+        import {reconcileDirectory} from './src/utils/directory_reconcile';
+        export {createStore,reconcileDirectory};
+      `,
+      resolveDir: root,
+      loader: "ts",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "browser",
+    conditions: ["browser"],
+  })
+  const { createStore, reconcileDirectory } = await import(
+    `data:text/javascript;base64,${Buffer.from(result.outputFiles[0].text).toString("base64")}`
+  )
+  const item = (name, sign) => ({
+    name,
+    is_dir: false,
+    size: 12,
+    modified: "2026-09-26",
+    type: 2,
+    sign,
+  })
+  const [state, set] = createStore({
+    objs: [{ ...item("B", "old"), selected: true }, item("A", "old")],
+  })
+  const b = state.objs[0],
+    a = state.objs[1]
+  const stable = reconcileDirectory(state.objs, [
+    item("A", "new"),
+    item("B", "new"),
+  ])
+  assert.equal(stable.sameMembership, true)
+  set("objs", stable.update)
+  assert.equal(state.objs[0], b, "existing sorted row must keep its identity")
+  assert.equal(state.objs[1], a)
+  assert.equal(state.objs[0].selected, true)
+  assert.equal(
+    state.objs[0].sign,
+    "new",
+    "renew signatures even when visible metadata is unchanged",
+  )
+  const changed = reconcileDirectory(state.objs, [
+    { ...item("B", "newer"), size: 50 },
+    item("C", "new"),
+  ])
+  assert.equal(changed.sameMembership, false)
+  set("objs", changed.update)
+  assert.equal(
+    state.objs[0],
+    b,
+    "surviving rows keep identity even when membership changes",
+  )
+  assert.equal(state.objs[0].size, 50)
+  assert.equal(state.objs[0].selected, true)
+  assert.deepEqual(
+    state.objs.map((o) => o.name),
+    ["B", "C"],
+  )
 })

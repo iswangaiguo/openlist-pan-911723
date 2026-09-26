@@ -15,6 +15,11 @@ path and paging settings. Snapshots are not persisted to localStorage or disk.
 The lifetime is shortened to precede any signed-link expiry by 10 seconds.
 Infinite-scroll/load-more modes keep their existing loading flow.
 
+Background responses reconcile existing rows by name, preserving selection and
+existing client-side ordering when membership is unchanged. Unchanged rows retain
+their Solid store identity, so their entrance animations do not replay. Signed
+links and changed metadata still update; additions/deletions update the list.
+
 On return navigation the previous list is rendered synchronously while a fresh
 `/api/fs/list` request runs. This is provisional display of previously viewed data,
 not an authorization decision. That request still checks current permissions,
