@@ -4,6 +4,7 @@
   "patches": [
     "directory-navigation.patch",
     "multipart-resources.patch",
-    "upload-defaults.patch"
+    "upload-defaults.patch",
+    "dropbox-ui.patch"
   ]
 }
