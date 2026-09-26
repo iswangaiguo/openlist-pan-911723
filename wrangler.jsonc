@@ -11,7 +11,9 @@
     "ENVIRONMENT": "production",
     "DB_FORMAT": "sql",
     "DB_DRIVER": "d1",
-    "DB_CIPHER": "aes-256-gcm"
+    "DB_CIPHER": "aes-256-gcm",
+    "DIRECTORY_CACHE_ENABLED": "true",
+    "DIRECTORY_CACHE_MAX_SECONDS": "300"
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "openlist-911723" }

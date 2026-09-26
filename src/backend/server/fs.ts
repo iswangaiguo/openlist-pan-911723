@@ -71,18 +71,14 @@ export const fsRouter = new Hono()
 fsRouter.route("/seed", seedRouter)
 
 const getStorageRequestContext = (c: any) => {
+  const context: import("../internal/op/storage").StorageRequestContext = { env: c.env }
   try {
     const executionCtx = c.executionCtx
-    if (!executionCtx || typeof executionCtx.waitUntil !== "function") {
-      return undefined
+    if (typeof executionCtx?.waitUntil === "function") {
+      context.waitUntil = (promise) => executionCtx.waitUntil(promise)
     }
-    return {
-      waitUntil: (promise: Promise<unknown>) => executionCtx.waitUntil(promise),
-      env: c.env, // 传递 env 用于请求级 KV 缓存复用
-    }
-  } catch {
-    return undefined
-  }
+  } catch { /* Non-Worker runtime. */ }
+  return context
 }
 
 // ---- 写操作权限校验 ----
@@ -204,6 +200,9 @@ fsRouter.post("/list", async (c) => {
     return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   }
   const requestContext = getStorageRequestContext(c)
+  requestContext.refreshDirectory = body.refresh === true
+  requestContext.onDirectoryCache = (status) => c.header("X-Openlist-Directory-Cache", status)
+  c.header("Cache-Control", "private, no-store")
   const reqPath = getActualPath(user, body.path || "/")
   const page = parseInt(body.page, 10) || 1
   const perPage = parseInt(body.per_page, 10) || 0

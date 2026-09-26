@@ -1,3 +1,8 @@
+import {
+  cachedDirectory,
+  withDirectoryMutation,
+  type DirectoryCacheContext,
+} from "./directory-cache"
 import { resolvePath, getDb, getSettings, saveDb } from "../model/db"
 import { encodeDownloadPath } from "../../pkg/path"
 import { canUseProxyEndpoint, normalizeExtList } from "../driver/proxy"
@@ -138,7 +143,7 @@ function setDriverCache(key: string, driver: StorageDriver): void {
   driverCache.set(key, driver)
 }
 
-export interface StorageRequestContext {
+export interface StorageRequestContext extends DirectoryCacheContext {
   waitUntil?: (promise: Promise<unknown>) => void
   env?: any // ESA/Cloudflare env，用于请求级缓存复用
 }
@@ -1344,7 +1349,16 @@ export async function listItems(
       const driver = await getDriver(driverName, resolved.storage)
       // Get raw items from driver
       try {
-        items = await driver.list(virtualPath, resolved.physical!)
+        items = await cachedDirectory(
+          resolved.storage,
+          resolved.physical!,
+          virtualPath,
+          requestContext,
+          () =>
+            driver instanceof S3Driver
+              ? driver.listMetadata(virtualPath, resolved.physical!)
+              : driver.list(virtualPath, resolved.physical!),
+        )
       } finally {
         await flushPendingDriverState(
           driverName,
@@ -1540,7 +1554,13 @@ export async function makeDirectory(
   }
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
-    await driver.mkdir(virtualPath, resolved.physical!)
+    await withDirectoryMutation(
+      [resolved.storage],
+      requestContext,
+      async () => {
+        await driver.mkdir(virtualPath, resolved.physical!)
+      },
+    )
   } finally {
     await flushPendingDriverState(
       resolved.storage!.driver,
@@ -1562,7 +1582,13 @@ export async function renameItem(
   }
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
-    await driver.rename(virtualPath, resolved.physical!, newName)
+    await withDirectoryMutation(
+      [resolved.storage],
+      requestContext,
+      async () => {
+        await driver.rename(virtualPath, resolved.physical!, newName)
+      },
+    )
   } finally {
     await flushPendingDriverState(
       resolved.storage!.driver,
@@ -1586,11 +1612,17 @@ export async function removeItems(
     }
     const driver = await getDriver(resolved.storage!.driver, resolved.storage)
     try {
-      if (driver.removeObject) {
-        await driver.removeObject(itemVirtual, resolved.physical!)
-      } else {
-        await driver.remove(itemVirtual, resolved.physical!, [name])
-      }
+      await withDirectoryMutation(
+        [resolved.storage],
+        requestContext,
+        async () => {
+          if (driver.removeObject) {
+            await driver.removeObject(itemVirtual, resolved.physical!)
+          } else {
+            await driver.remove(itemVirtual, resolved.physical!, [name])
+          }
+        },
+      )
     } finally {
       await flushPendingDriverState(
         resolved.storage!.driver,
@@ -1622,12 +1654,18 @@ export async function moveItems(
       srcResolved.storage,
     )
     try {
-      await driver.move(
-        srcDir,
-        dstDir,
-        [name],
-        srcResolved.physical!,
-        dstResolved.physical!,
+      await withDirectoryMutation(
+        [srcResolved.storage, dstResolved.storage],
+        requestContext,
+        async () => {
+          await driver.move(
+            srcDir,
+            dstDir,
+            [name],
+            srcResolved.physical!,
+            dstResolved.physical!,
+          )
+        },
       )
     } finally {
       await flushPendingDriverState(
@@ -1660,12 +1698,18 @@ export async function copyItems(
       srcResolved.storage,
     )
     try {
-      await driver.copy(
-        srcDir,
-        dstDir,
-        [name],
-        srcResolved.physical!,
-        dstResolved.physical!,
+      await withDirectoryMutation(
+        [srcResolved.storage, dstResolved.storage],
+        requestContext,
+        async () => {
+          await driver.copy(
+            srcDir,
+            dstDir,
+            [name],
+            srcResolved.physical!,
+            dstResolved.physical!,
+          )
+        },
       )
     } finally {
       await flushPendingDriverState(
@@ -1689,7 +1733,13 @@ export async function putItem(
   }
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
-    await driver.put(virtualPath, resolved.physical!, content)
+    await withDirectoryMutation(
+      [resolved.storage],
+      requestContext,
+      async () => {
+        await driver.put(virtualPath, resolved.physical!, content)
+      },
+    )
   } finally {
     await flushPendingDriverState(
       resolved.storage!.driver,

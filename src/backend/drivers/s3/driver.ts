@@ -142,15 +142,44 @@ export class S3Driver implements StorageDriver {
   }
 
   async list(virtualPath: string, physicalPath: string): Promise<FileItem[]> {
+    return this.listObjects(physicalPath, true)
+  }
+
+  async listMetadata(
+    _virtualPath: string,
+    physicalPath: string,
+  ): Promise<FileItem[]> {
+    return this.listObjects(physicalPath, false)
+  }
+
+  private async listObjects(
+    physicalPath: string,
+    includeLinks: boolean,
+  ): Promise<FileItem[]> {
     await this.checkDogeToken()
     const remotePath = this.getRemotePath(physicalPath)
     const version = this.addition.list_object_version === "v2" ? "v2" : "v1"
-    const rawFiles = await this.client.listObjects(remotePath, version, false)
+    const rawFiles = await this.client.listObjects(
+      remotePath,
+      version,
+      false,
+      !includeLinks,
+    )
 
     const items: FileItem[] = []
     for (const file of rawFiles) {
       const itemRemotePath = joinPath(remotePath, file.name)
-      const item = await this.fileItemFromS3(file, itemRemotePath)
+      const item = includeLinks
+        ? await this.fileItemFromS3(file, itemRemotePath)
+        : {
+            name: file.name,
+            size: file.size,
+            is_dir: file.isFolder,
+            modified: file.modified,
+            sign: "",
+            type: calcFileType(file.name, file.isFolder),
+            thumb: "",
+          }
       items.push(item)
     }
 

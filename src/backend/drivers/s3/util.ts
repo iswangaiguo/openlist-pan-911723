@@ -343,6 +343,7 @@ export class S3Client {
     url: string,
     body: string | Uint8Array | null = null,
     extraHeaders: Record<string, string> = {},
+    bypassCache = false,
   ): Promise<Response> {
     const customHeaders: Record<string, string> = { ...extraHeaders }
     if (this.userAgent) {
@@ -367,7 +368,7 @@ export class S3Client {
     // On a cold cache, Cloudflare may turn HEAD into GET when fetching the
     // origin. SigV4 signs the method, so that rewrite makes B2/S3 reject it.
     // Bypass the cache for metadata requests to preserve the signed method.
-    if (method === "HEAD") {
+    if (method === "HEAD" || bypassCache) {
       reqInit.cache = "no-store"
     }
     if (
@@ -386,6 +387,7 @@ export class S3Client {
     dirPath: string,
     version: "v1" | "v2" = "v1",
     showPlaceholder = false,
+    bypassCache = false,
   ): Promise<S3File[]> {
     const prefix = getKey(dirPath, true)
     const files: S3File[] = []
@@ -409,7 +411,7 @@ export class S3Client {
         }
 
         const url = this.getUrl("", queryParams)
-        const resp = await this.fetch("GET", url)
+        const resp = await this.fetch("GET", url, null, {}, bypassCache)
         const text = await resp.text()
 
         if (!resp.ok) {
@@ -451,7 +453,7 @@ export class S3Client {
         }
 
         const url = this.getUrl("", queryParams)
-        const resp = await this.fetch("GET", url)
+        const resp = await this.fetch("GET", url, null, {}, bypassCache)
         const text = await resp.text()
 
         if (!resp.ok) {
