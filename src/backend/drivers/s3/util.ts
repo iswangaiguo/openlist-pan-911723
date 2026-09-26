@@ -616,7 +616,9 @@ export class S3Client {
       method: "PUT",
       headers,
       body,
-      redirect: "error",
+      // Workers supports only follow/manual. Never forward this signed upload
+      // or its body to a redirect target; the non-2xx check below rejects 3xx.
+      redirect: "manual",
       duplex: "half",
     } as RequestInit)
     if (!response.ok) throw parseS3Error(await response.text(), response.status)

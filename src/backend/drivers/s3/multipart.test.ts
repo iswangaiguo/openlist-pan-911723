@@ -91,6 +91,7 @@ test("B2 streaming signs a small request, never hashes or buffers the part", asy
     assert.equal(url.searchParams.get("X-Amz-Expires"), "600")
     assert.ok(url.searchParams.get("X-Amz-Signature"))
     assert.equal(init.body, stream)
+    assert.equal(init.redirect, "manual")
     const reader = stream.getReader()
     assert.equal((await reader.read()).value, bytes)
     assert.equal((await reader.read()).done, true)
