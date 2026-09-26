@@ -1,5 +1,9 @@
 {
   "repository": "https://github.com/OpenListTeam/OpenList-Frontend.git",
   "commit": "031570fc7ae0ef18a4e36d68497ea7067b81fb16",
-  "patches": ["directory-navigation.patch", "multipart-resources.patch"]
+  "patches": [
+    "directory-navigation.patch",
+    "multipart-resources.patch",
+    "upload-defaults.patch"
+  ]
 }

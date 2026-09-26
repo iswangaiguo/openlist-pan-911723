@@ -1,0 +1,13 @@
+diff --git a/src/store/obj.ts b/src/store/obj.ts
+index 31fd2dd..cfcd500 100644
+--- a/src/store/obj.ts
++++ b/src/store/obj.ts
+@@ -290,7 +290,7 @@ export const smartCountMsg = (filterType?: ObjType) => {
+ export const [uploadConfig, setUploadConfig] = createStore({
+   asTask: false,
+   overwrite: false,
+-  rapid: true,
++  rapid: false,
+ })
+ 
+ export const [shouldKeepState, setShouldKeepState] = createSignal(false)
