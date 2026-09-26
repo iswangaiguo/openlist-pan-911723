@@ -170,7 +170,11 @@ function buildLocalRepo(repo) {
   // Install its dependencies before running the source regression tests.
   execFileSync(
     process.execPath,
-    ["--test", path.join(ROOT, "scripts/tests/frontend-directory.test.mjs")],
+    [
+      "--test",
+      path.join(ROOT, "scripts/tests/frontend-directory.test.mjs"),
+      path.join(ROOT, "scripts/tests/frontend-multipart.test.mjs"),
+    ],
     {
       cwd: ROOT,
       stdio: "inherit",

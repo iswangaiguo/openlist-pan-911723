@@ -66,6 +66,8 @@ import {
   pruneSessions,
   recordPart,
   readPartBody,
+  canStreamPartBody,
+  pipePartBody,
   uploadScope,
   claimCompletion,
   releaseCompletion,
@@ -1615,8 +1617,11 @@ fsRouter.put("/multipart/chunk", async (c) => {
       session.chunk_size,
       session.size - chunkIndex * session.chunk_size,
     )
-    const bytes = await readPartBody(c.req.raw, expected)
-    if (!bytes) {
+    const lengthHeader = c.req.header("Content-Length")
+    if (
+      !c.req.raw.body ||
+      (lengthHeader !== undefined && Number(lengthHeader) !== expected)
+    ) {
       return c.json(
         {
           code: 400,
@@ -1628,11 +1633,27 @@ fsRouter.put("/multipart/chunk", async (c) => {
     }
     let result
     try {
-      result = await (driver as any).uploadPart(
-        session.driver_session,
-        chunkIndex + 1,
-        Buffer.from(bytes.buffer as ArrayBuffer),
-      )
+      if (
+        driver instanceof S3Driver &&
+        driver.supportsStreamingMultipart &&
+        canStreamPartBody()
+      ) {
+        result = await pipePartBody(c.req.raw, expected, (body) =>
+          driver.uploadPartStream(session.driver_session, chunkIndex + 1, body),
+        )
+      } else {
+        const bytes = await readPartBody(c.req.raw, expected)
+        if (!bytes)
+          return c.json(
+            { code: 400, message: `Invalid chunk size (expected ${expected} bytes)`, data: null },
+            400,
+          )
+        result = await (driver as any).uploadPart(
+          session.driver_session,
+          chunkIndex + 1,
+          Buffer.from(bytes.buffer as ArrayBuffer),
+        )
+      }
     } finally {
       await flushPendingDriverState(
         resolved.storage!.driver,

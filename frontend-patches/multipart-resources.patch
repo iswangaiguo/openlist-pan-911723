@@ -1,0 +1,71 @@
+diff --git a/src/pages/home/uploads/multipart.ts b/src/pages/home/uploads/multipart.ts
+index 3103e59..d07ce96 100644
+--- a/src/pages/home/uploads/multipart.ts
++++ b/src/pages/home/uploads/multipart.ts
+@@ -56,6 +56,9 @@ const mpRequest = async <T extends Resp<unknown>>(
+   } catch (_) {
+     return undefined
+   }
++  if (resp?.workerResourceLimit) {
++    throw new Error("Cloudflare Worker exceeded CPU or memory limits (1102); upload stopped. Retrying cannot resolve this error.")
++  }
+   if (resp && typeof resp.code === "number" && "data" in resp) {
+     return resp as T
+   }
+@@ -168,6 +171,7 @@ export const MultipartUpload: Upload = async (
+     }
+   }
+ 
++  const chunkAbort = new AbortController()
+   let completedEarly = false // rapid upload finished the session server-side
+   let fatal: Error | undefined
+ 
+@@ -180,6 +184,7 @@ export const MultipartUpload: Upload = async (
+       // undefined — the probe below decides between resending and giving up
+       const resp = await mpRequest<SnapResp>(
+         r.put("/fs/multipart/chunk", blob, {
++          signal: chunkAbort.signal,
+           headers: {
+             "X-Upload-Id": uploadId,
+             "X-Chunk-Index": idx,
+@@ -248,7 +253,9 @@ export const MultipartUpload: Upload = async (
+       try {
+         await sendChunk(missing[i])
+       } catch (e: any) {
+-        fatal = e instanceof Error ? e : new Error(String(e))
++        if (!fatal) fatal = e instanceof Error ? e : new Error(String(e))
++        setUpload("speed", 0)
++        chunkAbort.abort()
+         return
+       }
+     }
+diff --git a/src/utils/request.ts b/src/utils/request.ts
+index a3f6bd3..c4b11b9 100644
+--- a/src/utils/request.ts
++++ b/src/utils/request.ts
+@@ -75,15 +75,24 @@ instance.interceptors.response.use(
+     // undefined）也会变成"信封"，流控与重试分支会被误判。故仅在 data != null
+     // 时附加。
+     const body = error.response?.data as
+-      { message?: string; data?: unknown } | undefined
++      { message?: string; data?: unknown; error_code?: number } | undefined
+     const result: {
+       code: number | undefined
+       message: string
+       data?: unknown
++      workerResourceLimit?: boolean
+     } = {
+       code: axios.isCancel(error) ? -1 : error.response?.status,
+       message: body?.message || error.message,
+     }
++    // Cloudflare 1102 is permanent until the Worker code/limits change.
++    // Preserve it for MultipartUpload instead of treating it as a network hiccup.
++    if (error.response?.status === 503 && (
++      body?.error_code === 1102 ||
++      (typeof body === "string" && /(?:Error\s*1102|Worker exceeded resource limits)/i.test(body))
++    )) {
++      result.workerResourceLimit = true
++    }
+     if (body && typeof body === "object" && body.data != null) {
+       result.data = body.data
+     }
