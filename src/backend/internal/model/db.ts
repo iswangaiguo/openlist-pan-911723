@@ -326,6 +326,22 @@ export const defaultDb = {
       flag: 0,
     },
 
+    {
+      key: "multipart_enabled",
+      value: "true",
+      type: "bool",
+      help: "Enable multipart uploads",
+      group: 4,
+      flag: 0,
+    },
+    {
+      key: "multipart_chunk_size",
+      value: "10",
+      type: "number",
+      help: "Multipart chunk size (MiB)",
+      group: 4,
+      flag: 0,
+    },
     // Group 4: GLOBAL (https://doc.oplist.org/configuration/global)
     {
       key: "hide_files",

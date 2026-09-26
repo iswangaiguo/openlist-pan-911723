@@ -41,6 +41,8 @@ import {
 import { parseZip, extractZipEntry, ZipArchive } from "../internal/archive/zip"
 import { assertSafeUrl, getTrustedHosts } from "../pkg/http"
 import { seedRouter } from "./seed"
+import { S3Driver } from "../drivers/s3/driver"
+import { withDirectoryMutation } from "../internal/op/directory-cache"
 
 /**
  * 该路径所属存储是否禁止目录列表（对齐 Go handles.FsList 的 DisableIndex 判断）。
@@ -57,12 +59,16 @@ async function isStorageIndexDisabled(reqPath: string): Promise<boolean> {
 }
 import {
   clampChunkSize,
-  deleteSession,
   findReceivingSession,
   getSession,
   MultipartSession,
   newUploadId,
   pruneSessions,
+  recordPart,
+  readPartBody,
+  uploadScope,
+  claimCompletion,
+  releaseCompletion,
   putSession,
   snapshot as mpSnapshot,
 } from "../internal/upload/multipart"
@@ -1397,18 +1403,38 @@ function splitUploadPath(uploadPath: string): { dir: string; name: string } {
   return { dir, name }
 }
 
+// A session is valid only for its original user, actual directory and storage configuration.
+async function ownedMultipartSession(c: any, user: any, uploadId: string) {
+  const session = await getSession(uploadId, c.env)
+  if (!session) return
+  const actualDir = getActualPath(user, splitUploadPath(session.path).dir)
+  const resolved = await resolvePath(actualDir)
+  if (resolved.isVirtual || !resolved.storage) return
+  const scope = await uploadScope(
+    user,
+    resolved.storage,
+    actualDir,
+    session.file_md5,
+  )
+  return scope === session.scope ? session : undefined
+}
+
 fsRouter.post("/multipart/init", async (c) => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return permissionDenied(c)
 
   const rawPath = decodeURIComponent(c.req.header("File-Path") || "")
-  const size = parseInt(c.req.header("X-File-Size") || "0", 10)
-  const rawChunk = parseInt(c.req.header("X-Chunk-Size") || "0", 10)
+  const size = Number(c.req.header("X-File-Size") || "0")
+  const rawChunk = Number(c.req.header("X-Chunk-Size") || "0")
   const md5 = c.req.header("X-File-Md5") || ""
 
-  if (!rawPath.trim() || size <= 0) {
+  if (!rawPath.trim() || !Number.isSafeInteger(size) || size <= 0) {
     return c.json(
-      { code: 400, message: "Missing File-Path / X-File-Size header", data: null },
+      {
+        code: 400,
+        message: "Missing File-Path / X-File-Size header",
+        data: null,
+      },
       400,
     )
   }
@@ -1418,6 +1444,7 @@ fsRouter.post("/multipart/init", async (c) => {
   const requestContext = getStorageRequestContext(c)
 
   try {
+    validateDirPath(rawPath)
     const resolved = await resolvePath(actualDir)
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
@@ -1428,13 +1455,36 @@ fsRouter.post("/multipart/init", async (c) => {
       return c.json({ code: 200, message: "success", data: null })
     }
 
-    const chunkSize = clampChunkSize(rawChunk)
+    const maxPart = Math.min(getUploadSizeLimit(c, true), 16 * 1024 * 1024)
+    const minPart = driver instanceof S3Driver ? 5 * 1024 * 1024 : 1024 * 1024
+    if (maxPart < minPart)
+      throw new Error(
+        "MAX_UPPART is smaller than the storage minimum part size",
+      )
+    const chunkSize = Math.min(
+      maxPart,
+      Math.max(minPart, clampChunkSize(rawChunk)),
+    )
     const totalChunks = Math.max(1, Math.ceil(size / chunkSize))
+
+    if (driver instanceof S3Driver && totalChunks > 10000) {
+      return c.json(
+        {
+          code: 400,
+          message:
+            "File exceeds 10000 parts; use a larger part size or direct S3 client",
+          data: null,
+        },
+        400,
+      )
+    }
+    const scope = await uploadScope(user, resolved.storage, actualDir, md5)
 
     // 断点续传：同 path+size 的未完成会话直接复用
     let session: MultipartSession
     let resumed = false
-    const existing = findReceivingSession(rawPath, size)
+    await pruneSessions(c.env)
+    const existing = await findReceivingSession(rawPath, size, scope, c.env)
     if (existing) {
       session = existing
       resumed = true
@@ -1448,6 +1498,8 @@ fsRouter.post("/multipart/init", async (c) => {
       )
       session = {
         upload_id: newUploadId(),
+        scope,
+        file_md5: md5,
         state: "receiving",
         attempt: 0,
         path: rawPath,
@@ -1467,7 +1519,21 @@ fsRouter.post("/multipart/init", async (c) => {
           Array.from({ length: totalChunks }, (_, i) => i),
         )
       }
-      putSession(session)
+      try {
+        await putSession(session, c.env)
+      } catch (error) {
+        // If persistence fails, do not strand a newly-created provider upload.
+        if (typeof (driver as any).abortUploadSession === "function") {
+          await (driver as any)
+            .abortUploadSession(session.driver_session)
+            .catch(() => {})
+        }
+        // A concurrent init may have persisted the same upload first.
+        const winner = await findReceivingSession(rawPath, size, scope, c.env)
+        if (!winner) throw error
+        session = winner
+        resumed = true
+      }
     }
     await flushPendingDriverState(
       resolved.storage!.driver,
@@ -1490,8 +1556,10 @@ fsRouter.put("/multipart/chunk", async (c) => {
   if (!canWrite(user)) return permissionDenied(c)
 
   const uploadId = c.req.header("X-Upload-Id") || ""
-  const chunkIndex = parseInt(c.req.header("X-Chunk-Index") || "-1", 10)
-  const session = uploadId ? getSession(uploadId) : undefined
+  const chunkIndex = Number(c.req.header("X-Chunk-Index") ?? "-1")
+  const session = uploadId
+    ? await ownedMultipartSession(c, user, uploadId)
+    : undefined
 
   if (!session) {
     return c.json(
@@ -1499,10 +1567,23 @@ fsRouter.put("/multipart/chunk", async (c) => {
       404,
     )
   }
-  if (chunkIndex < 0 || chunkIndex >= session.total_chunks) {
-    return c.json({ code: 400, message: "invalid X-Chunk-Index", data: null }, 400)
+  if (
+    !Number.isInteger(chunkIndex) ||
+    chunkIndex < 0 ||
+    chunkIndex >= session.total_chunks
+  ) {
+    return c.json(
+      { code: 400, message: "invalid X-Chunk-Index", data: null },
+      400,
+    )
   }
 
+  if (!["receiving", "failed_retriable", "completed"].includes(session.state)) {
+    return c.json(
+      { code: 409, message: "Upload is not receiving parts", data: null },
+      409,
+    )
+  }
   // 幂等：已收分片直接返回当前快照
   if (session.received.has(chunkIndex)) {
     return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
@@ -1511,7 +1592,11 @@ fsRouter.put("/multipart/chunk", async (c) => {
   const tooLarge = exceedsUploadLimit(c, true)
   if (tooLarge !== null) {
     return c.json(
-      { code: 413, message: `Part too large (max ${tooLarge} bytes)`, data: null },
+      {
+        code: 413,
+        message: `Part too large (max ${tooLarge} bytes)`,
+        data: null,
+      },
       413,
     )
   }
@@ -1526,13 +1611,27 @@ fsRouter.put("/multipart/chunk", async (c) => {
     if (typeof (driver as any).uploadPart !== "function") {
       throw new Error("storage does not support chunked upload")
     }
-    const buffer = Buffer.from(await c.req.arrayBuffer())
+    const expected = Math.min(
+      session.chunk_size,
+      session.size - chunkIndex * session.chunk_size,
+    )
+    const bytes = await readPartBody(c.req.raw, expected)
+    if (!bytes) {
+      return c.json(
+        {
+          code: 400,
+          message: `Invalid chunk size (expected ${expected} bytes)`,
+          data: null,
+        },
+        400,
+      )
+    }
     let result
     try {
       result = await (driver as any).uploadPart(
         session.driver_session,
         chunkIndex + 1,
-        buffer,
+        Buffer.from(bytes.buffer as ArrayBuffer),
       )
     } finally {
       await flushPendingDriverState(
@@ -1542,10 +1641,13 @@ fsRouter.put("/multipart/chunk", async (c) => {
         requestContext,
       )
     }
-    session.received.add(chunkIndex)
-    if (result?.partMd5) session.partMd5s[chunkIndex] = result.partMd5
-    putSession(session)
-    return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
+    const updated = await recordPart(
+      session,
+      chunkIndex,
+      result?.partMd5,
+      c.env,
+    )
+    return c.json({ code: 200, message: "success", data: mpSnapshot(updated) })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null }, 500)
   }
@@ -1556,7 +1658,9 @@ fsRouter.post("/multipart/complete", async (c) => {
   if (!canWrite(user)) return permissionDenied(c)
 
   const uploadId = c.req.header("X-Upload-Id") || ""
-  const session = uploadId ? getSession(uploadId) : undefined
+  const session = uploadId
+    ? await ownedMultipartSession(c, user, uploadId)
+    : undefined
   if (!session) {
     return c.json(
       { code: 404, message: "upload session not found", data: null },
@@ -1567,6 +1671,29 @@ fsRouter.post("/multipart/complete", async (c) => {
     return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
   }
 
+  if (!["receiving", "failed_retriable"].includes(session.state)) {
+    return c.json(
+      { code: 409, message: "Upload cannot be completed", data: null },
+      409,
+    )
+  }
+  if (session.received.size !== session.total_chunks) {
+    return c.json(
+      {
+        code: 409,
+        message: "Upload has missing chunks",
+        data: mpSnapshot(session),
+      },
+      409,
+    )
+  }
+  if (!(await claimCompletion(session, c.env))) {
+    return c.json({
+      code: 200,
+      message: "completion in progress",
+      data: mpSnapshot(session),
+    })
+  }
   const requestContext = getStorageRequestContext(c)
   try {
     const resolved = await resolvePath(
@@ -1578,9 +1705,17 @@ fsRouter.post("/multipart/complete", async (c) => {
       throw new Error("storage does not support chunked upload")
     }
     try {
-      await (driver as any).completeUploadSession(
-        session.driver_session,
-        session.partMd5s.filter((x) => x !== undefined),
+      await withDirectoryMutation(
+        [resolved.storage],
+        requestContext,
+        async () => {
+          await (driver as any).completeUploadSession(
+            session.driver_session,
+            driver instanceof S3Driver
+              ? session.partMd5s.map((etag) => etag || "")
+              : session.partMd5s.filter((etag) => etag !== undefined),
+          )
+        },
       )
     } finally {
       await flushPendingDriverState(
@@ -1591,20 +1726,26 @@ fsRouter.post("/multipart/complete", async (c) => {
       )
     }
     session.state = "completed"
-    putSession(session)
-    deleteSession(session.upload_id)
+    session.error = undefined
+    await putSession(session, c.env)
     return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
   } catch (e: any) {
-    session.state = "failed_permanent"
+    session.state = "failed_retriable"
     session.error = safeErrorMessage(e)
-    putSession(session)
+    await putSession(session, c.env)
     return c.json({ code: 500, message: safeErrorMessage(e), data: null }, 500)
+  } finally {
+    releaseCompletion(session)
   }
 })
 
 fsRouter.get("/multipart/status", async (c) => {
+  const user = await getUserFromContext(c)
+  if (!canWrite(user)) return permissionDenied(c)
   const uploadId = c.req.query("upload_id") || ""
-  const session = uploadId ? getSession(uploadId) : undefined
+  const session = uploadId
+    ? await ownedMultipartSession(c, user, uploadId)
+    : undefined
   if (!session) {
     return c.json(
       { code: 404, message: "upload session not found", data: null },
@@ -1612,6 +1753,49 @@ fsRouter.get("/multipart/status", async (c) => {
     )
   }
   return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
+})
+
+fsRouter.post("/multipart/abort", async (c) => {
+  const user = await getUserFromContext(c)
+  if (!canWrite(user)) return permissionDenied(c)
+  const session = await ownedMultipartSession(
+    c,
+    user,
+    c.req.header("X-Upload-Id") || "",
+  )
+  if (!session)
+    return c.json(
+      { code: 404, message: "upload session not found", data: null },
+      404,
+    )
+  if (session.state === "completed" || session.state === "aborted") {
+    return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
+  }
+  if (!(await claimCompletion(session, c.env))) {
+    return c.json(
+      { code: 409, message: "completion in progress", data: null },
+      409,
+    )
+  }
+  try {
+    const actualDir = getActualPath(user, splitUploadPath(session.path).dir)
+    const resolved = await resolvePath(actualDir)
+    const driver = await getDriver(resolved.storage!.driver, resolved.storage)
+    if (typeof (driver as any).abortUploadSession !== "function") {
+      throw new Error("Storage does not support aborting uploads")
+    }
+    await (driver as any).abortUploadSession(session.driver_session)
+    session.state = "aborted"
+    await putSession(session, c.env)
+    return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
+  } catch (error: any) {
+    session.state = "failed_retriable"
+    session.error = safeErrorMessage(error)
+    await putSession(session, c.env)
+    return c.json({ code: 500, message: session.error, data: null }, 500)
+  } finally {
+    releaseCompletion(session)
+  }
 })
 
 // ---- 归档（Archive）----
