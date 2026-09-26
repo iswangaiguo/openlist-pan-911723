@@ -1,20 +1,22 @@
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
-index a8d032d..834502b 100644
+index a8d032d..7507f6f 100644
 --- a/src/pages/home/Body.tsx
 +++ b/src/pages/home/Body.tsx
-@@ -3,6 +3,7 @@ import { Nav } from "./Nav"
+@@ -3,6 +3,8 @@ import { Nav } from "./Nav"
  import { Obj } from "./Obj"
  import { Readme } from "./Readme"
  import { Container } from "./Container"
++import { DriveSelection } from "./DriveSelection"
 +import { DriveHeading } from "./DriveChrome"
  import { Sidebar } from "./Sidebar"
  
  export const Body = () => {
-@@ -19,6 +20,7 @@ export const Body = () => {
+@@ -19,6 +21,8 @@ export const Body = () => {
        >
          <Readme files={["header.md", "top.md", "index.md"]} fromMeta="header" />
          <Nav />
 +        <DriveHeading />
++        <DriveSelection />
          <Obj />
          <Readme
            files={["readme.md", "footer.md", "bottom.md"]}
@@ -179,6 +181,112 @@ index 0000000..f63c6ef
 +    </div>
 +  )
 +}
+diff --git a/src/pages/home/DriveSelection.tsx b/src/pages/home/DriveSelection.tsx
+new file mode 100644
+index 0000000..462c67c
+--- /dev/null
++++ b/src/pages/home/DriveSelection.tsx
+@@ -0,0 +1,100 @@
++import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
++import { For, Show } from "solid-js"
++import { BsCheck2Square, BsDownload, BsThreeDots } from "solid-icons/bs"
++import { useCopyLink, useDownload, useRouter, useT } from "~/hooks"
++import {
++  checkboxOpen,
++  haveSelected,
++  objStore,
++  selectedMsg,
++  selectAll,
++  State,
++  toggleCheckbox,
++  userCan,
++} from "~/store"
++import { currentLang } from "~/app/i18n"
++import { bus } from "~/utils"
++
++// Keep file operations alongside the list, and use the existing handlers.
++export const DriveSelection = () => {
++  const t = useT()
++  const { isShare } = useRouter()
++  const { batchDownloadSelected } = useDownload()
++  const { copySelectedPreviewPage } = useCopyLink()
++  const isFolder = () =>
++    [State.Folder, State.FetchingMore].includes(objStore.state)
++  const canEdit = (name: "rename" | "move" | "copy" | "delete") =>
++    !isShare() && objStore.write && userCan(name)
++  const closeSelection = () => {
++    selectAll(false)
++    if (checkboxOpen()) toggleCheckbox()
++  }
++  const selectLabel = () =>
++    String(currentLang()).startsWith("zh") ? "选择文件" : "Select files"
++  const hint = () =>
++    String(currentLang()).startsWith("zh")
++      ? "勾选文件后可下载或管理"
++      : "Select files to download or manage"
++  return (
++    <Show when={isFolder()}>
++      <div class="drive-file-tools" role="group" aria-label={selectLabel()}>
++        <Show
++          when={checkboxOpen()}
++          fallback={
++            <button class="drive-select-button" onClick={toggleCheckbox}>
++              <Icon as={BsCheck2Square} />
++              <span>{selectLabel()}</span>
++            </button>
++          }
++        >
++          <span class="drive-selection-count" role="status">
++            {haveSelected() ? selectedMsg() : hint()}
++          </span>
++          <div class="drive-selection-actions">
++            <Show when={haveSelected()}>
++              <button class="drive-button" onClick={batchDownloadSelected}>
++                <Icon as={BsDownload} />
++                <span>{t("home.toolbar.download")}</span>
++              </button>
++              <Menu placement="bottom-end">
++                <MenuTrigger
++                  as="button"
++                  class="drive-button"
++                  aria-label={t("home.toolbar.more")}
++                >
++                  <Icon as={BsThreeDots} />
++                  <span>{t("home.toolbar.more")}</span>
++                </MenuTrigger>
++                <MenuContent>
++                  <For each={["rename", "move", "copy", "delete"] as const}>
++                    {(name) => (
++                      <Show when={canEdit(name)}>
++                        <MenuItem
++                          colorScheme={name === "delete" ? "danger" : "neutral"}
++                          onSelect={() => bus.emit("tool", name)}
++                        >
++                          {t(`home.toolbar.${name}`)}
++                        </MenuItem>
++                      </Show>
++                    )}
++                  </For>
++                  <Show when={!isShare() && userCan("share")}>
++                    <MenuItem onSelect={() => bus.emit("tool", "share")}>
++                      {t("home.toolbar.share")}
++                    </MenuItem>
++                  </Show>
++                  <MenuItem onSelect={copySelectedPreviewPage}>
++                    {t("home.toolbar.copy_link")}
++                  </MenuItem>
++                </MenuContent>
++              </Menu>
++            </Show>
++            <button class="drive-select-button" onClick={closeSelection}>
++              {t("home.toolbar.cancel_select")}
++            </button>
++          </div>
++        </Show>
++      </div>
++    </Show>
++  )
++}
 diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
 index de14427..1cedec6 100644
 --- a/src/pages/home/Layout.tsx
@@ -224,10 +332,10 @@ index de14427..1cedec6 100644
  
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..1bfa4b9
+index 0000000..eeba14c
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,421 @@
+@@ -0,0 +1,479 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -649,8 +757,91 @@ index 0000000..1bfa4b9
 +    transition: none;
 +  }
 +}
++
++.drive-file-tools {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  flex-wrap: wrap;
++  gap: 12px;
++  width: 100%;
++  min-height: 36px;
++  margin-top: -12px;
++  color: var(--drive-muted);
++}
++.drive-select-button {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  gap: 8px;
++  min-height: 40px;
++  padding: 0 10px;
++  border: 0;
++  border-radius: 5px;
++  background: transparent;
++  color: var(--drive-muted);
++}
++.drive-select-button:hover {
++  background: var(--drive-hover);
++  color: var(--drive-text);
++}
++.drive-select-button svg {
++  width: 18px;
++  height: 18px;
++}
++.drive-selection-count {
++  margin-right: auto;
++  font-size: 13px;
++  overflow-wrap: anywhere;
++}
++.drive-selection-actions {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++@media (max-width: 760px) {
++  .drive-file-tools {
++    margin-top: -4px;
++    gap: 8px;
++  }
++  .drive-selection-count {
++    width: 100%;
++  }
++  .drive-selection-actions {
++    width: 100%;
++  }
++  .drive-selection-actions .drive-select-button {
++    margin-left: auto;
++  }
++}
+diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
+index 6ee0dd9..0e4a3a2 100644
+--- a/src/pages/home/folder/List.tsx
++++ b/src/pages/home/folder/List.tsx
+@@ -9,7 +9,6 @@ import {
+   local,
+   objStore,
+   selectAll,
+-  selectedMsg,
+   sortObjs,
+ } from "~/store"
+ import { OrderBy } from "~/store"
+@@ -102,11 +101,7 @@ export const ListTitle = (props: {
+             }}
+           />
+         </Show>
+-        {selectedMsg() ? (
+-          <Text {...itemProps(cols[0])}>{selectedMsg()}</Text>
+-        ) : (
+-          <Text {...itemProps(cols[0])}>{t(`home.obj.${cols[0].name}`)}</Text>
+-        )}
++        <Text {...itemProps(cols[0])}>{t(`home.obj.${cols[0].name}`)}</Text>
+       </HStack>
+       <Text w={cols[1].w} {...itemProps(cols[1])}>
+         {t(`home.obj.${cols[1].name}`)}
 diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
-index 8f552da..954134c 100644
+index 8f552da..ea15483 100644
 --- a/src/pages/home/header/Header.tsx
 +++ b/src/pages/home/header/Header.tsx
 @@ -1,90 +1,65 @@
@@ -666,11 +857,12 @@ index 8f552da..954134c 100644
 -import { changeColor } from "seemly"
 -import { Show, createMemo } from "solid-js"
 -import { getMainColor, getSetting, local, objStore, State } from "~/store"
+-import { BsSearch } from "solid-icons/bs"
+-import { CenterLoading } from "~/components"
 +import { HStack, Icon, Kbd } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import { getSetting, local, objStore, State } from "~/store"
- import { BsSearch } from "solid-icons/bs"
--import { CenterLoading } from "~/components"
++import { BsSearch, BsGear } from "solid-icons/bs"
 +import { useT } from "~/hooks"
  import { Container } from "../Container"
 +import { DriveBrand } from "../DriveChrome"
@@ -784,7 +976,7 @@ index 8f552da..954134c 100644
 +              aria-label={t("home.toolbar.local_settings")}
 +              onClick={() => bus.emit("tool", "local_settings")}
 +            >
-+              ⋯
++              <Icon as={BsGear} />
 +            </button>
 +          </div>
 +        </div>
@@ -793,6 +985,26 @@ index 8f552da..954134c 100644
 +    </header>
    )
  }
+diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
+index e55e19b..aabb71b 100644
+--- a/src/pages/home/toolbar/Toolbar.tsx
++++ b/src/pages/home/toolbar/Toolbar.tsx
+@@ -1,6 +1,4 @@
+ import { Portal } from "solid-js/web"
+-import { Center } from "./Center"
+-import { Right } from "./Right"
+ import { Copy, Move } from "./CopyMove"
+ import { Delete } from "./Delete"
+ import { Rename } from "./Rename"
+@@ -47,8 +45,6 @@ export const Modal = () => {
+ export const Toolbar = () => {
+   return (
+     <Portal>
+-      <Right />
+-      <Center />
+       <Modal />
+       <BackTop />
+     </Portal>
 diff --git a/src/pages/home/uploads/Upload.tsx b/src/pages/home/uploads/Upload.tsx
 index 8d4feca..92c39cc 100644
 --- a/src/pages/home/uploads/Upload.tsx
