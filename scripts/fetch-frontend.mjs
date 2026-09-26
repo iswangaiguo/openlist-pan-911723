@@ -142,15 +142,6 @@ function patchFrontend(repo) {
     })
     execFileSync("git", ["apply", file], { cwd: repo, stdio: "inherit" })
   }
-  execFileSync(
-    process.execPath,
-    ["--test", path.join(ROOT, "scripts/tests/frontend-directory.test.mjs")],
-    {
-      cwd: ROOT,
-      stdio: "inherit",
-      env: { ...process.env, FRONTEND_TEST_REPO: repo },
-    },
-  )
 }
 
 /** 在本地前端仓库中 install + build，并取 dist 产物 */
@@ -175,6 +166,17 @@ function buildLocalRepo(repo) {
     )
     install(" --trust-lockfile")
   }
+  // Store reconciliation tests resolve Solid from the frontend checkout.
+  // Install its dependencies before running the source regression tests.
+  execFileSync(
+    process.execPath,
+    ["--test", path.join(ROOT, "scripts/tests/frontend-directory.test.mjs")],
+    {
+      cwd: ROOT,
+      stdio: "inherit",
+      env: { ...process.env, FRONTEND_TEST_REPO: abs },
+    },
+  )
   fetchI18n(abs)
   // 关键修复：前后端默认同源部署，官方前端 VITE_API_URL 的语义是「API 服务器
   // 基础 URL」，正确值为 "/"（同源，config.ts 会转成 location.origin）。若外部
