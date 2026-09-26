@@ -166,6 +166,29 @@ async function database(env?: any): Promise<any | undefined> {
 }
 
 /** Bound memory even when Content-Length is missing or inaccurate. */
+export function canStreamPartBody(): boolean {
+  return typeof (globalThis as any).FixedLengthStream === "function"
+}
+
+/** Native Workers piping enforces length without buffering or a JS loop over the body. */
+export async function pipePartBody<T>(
+  request: Request,
+  expected: number,
+  upload: (body: ReadableStream<Uint8Array>) => Promise<T>,
+): Promise<T> {
+  if (!request.body) throw new Error("Missing chunk body")
+  const fixed = new (globalThis as any).FixedLengthStream(expected)
+  const abort = new AbortController()
+  const piping = request.body.pipeTo(fixed.writable, { signal: abort.signal })
+  try {
+    const [result] = await Promise.all([upload(fixed.readable), piping])
+    return result
+  } finally {
+    // Also stop an unfinished incoming body when the provider rejects the part.
+    abort.abort()
+  }
+}
+
 export async function readPartBody(
   request: Request,
   expected: number,

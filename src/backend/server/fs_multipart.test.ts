@@ -63,16 +63,27 @@ async function setup(t: any) {
   t.mock.method(globalThis, "fetch", async (input: any, init: any) => {
     const url = new URL(String(input))
     assert.equal(url.hostname, "s3.us-west-004.backblazeb2.com")
-    assert.ok(init.headers.Authorization || init.headers.authorization)
+    assert.ok(
+      init.headers.Authorization ||
+        init.headers.authorization ||
+        url.searchParams.has("X-Amz-Signature"),
+    )
     providerCalls.push({ method: init.method, url, body: init.body })
     if (url.searchParams.has("uploads"))
       return new Response(
         "<InitiateMultipartUploadResult><UploadId>provider-id</UploadId></InitiateMultipartUploadResult>",
       )
-    if (init.method === "PUT")
+    if (init.method === "PUT") {
+      if (init.body instanceof ReadableStream) {
+        const reader = init.body.getReader()
+        while (!(await reader.read()).done) {
+          /* Provider consumes the forwarded body. */
+        }
+      }
       return new Response(null, {
         headers: { ETag: `"part-${url.searchParams.get("partNumber")}"` },
       })
+    }
     if (init.method === "DELETE") return new Response(null, { status: 204 })
     if (completionFailures-- > 0)
       return new Response(
@@ -120,6 +131,56 @@ async function setup(t: any) {
     },
   }
 }
+
+test("Worker B2 route streams only valid parts and records progress after provider success", async (t) => {
+  class FixedLengthStream extends TransformStream<Uint8Array, Uint8Array> {
+    constructor(expected: number) {
+      let seen = 0
+      super({
+        transform(value, controller) {
+          seen += value.length
+          if (seen > expected) throw new Error("Part exceeds expected length")
+          controller.enqueue(value)
+        },
+        flush() {
+          if (seen !== expected) throw new Error("Part shorter than expected")
+        },
+      })
+    }
+  }
+  Object.defineProperty(globalThis, "FixedLengthStream", {
+    value: FixedLengthStream,
+    configurable: true,
+  })
+  t.after(() => {
+    delete (globalThis as any).FixedLengthStream
+  })
+  const x = await setup(t)
+  const s = await x.init(5 * MiB + 7)
+  const header = { "X-Upload-Id": s.upload_id, "X-Chunk-Index": "1" }
+  const bad = await x.request("chunk", "PUT", header, new Uint8Array(8))
+  assert.equal(bad.status, 500)
+  let state = await (
+    await x.request(`status?upload_id=${s.upload_id}`, "GET")
+  ).json()
+  assert.equal(state.data.received_bytes, 0)
+  const ok = await x.request("chunk", "PUT", header, new Uint8Array(7))
+  assert.equal(ok.status, 200, await ok.clone().text())
+  state = await ok.json()
+  assert.equal(state.data.received_bytes, 7)
+  assert.ok(
+    x.providerCalls
+      .filter((c) => c.method === "PUT")
+      .every((c) => c.body instanceof ReadableStream),
+  )
+  const declaredWrong = await x.request(
+    "chunk",
+    "PUT",
+    { ...header, "X-Chunk-Index": "0", "Content-Length": "1" },
+    new Uint8Array(1),
+  )
+  assert.equal(declaredWrong.status, 400)
+})
 
 test("B2 multipart uploads out of order, resumes across cold bindings, completes with ordered ETags", async (t) => {
   const x = await setup(t)

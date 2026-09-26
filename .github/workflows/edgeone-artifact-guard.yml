@@ -18,7 +18,8 @@ on:
       - "api/**"
       - "scripts/build-edge.mjs"
       - "scripts/fetch-frontend.mjs"
-      - "scripts/tests/frontend-directory.test.mjs"
+      - "scripts/tests/frontend-*.test.mjs"
+      - "scripts/tests/multipart-worker.test.mjs"
       - "frontend-patches/**"
       - "cloud-functions/**"
       - "package.json"
@@ -30,7 +31,8 @@ on:
       - "api/**"
       - "scripts/build-edge.mjs"
       - "scripts/fetch-frontend.mjs"
-      - "scripts/tests/frontend-directory.test.mjs"
+      - "scripts/tests/frontend-*.test.mjs"
+      - "scripts/tests/multipart-worker.test.mjs"
       - "frontend-patches/**"
       - "cloud-functions/**"
       - "package.json"
@@ -67,6 +69,11 @@ jobs:
 
       - name: Fetch official frontend dist
         run: node scripts/fetch-frontend.mjs
+
+      - name: Verify multipart regression and native Worker streams
+        run: |
+          pnpm exec tsx --test src/backend/drivers/s3/multipart.test.ts src/backend/internal/upload/multipart.test.ts src/backend/server/fs_multipart.test.ts
+          node --test scripts/tests/multipart-worker.test.mjs
 
       - name: Rebuild EdgeOne artifact
         run: node scripts/build-edge.mjs

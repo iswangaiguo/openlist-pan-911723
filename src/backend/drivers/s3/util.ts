@@ -581,6 +581,50 @@ export class S3Client {
     return etag
   }
 
+  get supportsStreamingMultipart(): boolean {
+    const url = new URL(this.endpoint)
+    return (
+      url.protocol === "https:" && url.hostname.endsWith(".backblazeb2.com")
+    )
+  }
+
+  /** B2 supports presigned UploadPart: hash only the small canonical request. */
+  public async uploadPartStream(
+    key: string,
+    uploadId: string,
+    partNumber: number,
+    body: ReadableStream<Uint8Array>,
+  ): Promise<string> {
+    if (!this.supportsStreamingMultipart)
+      throw new Error("Streaming multipart requires HTTPS B2")
+    if (!Number.isInteger(partNumber) || partNumber < 1 || partNumber > 10000)
+      throw new Error("Invalid S3 part number")
+    const url = await presignS3Url({
+      method: "PUT",
+      url: this.getUrl(key, { uploadId, partNumber: String(partNumber) }),
+      region: this.region,
+      accessKeyId: this.accessKeyId,
+      secretAccessKey: this.secretAccessKey,
+      sessionToken: this.sessionToken,
+      expiresInSeconds: 600,
+    })
+    const headers: Record<string, string> = {
+      "content-type": "application/octet-stream",
+    }
+    if (this.userAgent) headers["user-agent"] = this.userAgent
+    const response = await fetch(url, {
+      method: "PUT",
+      headers,
+      body,
+      redirect: "error",
+      duplex: "half",
+    } as RequestInit)
+    if (!response.ok) throw parseS3Error(await response.text(), response.status)
+    const etag = response.headers.get("etag")
+    if (!etag) throw new Error("S3 UploadPart returned no ETag")
+    return etag
+  }
+
   public async completeMultipartUpload(
     key: string,
     uploadId: string,

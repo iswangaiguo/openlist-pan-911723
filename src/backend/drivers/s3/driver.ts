@@ -451,6 +451,27 @@ export class S3Driver implements StorageDriver {
     }
   }
 
+  get supportsStreamingMultipart(): boolean {
+    return this.client.supportsStreamingMultipart
+  }
+
+  async uploadPartStream(
+    session: string,
+    partNumber: number,
+    body: ReadableStream<Uint8Array>,
+  ) {
+    await this.checkDogeToken()
+    const { key, uploadId } = await this.parseUploadSession(session)
+    return {
+      partMd5: await this.client.uploadPartStream(
+        key,
+        uploadId,
+        partNumber,
+        body,
+      ),
+    }
+  }
+
   async completeUploadSession(session: string, etags: string[]) {
     await this.checkDogeToken()
     const { key, uploadId } = await this.parseUploadSession(session)
