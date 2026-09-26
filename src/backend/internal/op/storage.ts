@@ -1586,7 +1586,11 @@ export async function removeItems(
     }
     const driver = await getDriver(resolved.storage!.driver, resolved.storage)
     try {
-      await driver.remove(itemVirtual, resolved.physical!, [name])
+      if (driver.removeObject) {
+        await driver.removeObject(itemVirtual, resolved.physical!)
+      } else {
+        await driver.remove(itemVirtual, resolved.physical!, [name])
+      }
     } finally {
       await flushPendingDriverState(
         resolved.storage!.driver,

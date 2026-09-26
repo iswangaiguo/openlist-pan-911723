@@ -55,6 +55,14 @@ export function can(
   return ((user.permission >> bitIndex) & 1) === 1
 }
 
+/** Effective permissions exposed to the frontend, which checks bits only. */
+export function effectivePermissions(user: UserPermissionObj): number {
+  return Object.values(PermissionBit).reduce<number>(
+    (mask, bit) => can(user, bit) ? mask | (1 << bit) : mask,
+    0,
+  )
+}
+
 export function canSeeHides(user?: UserPermissionObj | null): boolean {
   return can(user, PermissionBit.SEE_HIDES)
 }

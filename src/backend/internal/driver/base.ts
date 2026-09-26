@@ -146,6 +146,8 @@ export interface StorageDriver {
     physicalPath: string,
     newName: string,
   ): Promise<void>
+  /** Delete exactly this resolved object; avoids ambiguous batch path semantics. */
+  removeObject?(virtualPath: string, physicalPath: string): Promise<void>
   remove(
     virtualPath: string,
     physicalPath: string,

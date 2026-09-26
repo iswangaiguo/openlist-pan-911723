@@ -291,6 +291,11 @@ export class S3Driver implements StorageDriver {
     }
   }
 
+  async removeObject(virtualPath: string, physicalPath: string): Promise<void> {
+    // removeItems already resolves the full object path, including its name.
+    await this.remove(virtualPath, physicalPath, [])
+  }
+
   async remove(
     virtualPath: string,
     physicalPath: string,

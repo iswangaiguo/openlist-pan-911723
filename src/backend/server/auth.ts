@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono"
+import { effectivePermissions } from "../pkg/permission"
 import { sign, verify } from "hono/jwt"
 import { getDb, saveDb } from "../internal/model/db"
 import {
@@ -653,7 +654,7 @@ export const meHandler = async (c: any) => {
       id: user.id,
       username: user.username,
       role: user.role,
-      permission: user.permission ?? 0,
+      permission: effectivePermissions(user),
       base_path: user.base_path || "/",
       disabled: !!user.disabled,
       sso_id: user.sso_id || "",

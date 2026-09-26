@@ -14,7 +14,7 @@ import {
 import { resolveShare } from "../internal/op/share"
 import { resolvePath } from "../internal/model/db"
 import { getUserFromContext } from "./middlewares"
-import { canWrite, getActualPath, isAdmin } from "../pkg/permission"
+import { canWrite, canRemove, getActualPath, isAdmin } from "../pkg/permission"
 import {
   getNearestMeta,
   canAccess,
@@ -357,7 +357,8 @@ fsRouter.post("/list", async (c) => {
       requestContext,
     )
     // write：用户写权限 + meta.write_users 白名单（对齐 Go common.CanWrite）
-    const writable = canWrite(user) && canWriteMeta(user, meta, reqPath)
+    const writable =
+      (canWrite(user) || canRemove(user)) && canWriteMeta(user, meta, reqPath)
     const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
     // Normalize each item to the full Obj shape expected by the frontend
     const normalized = await Promise.all(
@@ -576,7 +577,8 @@ fsRouter.post("/get", async (c) => {
       sign && rawUrl && !/[?&]sign=/.test(rawUrl)
         ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}sign=${sign}`
         : rawUrl
-    const writable = canWrite(user) && canWriteMeta(user, meta, reqPath)
+    const writable =
+      (canWrite(user) || canRemove(user)) && canWriteMeta(user, meta, reqPath)
     const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
 
     // Related：查找同目录中文件名前缀相同的文件（字幕 .srt/.ass/.vtt、NFO 等）
@@ -712,7 +714,7 @@ fsRouter.post("/rename", async (c) => {
 
 fsRouter.post("/remove", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!canRemove(user)) return permissionDenied(c)
   const { dir, names } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(names) || names.length === 0) {
     return c.json(
@@ -734,6 +736,14 @@ fsRouter.post("/remove", async (c) => {
   const requestContext = getStorageRequestContext(c)
   try {
     const actualDir = getActualPath(user, dir || "/")
+    // Check the whole selection before changing storage, including child overrides.
+    for (const path of [
+      actualDir,
+      ...cleanNames.map((name) => `${actualDir}/${name}`),
+    ]) {
+      const meta = await getNearestMeta(path, c.env)
+      if (!canWriteMeta(user, meta, path)) return permissionDenied(c)
+    }
     await removeItems(actualDir, cleanNames, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
