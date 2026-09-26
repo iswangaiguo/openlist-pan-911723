@@ -16,7 +16,7 @@
  *   node scripts/fetch-frontend.mjs
  */
 
-import { execSync } from "node:child_process"
+import { execSync, execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -27,10 +27,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(__dirname, "..")
 const DEST = path.join(ROOT, "dist")
 
-const OFFICIAL_REPO_URL =
-  process.env.FRONTEND_GIT_URL ||
-  "https://github.com/OpenListTeam/OpenList-Frontend.git"
-const OFFICIAL_REPO_REF = process.env.FRONTEND_GIT_REF || "main"
+const frontendPin = JSON.parse(
+  fs.readFileSync(path.join(ROOT, "frontend-patches/upstream.json"), "utf8"),
+)
+
+const OFFICIAL_REPO_URL = process.env.FRONTEND_GIT_URL || frontendPin.repository
+const OFFICIAL_REPO_REF = process.env.FRONTEND_GIT_REF || frontendPin.commit
 
 // 多语言翻译包：官方前端仓库不提交非英文翻译（由 Crowdin 维护），随 release 发布。
 // 直接 pnpm build 只会得到英文界面，因此 CF/EO 构建时需在此拉取后再构建。
@@ -90,7 +92,9 @@ function replaceDist(src) {
 function fetchI18n(repo) {
   const langDir = path.join(repo, "src", "lang")
   if (!fs.existsSync(langDir)) {
-    console.warn("  [fetch-frontend] repo missing src/lang, skipping i18n fetch")
+    console.warn(
+      "  [fetch-frontend] repo missing src/lang, skipping i18n fetch",
+    )
     return
   }
   const tmpTar = path.join(os.tmpdir(), `openlist-i18n-${process.pid}.tar.gz`)
@@ -109,16 +113,56 @@ function fetchI18n(repo) {
   run(`node ./scripts/i18n.mjs`, { cwd: repo })
 }
 
+/** Apply versioned source patches; fail closed if upstream no longer matches. */
+function patchFrontend(repo) {
+  const revision = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: repo,
+    encoding: "utf8",
+  }).trim()
+  if (revision !== frontendPin.commit) {
+    throw new Error(
+      `Frontend patches require ${frontendPin.commit}; got ${revision}`,
+    )
+  }
+  for (const patch of frontendPin.patches) {
+    const file = path.join(ROOT, "frontend-patches", patch)
+    try {
+      execFileSync("git", ["apply", "--reverse", "--check", file], {
+        cwd: repo,
+        stdio: "pipe",
+      })
+      console.log(`  Frontend patch already applied: ${patch}`)
+      continue
+    } catch {
+      /* Clean upstream: apply and verify the expected patch. */
+    }
+    execFileSync("git", ["apply", "--check", file], {
+      cwd: repo,
+      stdio: "inherit",
+    })
+    execFileSync("git", ["apply", file], { cwd: repo, stdio: "inherit" })
+  }
+  execFileSync(
+    process.execPath,
+    ["--test", path.join(ROOT, "scripts/tests/frontend-directory.test.mjs")],
+    {
+      cwd: ROOT,
+      stdio: "inherit",
+      env: { ...process.env, FRONTEND_TEST_REPO: repo },
+    },
+  )
+}
+
 /** 在本地前端仓库中 install + build，并取 dist 产物 */
 function buildLocalRepo(repo) {
   const abs = path.resolve(repo)
   if (!fs.existsSync(path.join(abs, "package.json"))) {
     throw new Error(`Directory is not a frontend repo: ${abs}`)
   }
+  patchFrontend(abs)
   const pm = detectPackageManager(abs)
   const cmd = resolvePmCommand(abs, pm)
-  const install = (extra = "") =>
-    run(`${cmd} install${extra}`, { cwd: abs })
+  const install = (extra = "") => run(`${cmd} install${extra}`, { cwd: abs })
   try {
     install()
   } catch {
@@ -126,7 +170,9 @@ function buildLocalRepo(repo) {
     // minimumReleaseAge / trustPolicy 供应链复核，registry manifest 缺少
     // 平台子包时会误报（如 @crowdin/cli-*-arm64）。lockfile 来自刚克隆的
     // 官方前端仓库（HTTPS + 官方分支），属于可信来源，跳过复核安全。
-    console.warn("  [fetch-frontend] pnpm install failed (lockfile supply-chain recheck or network issue), retrying once with --trust-lockfile...")
+    console.warn(
+      "  [fetch-frontend] pnpm install failed (lockfile supply-chain recheck or network issue), retrying once with --trust-lockfile...",
+    )
     install(" --trust-lockfile")
   }
   fetchI18n(abs)
@@ -171,13 +217,24 @@ function main() {
 
   // 4. 从 Git 克隆并构建（默认兜底）
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openlist-frontend-"))
-  console.log(`  Cloning official frontend: ${OFFICIAL_REPO_URL}#${OFFICIAL_REPO_REF}`)
+  console.log(
+    `  Cloning official frontend: ${OFFICIAL_REPO_URL}#${OFFICIAL_REPO_REF}`,
+  )
   try {
-    run(
-      // -c core.autocrlf=false：禁用克隆端的换行符转换。Windows 上 autocrlf
-      // 会把前端源码（含 index.html）检出为 CRLF，改变 vite 构建出的
-      // dist/index.html 内容，进而导致产物哈希跨平台不一致。
-      `git -c core.autocrlf=false clone --depth 1 --branch ${OFFICIAL_REPO_REF} ${OFFICIAL_REPO_URL} ${tmp}`,
+    execFileSync("git", ["init", tmp], { stdio: "inherit" })
+    execFileSync("git", ["remote", "add", "origin", OFFICIAL_REPO_URL], {
+      cwd: tmp,
+      stdio: "inherit",
+    })
+    execFileSync(
+      "git",
+      ["fetch", "--depth", "1", "origin", OFFICIAL_REPO_REF],
+      { cwd: tmp, stdio: "inherit" },
+    )
+    execFileSync(
+      "git",
+      ["-c", "core.autocrlf=false", "checkout", "--detach", "FETCH_HEAD"],
+      { cwd: tmp, stdio: "inherit" },
     )
     buildLocalRepo(tmp)
   } finally {

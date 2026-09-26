@@ -1,0 +1,484 @@
+diff --git a/src/hooks/usePath.ts b/src/hooks/usePath.ts
+index 96e6b38..14e878d 100644
+--- a/src/hooks/usePath.ts
++++ b/src/hooks/usePath.ts
+@@ -1,3 +1,9 @@
++import {
++  directorySnapshots,
++  invalidateDirectories,
++  snapshotTtl,
++} from "~/utils/directory_snapshot"
++import type { FsListResp } from "~/types"
+ import axios, { Canceler } from "axios"
+ import {
+   appendObjs,
+@@ -25,6 +31,7 @@ import { useFetch } from "./useFetch"
+ import { useRouter } from "./useRouter"
+ 
+ let first_fetch = true
++let navigationVersion = 0
+ 
+ let cancelObj: Canceler
+ let cancelList: Canceler
+@@ -92,6 +99,36 @@ export const usePath = () => {
+     }
+   }
+ 
++  // Paging modes are separate keys; infinite-scroll pages are not restored as a
++  // partial directory. They retain the normal load-more flow.
++  const canSnapshot = () =>
++    pagination.type === "all" || pagination.type === "pagination"
++  const snapshotKey = (path: string, page = 1) =>
++    JSON.stringify([
++      me().id,
++      me().role,
++      me().permission,
++      me().base_path,
++      me().disabled,
++      password(),
++      path,
++      page,
++      pagination.type,
++      pagination.size,
++    ])
++  const applyFolder = (data: FsListResp["data"], page = 1) => {
++    setGlobalPage(page)
++    ObjStore.setObjs(data.content ?? [])
++    ObjStore.setTotal(data.total)
++    ObjStore.setReadme(data.readme)
++    ObjStore.setHeader(data.header)
++    ObjStore.setWrite(data.write)
++    ObjStore.setWriteContentBypass(data.write_content_bypass)
++    ObjStore.setProvider(data.provider)
++    ObjStore.setDirectUploadTools(data.direct_upload_tools)
++    ObjStore.setState(State.Folder)
++  }
++
+   // record is second time password is wrong
+   let retry_pass = false
+   // handle pathname change
+@@ -103,13 +140,25 @@ export const usePath = () => {
+     rp?: boolean,
+     force?: boolean,
+   ) => {
++    const version = ++navigationVersion
+     cancelObj?.()
+     cancelList?.()
++    ObjStore.setRevalidating(false)
+     retry_pass = rp ?? false
+     ObjStore.setErr("")
+-    if (hasHistory(path, index)) {
++    const snapshot =
++      !force && !rp && canSnapshot()
++        ? directorySnapshots.get(snapshotKey(path, index))
++        : undefined
++    if (snapshot) {
++      setPathAs(path)
++      applyFolder(snapshot, index)
++      ObjStore.setRevalidating(true)
++      return handleFolder(path, index, undefined, false, false, false, true)
++    }
++    if (!force && !rp && hasHistory(path, index)) {
+       log(`handle [${getHistoryKey(path, index)}] from history`)
+-      return recoverHistory(path, index)
++      return recoverHistory(path, index, () => version === navigationVersion)
+     } else if (IsDirRecord[path]) {
+       log(`handle [${getHistoryKey(path, index)}] as folder`)
+       return handleFolder(path, index, undefined, undefined, force)
+@@ -120,9 +169,14 @@ export const usePath = () => {
+   }
+ 
+   // handle enter obj that don't know if it is dir or file
+-  const handleObj = async (path: string, index?: number) => {
++  const handleObj = async (path: string, index?: number): Promise<void> => {
++    const version = navigationVersion
++    const revision = directorySnapshots.revision
+     shouldKeepState() || ObjStore.setState(State.FetchingObj)
+     const resp = await getObj(path)
++    if (version !== navigationVersion) return
++    if (resp.code === 200 && revision !== directorySnapshots.revision)
++      return handleObj(path, index)
+     handleRespWithoutNotify(
+       resp,
+       (data) => {
+@@ -151,16 +205,41 @@ export const usePath = () => {
+     append = false,
+     force?: boolean,
+     onlyList = false,
+-  ) => {
++    background = false,
++  ): Promise<void> => {
++    const version = navigationVersion
++    const revision = directorySnapshots.revision
++    const key = snapshotKey(path, index)
+     if (!size) {
+       size = pagination.size
+     }
+     if (size !== undefined && pagination.type === "all") {
+       size = undefined
+     }
+-    if (!onlyList && !shouldKeepState())
++    if (!onlyList && !background && !shouldKeepState())
+       ObjStore.setState(append ? State.FetchingMore : State.FetchingObjs)
+     const resp = await getObjs({ path, index, size, force })
++    if (version !== navigationVersion) return
++    if (resp.code === 200 && revision !== directorySnapshots.revision) {
++      // A write completed while this request was in flight; fetch again.
++      return handleFolder(
++        path,
++        index,
++        size,
++        append,
++        force,
++        onlyList,
++        background,
++      )
++    }
++    ObjStore.setRevalidating(false)
++    if (resp.code !== 200 && resp.code !== -1 && !onlyList) {
++      invalidateDirectories()
++      ObjStore.setObjs([])
++      ObjStore.setReadme("")
++      ObjStore.setHeader("")
++      ObjStore.setWrite(false)
++    }
+     handleRespWithoutNotify(
+       resp,
+       (data) => {
+@@ -174,6 +253,14 @@ export const usePath = () => {
+         if (onlyList) {
+           return
+         }
++        if (!append && canSnapshot()) {
++          directorySnapshots.put(
++            key,
++            data,
++            revision,
++            snapshotTtl(data.content ?? []),
++          )
++        }
+         ObjStore.setReadme(data.readme)
+         ObjStore.setHeader(data.header)
+         ObjStore.setWrite(data.write)
+@@ -221,11 +308,18 @@ export const usePath = () => {
+   return {
+     handlePathChange,
+     handleFolder,
++    cancel: () => {
++      navigationVersion++
++      cancelObj?.()
++      cancelList?.()
++      ObjStore.setRevalidating(false)
++    },
+     setPathAs,
+     refresh: async (retry_pass?: boolean, force?: boolean) => {
+       const path = pathname()
+       const scroll = window.scrollY
+       clearHistory(path, globalPage)
++      invalidateDirectories()
+       if (
+         pagination.type === "load_more" ||
+         pagination.type === "auto_load_more"
+diff --git a/src/pages/home/Obj.tsx b/src/pages/home/Obj.tsx
+index 1057038..fb0f297 100644
+--- a/src/pages/home/Obj.tsx
++++ b/src/pages/home/Obj.tsx
+@@ -6,6 +6,8 @@ import {
+   lazy,
+   Match,
+   on,
++  onCleanup,
++  onMount,
+   Show,
+   Suspense,
+   Switch,
+@@ -15,6 +17,7 @@ import { useObjTitle, usePath, useRouter, useT } from "~/hooks"
+ import {
+   getPagination,
+   objStore,
++  ObjStore,
+   password,
+   recordHistory,
+   setPassword,
+@@ -36,7 +39,22 @@ export const Obj = () => {
+   const t = useT()
+   const cardBg = useColorModeValue("white", "$neutral3")
+   const { pathname, searchParams, isShare, to } = useRouter()
+-  const { handlePathChange, refresh } = usePath()
++  const { handlePathChange, refresh, cancel } = usePath()
++  const identityChanged = () => {
++    cancel()
++    ObjStore.setObjs([])
++    ObjStore.setReadme("")
++    ObjStore.setHeader("")
++    ObjStore.setState(State.Initial)
++    to("/@login")
++  }
++  onMount(() =>
++    window.addEventListener("openlist:identity-change", identityChanged),
++  )
++  onCleanup(() => {
++    cancel()
++    window.removeEventListener("openlist:identity-change", identityChanged)
++  })
+   const pagination = getPagination()
+   const page = createMemo(() => {
+     return pagination.type === "pagination"
+@@ -80,6 +98,8 @@ export const Obj = () => {
+     <VStack
+       ref={(el: HTMLDivElement) => setObjBoxRef(el)}
+       class="obj-box"
++      aria-busy={objStore.revalidating}
++      data-directory-state={objStore.revalidating ? "revalidating" : "ready"}
+       w="$full"
+       rounded="$xl"
+       bgColor={cardBg()}
+diff --git a/src/store/history.ts b/src/store/history.ts
+index ca7caf4..be3f529 100644
+--- a/src/store/history.ts
++++ b/src/store/history.ts
+@@ -1,3 +1,4 @@
++import { onDirectoryInvalidation } from "~/utils/directory_snapshot"
+ import { shouldKeepState, ObjStore, objStore, State } from "~/store/obj"
+ import { getGlobalPage, setGlobalPage } from "~/hooks"
+ import { encodePath } from "~/utils"
+@@ -9,6 +10,7 @@ interface History {
+ }
+ 
+ export const HistoryMap = new Map<string, History>()
++onDirectoryInvalidation(() => HistoryMap.clear())
+ 
+ const waitForNextFrame = () => {
+   return new Promise((resolve) => setTimeout(resolve))
+@@ -21,9 +23,7 @@ export const getHistoryKey = (path: string, page?: number) => {
+ 
+ export const recordHistory = (path: string, page?: number) => {
+   const obj = JSON.parse(JSON.stringify(objStore))
+-  if (
+-    ![State.FetchingMore, State.Folder, State.File].includes(objStore.state)
+-  ) {
++  if (![State.File].includes(objStore.state)) {
+     return
+   }
+   if (objStore.state === State.FetchingMore) {
+@@ -39,16 +39,21 @@ export const recordHistory = (path: string, page?: number) => {
+   console.log(`record history: [${key}]`)
+ }
+ 
+-export const recoverHistory = async (path: string, page?: number) => {
++export const recoverHistory = async (
++  path: string,
++  page?: number,
++  isCurrent = () => true,
++) => {
+   const key = getHistoryKey(path, page)
+   const history = HistoryMap.get(key)
+   if (!history) return
+   setGlobalPage(history.page)
+   shouldKeepState() || ObjStore.setState(State.Initial)
+   await waitForNextFrame()
++  if (!isCurrent()) return
+   ObjStore.set(JSON.parse(JSON.stringify(history.obj)))
+   await waitForNextFrame()
+-  window.scroll({ top: history.scroll })
++  if (isCurrent()) window.scroll({ top: history.scroll })
+ }
+ 
+ export const hasHistory = (path: string, page?: number) => {
+diff --git a/src/store/obj.ts b/src/store/obj.ts
+index da29682..b1a8af4 100644
+--- a/src/store/obj.ts
++++ b/src/store/obj.ts
+@@ -30,6 +30,7 @@ const initialObjStore = {
+   provider: "",
+   direct_upload_tools: <string[] | undefined>undefined,
+   state: State.Initial,
++  revalidating: false,
+   err: "",
+ }
+ const [objStore, setObjStore] = createStore<
+@@ -80,6 +81,7 @@ export const ObjStore = {
+   //   setObjStore("write", resp.data.write);
+   // },
+   setState: (state: State) => setObjStore("state", state),
++  setRevalidating: (value: boolean) => setObjStore("revalidating", value),
+   setDirectUploadTools: (tools?: string[]) =>
+     setObjStore("direct_upload_tools", tools),
+   setErr: (err: string) => setObjStore("err", err),
+diff --git a/src/utils/directory_snapshot.ts b/src/utils/directory_snapshot.ts
+new file mode 100644
+index 0000000..5bf1f39
+--- /dev/null
++++ b/src/utils/directory_snapshot.ts
+@@ -0,0 +1,102 @@
++// Per-tab, memory-only directory snapshots. Never persist private listings.
++// The Worker remains authoritative: every restored snapshot is revalidated.
++export class DirectorySnapshots<T> {
++  private entries = new Map<
++    string,
++    { data: T; expires: number; bytes: number }
++  >()
++  private bytes = 0
++  revision = 0
++  constructor(
++    private now = () => Date.now(),
++    private maxEntries = 32,
++    private maxBytes = 2 * 1024 * 1024,
++  ) {}
++
++  get(key: string): T | undefined {
++    const entry = this.entries.get(key)
++    if (!entry) return
++    if (entry.expires <= this.now()) {
++      this.remove(key)
++      return
++    }
++    this.entries.delete(key)
++    this.entries.set(key, entry)
++    return JSON.parse(JSON.stringify(entry.data))
++  }
++  put(key: string, data: T, revision: number, ttlMs = 120000): void {
++    if (revision !== this.revision || ttlMs <= 0) return
++    const json = JSON.stringify(data)
++    const bytes = new TextEncoder().encode(json).length
++    if (bytes > Math.min(this.maxBytes, 512 * 1024)) return
++    this.remove(key)
++    this.entries.set(key, {
++      data: JSON.parse(json),
++      bytes,
++      expires: this.now() + ttlMs,
++    })
++    this.bytes += bytes
++    while (this.entries.size > this.maxEntries || this.bytes > this.maxBytes) {
++      this.remove(this.entries.keys().next().value!)
++    }
++  }
++  private remove(key: string) {
++    this.bytes -= this.entries.get(key)?.bytes ?? 0
++    this.entries.delete(key)
++  }
++  clear() {
++    this.entries.clear()
++    this.bytes = 0
++    this.revision++
++  }
++}
++
++export const directorySnapshots = new DirectorySnapshots<
++  import("~/types").FsListResp["data"]
++>()
++const invalidationListeners = new Set<() => void>()
++export function onDirectoryInvalidation(listener: () => void) {
++  invalidationListeners.add(listener)
++  return () => {
++    invalidationListeners.delete(listener)
++  }
++}
++export function invalidateDirectories() {
++  directorySnapshots.clear()
++  for (const listener of invalidationListeners) listener()
++}
++
++// Do not restore snapshots whose download signatures are about to expire.
++// Worker and upstream Go use different signature formats; support both.
++export function snapshotTtl(
++  content: Array<{ sign?: string }>,
++  now = Date.now(),
++): number {
++  let ttl = 120000
++  for (const item of content) {
++    if (!item.sign) continue
++    const match =
++      /^(\d+)\.[a-f\d]+$/i.exec(item.sign) || /:(\d+)$/.exec(item.sign)
++    if (!match) return 0
++    const expires = Number(match[1])
++    if (expires > 0) ttl = Math.min(ttl, expires * 1000 - now - 10000)
++  }
++  return Math.max(0, ttl)
++}
++
++export function isDirectoryMutation(method: string, url: string): boolean {
++  if (["get", "head", "options"].includes(method.toLowerCase())) return false
++  const path = url.split("?")[0].replace(/^.*\/api\//, "/")
++  if (path.startsWith("/admin/")) return true
++  if (!path.startsWith("/fs/")) return false
++  return ![
++    "list",
++    "get",
++    "dirs",
++    "search",
++    "link",
++    "archive/list",
++    "archive/meta",
++    "archive/get",
++  ].includes(path.slice(4))
++}
+diff --git a/src/utils/request.ts b/src/utils/request.ts
+index 5d6bc1a..a3f6bd3 100644
+--- a/src/utils/request.ts
++++ b/src/utils/request.ts
+@@ -1,3 +1,7 @@
++import {
++  invalidateDirectories,
++  isDirectoryMutation,
++} from "./directory_snapshot"
+ import axios from "axios"
+ import { api, log } from "."
+ 
+@@ -13,6 +17,8 @@ const instance = axios.create({
+ 
+ instance.interceptors.request.use(
+   (config) => {
++    if (isDirectoryMutation(config.method || "get", config.url || ""))
++      invalidateDirectories()
+     // do something before request is sent
+     return config
+   },
+@@ -27,10 +33,26 @@ instance.interceptors.request.use(
+ instance.interceptors.response.use(
+   (response) => {
+     const resp = response.data
++    if (
++      isDirectoryMutation(
++        response.config.method || "get",
++        response.config.url || "",
++      ) ||
++      resp?.code === 401
++    )
++      invalidateDirectories()
+     log(resp)
+     return resp
+   },
+   (error) => {
++    if (
++      isDirectoryMutation(
++        error.config?.method || "get",
++        error.config?.url || "",
++      ) ||
++      error.response?.status === 401
++    )
++      invalidateDirectories()
+     // response error
+     console.error(error) // for debug
+     // notificationService.show({
+@@ -72,7 +94,20 @@ instance.interceptors.response.use(
+ instance.defaults.headers.common["Authorization"] =
+   localStorage.getItem("token") || ""
+ 
++function clearIdentity() {
++  invalidateDirectories()
++  window.dispatchEvent(new Event("openlist:identity-change"))
++}
++window.addEventListener("storage", (event) => {
++  if (event.key === "token" || event.key === null) {
++    instance.defaults.headers.common["Authorization"] =
++      localStorage.getItem("token") || ""
++    clearIdentity()
++  }
++})
++
+ export const changeToken = (token?: string) => {
++  clearIdentity()
+   instance.defaults.headers.common["Authorization"] = token ?? ""
+   localStorage.setItem("token", token ?? "")
+ }
