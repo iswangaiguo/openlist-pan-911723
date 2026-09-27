@@ -240,7 +240,7 @@ index 0000000..aae3eeb
 +  )
 +}
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
-index a8d032d..70d7bb1 100644
+index a8d032d..c8f0892 100644
 --- a/src/pages/home/Body.tsx
 +++ b/src/pages/home/Body.tsx
 @@ -3,6 +3,8 @@ import { Nav } from "./Nav"
@@ -252,13 +252,15 @@ index a8d032d..70d7bb1 100644
  import { Sidebar } from "./Sidebar"
 
  export const Body = () => {
-@@ -19,6 +21,9 @@ export const Body = () => {
+@@ -19,6 +21,11 @@ export const Body = () => {
        >
          <Readme files={["header.md", "top.md", "index.md"]} fromMeta="header" />
          <Nav />
 +        <DriveHeading />
-+        <DriveViewToolbar />
-+        <DriveSelection />
++        <div class="drive-list-toolbar">
++          <DriveSelection />
++          <DriveViewToolbar />
++        </div>
          <Obj />
          <Readme
            files={["readme.md", "footer.md", "bottom.md"]}
@@ -460,10 +462,10 @@ index 0000000..1992286
 +}
 diff --git a/src/pages/home/DriveSelection.tsx b/src/pages/home/DriveSelection.tsx
 new file mode 100644
-index 0000000..eca8836
+index 0000000..5f69754
 --- /dev/null
 +++ b/src/pages/home/DriveSelection.tsx
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,105 @@
 +import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
 +import { For, Show } from "solid-js"
 +import { BsCheck2Square, BsDownload, BsThreeDots } from "solid-icons/bs"
@@ -503,63 +505,67 @@ index 0000000..eca8836
 +      ? "勾选文件后可下载或管理"
 +      : "Select files to download or manage"
 +  return (
-+    <Show when={isFolder() && (haveSelected() || layout() !== "list")}>
++    <Show when={isFolder()}>
 +      <div class="drive-file-tools" role="group" aria-label={selectLabel()}>
-+        <Show
-+          when={haveSelected() || checkboxOpen()}
-+          fallback={
-+            <button class="drive-select-button" onClick={toggleCheckbox}>
-+              <Icon as={BsCheck2Square} />
-+              <span>{selectLabel()}</span>
-+            </button>
-+          }
-+        >
-+          <span class="drive-selection-count" role="status">
-+            {haveSelected() ? selectedMsg() : hint()}
-+          </span>
-+          <div class="drive-selection-actions">
-+            <Show when={haveSelected()}>
-+              <button class="drive-button" onClick={batchDownloadSelected}>
-+                <Icon as={BsDownload} />
-+                <span>{t("home.toolbar.download")}</span>
++        <Show when={haveSelected() || layout() !== "list"}>
++          <Show
++            when={haveSelected() || checkboxOpen()}
++            fallback={
++              <button class="drive-select-button" onClick={toggleCheckbox}>
++                <Icon as={BsCheck2Square} />
++                <span>{selectLabel()}</span>
 +              </button>
-+              <Menu placement="bottom-end">
-+                <MenuTrigger
-+                  as="button"
-+                  class="drive-button"
-+                  aria-label={t("home.toolbar.more")}
-+                >
-+                  <Icon as={BsThreeDots} />
-+                  <span>{t("home.toolbar.more")}</span>
-+                </MenuTrigger>
-+                <MenuContent>
-+                  <For each={["rename", "move", "copy", "delete"] as const}>
-+                    {(name) => (
-+                      <Show when={canEdit(name)}>
-+                        <MenuItem
-+                          colorScheme={name === "delete" ? "danger" : "neutral"}
-+                          onSelect={() => bus.emit("tool", name)}
-+                        >
-+                          {t(`home.toolbar.${name}`)}
-+                        </MenuItem>
-+                      </Show>
-+                    )}
-+                  </For>
-+                  <Show when={!isShare() && userCan("share")}>
-+                    <MenuItem onSelect={() => bus.emit("tool", "share")}>
-+                      {t("home.toolbar.share")}
++            }
++          >
++            <span class="drive-selection-count" role="status">
++              {haveSelected() ? selectedMsg() : hint()}
++            </span>
++            <div class="drive-selection-actions">
++              <Show when={haveSelected()}>
++                <button class="drive-button" onClick={batchDownloadSelected}>
++                  <Icon as={BsDownload} />
++                  <span>{t("home.toolbar.download")}</span>
++                </button>
++                <Menu placement="bottom-end">
++                  <MenuTrigger
++                    as="button"
++                    class="drive-button"
++                    aria-label={t("home.toolbar.more")}
++                  >
++                    <Icon as={BsThreeDots} />
++                    <span>{t("home.toolbar.more")}</span>
++                  </MenuTrigger>
++                  <MenuContent>
++                    <For each={["rename", "move", "copy", "delete"] as const}>
++                      {(name) => (
++                        <Show when={canEdit(name)}>
++                          <MenuItem
++                            colorScheme={
++                              name === "delete" ? "danger" : "neutral"
++                            }
++                            onSelect={() => bus.emit("tool", name)}
++                          >
++                            {t(`home.toolbar.${name}`)}
++                          </MenuItem>
++                        </Show>
++                      )}
++                    </For>
++                    <Show when={!isShare() && userCan("share")}>
++                      <MenuItem onSelect={() => bus.emit("tool", "share")}>
++                        {t("home.toolbar.share")}
++                      </MenuItem>
++                    </Show>
++                    <MenuItem onSelect={copySelectedPreviewPage}>
++                      {t("home.toolbar.copy_link")}
 +                    </MenuItem>
-+                  </Show>
-+                  <MenuItem onSelect={copySelectedPreviewPage}>
-+                    {t("home.toolbar.copy_link")}
-+                  </MenuItem>
-+                </MenuContent>
-+              </Menu>
-+            </Show>
-+            <button class="drive-select-button" onClick={closeSelection}>
-+              {t("home.toolbar.cancel_select")}
-+            </button>
-+          </div>
++                  </MenuContent>
++                </Menu>
++              </Show>
++              <button class="drive-select-button" onClick={closeSelection}>
++                {t("home.toolbar.cancel_select")}
++              </button>
++            </div>
++          </Show>
 +        </Show>
 +      </div>
 +    </Show>
@@ -963,10 +969,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..b02d396
+index 0000000..7868edb
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,777 @@
+@@ -0,0 +1,801 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1744,6 +1750,30 @@ index 0000000..b02d396
 +  color: var(--drive-blue);
 +  padding: 8px 0;
 +}
++
++/* Reserve the same toolbar row before and after selection. */
++.drive-list-toolbar { display: flex; align-items: center; gap: 12px; width: 100%; height: 56px; flex-shrink: 0; }
++.drive-list-toolbar .drive-file-tools { margin: 0; min-width: 0; justify-content: flex-start; flex-wrap: nowrap; flex: 1; min-height: 44px; }
++.drive-list-toolbar .drive-selection-count { margin-right: 0; width: auto; white-space: nowrap; }
++.drive-list-toolbar .drive-selection-actions { width: auto; flex-wrap: nowrap; }
++.drive-list-toolbar .drive-view-toolbar { width: auto; margin: 0 0 0 auto; flex-shrink: 0; }
++.drive-file-row-renaming .name-box { width: 100%; min-width: 0; }
++.drive-file-row-renaming .size, .drive-file-row-renaming .modified, .drive-file-row-renaming .disk-usage-percentage { display: none; }
++.drive-inline-rename { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; position: relative; }
++.drive-inline-rename > input { flex: 1; min-width: 0; height: 38px; padding: 6px 8px; border: 2px solid #0061ff; border-radius: 5px; background: var(--drive-bg); color: var(--drive-text); outline-offset: 1px; }
++.drive-inline-rename .drive-icon-button { flex-shrink: 0; width: 32px; height: 32px; }
++.drive-rename-overwrite { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--drive-muted); white-space: nowrap; }
++.drive-rename-overwrite input { accent-color: #0061ff; }
++.drive-rename-error { position: absolute; top: 100%; left: 0; z-index: 2; background: var(--drive-bg); padding: 3px 6px; color: #c43a3a; font-size: 12px; }
++@media (max-width: 760px) {
++  .drive-list-toolbar { height: 88px; gap: 6px; }
++  .drive-list-toolbar .drive-file-tools { display: flex; flex-wrap: wrap; padding: 0; background: transparent; gap: 2px; align-content: center; height: 80px; }
++  .drive-list-toolbar .drive-selection-count { width: 100%; font-size: 12px; }
++  .drive-list-toolbar .drive-selection-actions { gap: 2px; }
++  .drive-list-toolbar .drive-selection-actions .drive-select-button { margin-left: 0; }
++  .drive-rename-overwrite { position: absolute; right: 0; bottom: -16px; font-size: 10px; }
++}
++.drive-list-toolbar:empty { display: none; }
 diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
 index 83f5780..17b1ac9 100644
 --- a/src/pages/home/file/File.tsx
@@ -1765,6 +1795,150 @@ index 83f5780..17b1ac9 100644
            <Suspense fallback={<FullLoading />}>
              <Dynamic component={cur()?.component} />
            </Suspense>
+diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
+new file mode 100644
+index 0000000..d9bb95c
+--- /dev/null
++++ b/src/pages/home/folder/InlineRename.tsx
+@@ -0,0 +1,138 @@
++import { createSignal, onMount, Show } from "solid-js"
++import { currentLang } from "~/app/i18n"
++import { usePath, useRouter, useT } from "~/hooks"
++import { me, objStore, userCan } from "~/store"
++import { inlineRename, setInlineRename } from "~/store/inline_rename"
++import { fsRename, notify, pathJoin, validateFilename } from "~/utils"
++import { StoreObj } from "~/types"
++
++export const InlineRename = (props: { obj: StoreObj }) => {
++  const session = inlineRename()!
++  const { pathname, isShare } = useRouter()
++  const { refresh } = usePath()
++  const t = useT()
++  const text = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
++  const [name, setName] = createSignal(session.name)
++  const [busy, setBusy] = createSignal(false)
++  const [error, setError] = createSignal("")
++  const [overwrite, setOverwrite] = createSignal(false)
++  let input!: HTMLInputElement
++  onMount(() =>
++    queueMicrotask(() => {
++      if (!input.isConnected) return
++      input.focus()
++      const dot = session.name.lastIndexOf(".")
++      input.setSelectionRange(
++        0,
++        !props.obj.is_dir && dot > 0 ? dot : session.name.length,
++      )
++    }),
++  )
++  const close = () => {
++    if (inlineRename() === session) setInlineRename(undefined)
++  }
++  const submit = async (event: Event) => {
++    event.preventDefault()
++    if (busy()) return
++    if (
++      pathname() !== session.directory ||
++      me().id !== session.owner ||
++      isShare() ||
++      !objStore.write ||
++      !userCan("rename")
++    ) {
++      close()
++      return
++    }
++    const validation = validateFilename(name())
++    if (!validation.valid) {
++      setError(t(`global.${validation.error}`))
++      input.focus()
++      return
++    }
++    if (name() === session.name) {
++      close()
++      return
++    }
++    setBusy(true)
++    setError("")
++    try {
++      const response = await fsRename(
++        pathJoin(session.directory, session.name),
++        name(),
++        overwrite(),
++      )
++      if (response.code !== 200) {
++        setError(response.message)
++        return
++      }
++      notify.success(t("global.success"))
++      close()
++      if (pathname() === session.directory && me().id === session.owner)
++        refresh(undefined, true)
++    } catch (error) {
++      setError(String(error))
++    } finally {
++      setBusy(false)
++    }
++  }
++  return (
++    <form
++      class="drive-inline-rename"
++      onSubmit={submit}
++      onMouseDown={(e) => e.stopPropagation()}
++      onClick={(e) => e.stopPropagation()}
++      onKeyDown={(e) => {
++        e.stopPropagation()
++        if (e.key === "Escape" && !busy()) {
++          e.preventDefault()
++          close()
++        }
++      }}
++    >
++      <input
++        ref={input}
++        aria-label={t("home.toolbar.input_new_name")}
++        value={name()}
++        disabled={busy()}
++        aria-invalid={!!error()}
++        onInput={(e) => {
++          setName(e.currentTarget.value)
++          setError("")
++        }}
++      />
++      <button
++        type="submit"
++        class="drive-icon-button"
++        disabled={busy()}
++        aria-label={text("保存名称", "Save name")}
++      >
++        ✓
++      </button>
++      <button
++        type="button"
++        class="drive-icon-button"
++        disabled={busy()}
++        onClick={close}
++        aria-label={text("取消重命名", "Cancel rename")}
++      >
++        ×
++      </button>
++      <label class="drive-rename-overwrite">
++        <input
++          type="checkbox"
++          checked={overwrite()}
++          disabled={busy()}
++          onChange={(e) => setOverwrite(e.currentTarget.checked)}
++        />
++        {t("home.conflict_policy.overwrite_existing")}
++      </label>
++      <Show when={error()}>
++        <span class="drive-rename-error" role="alert">
++          {error()}
++        </span>
++      </Show>
++    </form>
++  )
++}
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
 index 6ee0dd9..7f47cdc 100644
 --- a/src/pages/home/folder/List.tsx
@@ -1853,7 +2027,7 @@ index 6ee0dd9..7f47cdc 100644
  }
 
 diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
-index 4893a59..0a36552 100644
+index 4893a59..631ca53 100644
 --- a/src/pages/home/folder/ListItem.tsx
 +++ b/src/pages/home/folder/ListItem.tsx
 @@ -6,13 +6,12 @@ import {
@@ -1871,16 +2045,24 @@ index 4893a59..0a36552 100644
    getMainColor,
    getSettingBool,
    local,
-@@ -31,6 +30,7 @@ import {
+@@ -31,6 +30,9 @@ import {
    nearlyFull,
  } from "~/utils"
  import { getIconByObj } from "~/utils/icon"
++import { inlineRename } from "~/store/inline_rename"
++import { InlineRename } from "./InlineRename"
 +import { RowActions } from "./RowActions"
  import { ItemCheckbox, useSelectWithMouse } from "./helper"
 
  export interface Col {
-@@ -57,14 +57,26 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -55,16 +57,35 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+   const { pushHref, to } = useRouter()
+   const { openWithDoubleClick, toggleWithClick, restoreSelectionCache } =
      useSelectWithMouse()
++  const { pathname } = useRouter()
++  const editing = () =>
++    inlineRename()?.directory === pathname() &&
++    inlineRename()?.name === props.obj.name
    const filenameStyle = () => local["list_item_filename_overflow"]
    return (
 -    <Motion.div
@@ -1889,10 +2071,12 @@ index 4893a59..0a36552 100644
 -      transition={{ duration: 0.2 }}
 -      style={{
 -        width: "100%",
--      }}
 +    <div
 +      class="drive-file-row"
-+      classList={{ "drive-file-row-selected": !!props.obj.selected }}
++      classList={{
++        "drive-file-row-selected": !!props.obj.selected,
++        "drive-file-row-renaming": editing(),
+       }}
 +      style={{ width: "100%" }}
      >
 +      <div class="drive-row-check">
@@ -1913,7 +2097,29 @@ index 4893a59..0a36552 100644
        <HStack
          classList={{ selected: !!props.obj.selected }}
          class="list-item viselect-item"
-@@ -111,21 +123,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -77,18 +98,20 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+           transform: "scale(1.01)",
+           bgColor: hoverColor(),
+         }}
+-        as={LinkWithPush}
++        as={(editing() ? "div" : LinkWithPush) as typeof LinkWithPush}
+         href={props.obj.name}
+         cursor={
+           openWithDoubleClick() || toggleWithClick() ? "default" : "pointer"
+         }
+         bgColor={props.obj.selected ? hoverColor() : undefined}
+         on:dblclick={() => {
++          if (editing()) return
+           if (!openWithDoubleClick()) return
+           selectIndex(props.index, true, true)
+           to(pushHref(props.obj.name))
+         }}
+         on:click={(e: MouseEvent) => {
++          if (editing()) return
+           e.preventDefault()
+           if (openWithDoubleClick()) return
+           if (e.ctrlKey || e.metaKey || e.shiftKey) return
+@@ -111,21 +134,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
          }}
        >
          <HStack class="name-box" spacing="$1" w={cols[0].w}>
@@ -1935,7 +2141,59 @@ index 4893a59..0a36552 100644
            <Icon
              class="icon"
              boxSize="$6"
-@@ -215,6 +212,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -142,25 +150,33 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+               e.stopPropagation()
+             }}
+           />
+-          <Text
+-            class="name"
+-            css={{
+-              wordBreak: "break-all",
+-              whiteSpace: filenameStyle() === "multi_line" ? "unset" : "nowrap",
+-              "overflow-x":
+-                filenameStyle() === "scrollable" ? "auto" : "hidden",
+-              textOverflow:
+-                filenameStyle() === "ellipsis" ? "ellipsis" : "unset",
+-              "scrollbar-width": "none", // firefox
+-              "&::-webkit-scrollbar": {
+-                // webkit
+-                display: "none",
+-              },
+-            }}
+-            title={props.obj.name}
++          <Show
++            when={editing()}
++            fallback={
++              <Text
++                class="name"
++                css={{
++                  wordBreak: "break-all",
++                  whiteSpace:
++                    filenameStyle() === "multi_line" ? "unset" : "nowrap",
++                  "overflow-x":
++                    filenameStyle() === "scrollable" ? "auto" : "hidden",
++                  textOverflow:
++                    filenameStyle() === "ellipsis" ? "ellipsis" : "unset",
++                  "scrollbar-width": "none", // firefox
++                  "&::-webkit-scrollbar": {
++                    // webkit
++                    display: "none",
++                  },
++                }}
++                title={props.obj.name}
++              >
++                {props.obj.name}
++              </Text>
++            }
+           >
+-            {props.obj.name}
+-          </Text>
++            <InlineRename obj={props.obj} />
++          </Show>
+         </HStack>
+         <Show
+           fallback={
+@@ -215,6 +231,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            {formatDate(props.obj.modified)}
          </Text>
        </HStack>
@@ -2253,6 +2511,104 @@ index 8f552da..6a35d8e 100644
 +    </header>
    )
  }
+diff --git a/src/pages/home/toolbar/Rename.tsx b/src/pages/home/toolbar/Rename.tsx
+index 57e34a5..4579d74 100644
+--- a/src/pages/home/toolbar/Rename.tsx
++++ b/src/pages/home/toolbar/Rename.tsx
+@@ -1,64 +1,39 @@
+-import { Checkbox, createDisclosure } from "@hope-ui/solid"
+-import { createSignal, onCleanup, Show } from "solid-js"
+-import { ModalInput } from "~/components"
+-import { useFetch, usePath, useRouter, useT } from "~/hooks"
+-import { oneChecked, selectedObjs } from "~/store"
+-import { bus, fsRename, handleRespWithNotifySuccess, pathJoin } from "~/utils"
++import { createEffect, onCleanup } from "solid-js"
++import { useRouter } from "~/hooks"
++import {
++  layout,
++  me,
++  objStore,
++  oneChecked,
++  selectedObjs,
++  setLayout,
++  userCan,
++} from "~/store"
++import { setInlineRename } from "~/store/inline_rename"
++import { bus } from "~/utils"
+
+ export const Rename = () => {
+-  const t = useT()
+-  const { isOpen, onOpen, onClose } = createDisclosure()
+-  const [loading, ok] = useFetch(fsRename)
+-  const { pathname } = useRouter()
+-  const { refresh } = usePath()
+-  const [overwrite, setOverwrite] = createSignal(false)
++  const { pathname, isShare } = useRouter()
++  createEffect(() => {
++    pathname()
++    me().id
++    setInlineRename(undefined)
++  })
+   const handler = (name: string) => {
+-    if (name === "rename") {
+-      if (!oneChecked()) {
+-        bus.emit("tool", "batchRename")
+-        return
+-      }
+-      onOpen()
+-      setOverwrite(false)
++    if (name !== "rename" || isShare() || !objStore.write || !userCan("rename"))
++      return
++    if (!oneChecked()) {
++      bus.emit("tool", "batchRename")
++      return
+     }
++    const obj = selectedObjs()[0]
++    if (layout() !== "list") setLayout("list")
++    setInlineRename({ directory: pathname(), name: obj.name, owner: me().id })
+   }
+   bus.on("tool", handler)
+   onCleanup(() => {
+     bus.off("tool", handler)
++    setInlineRename(undefined)
+   })
+-  return (
+-    <Show when={isOpen()}>
+-      <ModalInput
+-        title="home.toolbar.input_new_name"
+-        validateFilename={true}
+-        footerSlot={
+-          <Checkbox
+-            mr="auto"
+-            checked={overwrite()}
+-            onChange={() => {
+-              setOverwrite(!overwrite())
+-            }}
+-          >
+-            {t("home.conflict_policy.overwrite_existing")}
+-          </Checkbox>
+-        }
+-        isRenamingFile={!selectedObjs()[0].is_dir}
+-        opened={isOpen()}
+-        onClose={onClose}
+-        defaultValue={selectedObjs()[0]?.name ?? ""}
+-        loading={loading()}
+-        onSubmit={async (name) => {
+-          const resp = await ok(
+-            pathJoin(pathname(), selectedObjs()[0].name),
+-            name,
+-            overwrite(),
+-          )
+-          handleRespWithNotifySuccess(resp, () => {
+-            refresh()
+-            onClose()
+-          })
+-        }}
+-      />
+-    </Show>
+-  )
++  return null
+ }
 diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
 index e55e19b..d38471c 100644
 --- a/src/pages/home/toolbar/Toolbar.tsx
@@ -2299,10 +2655,10 @@ index e55e19b..d38471c 100644
        <BackTop />
      </Portal>
 diff --git a/src/pages/home/uploads/Upload.tsx b/src/pages/home/uploads/Upload.tsx
-index 8d4feca..9eadd3d 100644
+index 8d4feca..2623a75 100644
 --- a/src/pages/home/uploads/Upload.tsx
 +++ b/src/pages/home/uploads/Upload.tsx
-@@ -1,369 +1,638 @@
+@@ -1,369 +1,808 @@
 +import { useColorModeValue } from "@hope-ui/solid"
  import {
 -  VStack,
@@ -2332,7 +2688,7 @@ index 8d4feca..9eadd3d 100644
 +import { createStore, reconcile } from "solid-js/store"
 +import { Portal } from "solid-js/web"
 +import { currentLang } from "~/app/i18n"
-+import { useRouter, useT } from "~/hooks"
++import { useRouter, useT, useUtil } from "~/hooks"
  import {
 -  RiDocumentFolderUploadFill,
 -  RiDocumentFileUploadFill,
@@ -2409,7 +2765,7 @@ index 8d4feca..9eadd3d 100644
 +  objStore,
 +  State,
 +} from "~/store"
-+import { api, bus, getFileSize, notify, r } from "~/utils"
++import { api, bus, getFileSize, joinBase, notify, r } from "~/utils"
 +import { setUnfinishedUploads } from "~/utils/module_recovery"
 +import { invalidateDirectories } from "~/utils/directory_snapshot"
 +import { traverseFileTree } from "./util"
@@ -2422,6 +2778,7 @@ index 8d4feca..9eadd3d 100644
    const t = useT()
 -  const { pathname } = useRouter()
 -  const { refresh } = usePath()
++  const { copy } = useUtil()
 +  const { pathname, isShare } = useRouter()
 +  const mode = useColorModeValue("light", "dark")
 +  const text = (zh: string, en: string) =>
@@ -2445,8 +2802,41 @@ index 8d4feca..9eadd3d 100644
 +  const [method, setMethod] = createSignal(uploaders()[0].name)
 +  const [taskStore, setTaskStore] = createStore<{ items: UploadTask[] }>({
 +    items: [],
-+  })
+   })
+-  const allDone = () => {
+-    return uploadFiles.uploads.every(({ status }) =>
+-      ["success", "error"].includes(status),
++  const [filter, setFilter] = createSignal("all")
 +  const tasks = () => taskStore.items
++  const filteredTasks = () =>
++    tasks().filter((task) => filter() === "all" || task.status === filter())
++  const succeeded = () =>
++    tasks().length > 0 && tasks().every((task) => task.status === "success")
++  const cancellable = () =>
++    tasks().filter((task) => !["success", "cancelled"].includes(task.status))
++  const remaining = () => {
++    const speed = active().reduce((sum, task) => sum + task.speed, 0)
++    const bytes = active().reduce(
++      (sum, task) =>
++        sum + task.size * (1 - Math.max(0, Math.min(100, task.progress)) / 100),
++      0,
+     )
++    if (!bytes) return text("正在确认上传", "Finishing upload")
++    if (!speed) return text("正在准备上传", "Preparing upload")
++    const minutes = Math.max(1, Math.ceil(bytes / speed / 60))
++    return text(`约剩 ${minutes} 分钟`, `About ${minutes} min remaining`)
+   }
+-  let fileInput!: HTMLInputElement
+-  let folderInput!: HTMLInputElement
+-  // keep the File handles around so a failed row can be retried in place
+-  const fileMap = new Map<string, File>()
+-  const handleAddFiles = async (files: File[]) => {
+-    if (files.length === 0) return
+-    setUploading(true)
+-    for (const file of files) {
+-      const upload = File2Upload(file)
+-      fileMap.set(upload.path, file)
+-      setUploadFiles("uploads", (uploads) => [...uploads, upload])
 +  const queue = new UploadQueue(
 +    (tasks) => {
 +      setTaskStore("items", reconcile(tasks, { key: "id" }))
@@ -2520,11 +2910,10 @@ index 8d4feca..9eadd3d 100644
 +      }
 +    } catch {
 +      setStorageWarning(true)
-+    }
-   })
--  const allDone = () => {
--    return uploadFiles.uploads.every(({ status }) =>
--      ["success", "error"].includes(status),
+     }
+-    for await (const ms of asyncPool(3, files, handleFile)) {
+-      console.log(ms)
++  })
 +  const active = createMemo(() =>
 +    tasks().filter((task) =>
 +      ["pending", "hashing", "verifying", "uploading", "backending"].includes(
@@ -2545,13 +2934,13 @@ index 8d4feca..9eadd3d 100644
 +              : Math.max(0, Math.min(100, task.progress))),
 +        0,
 +      ) / total,
-     )
++    )
 +  })
 +  const summary = () =>
 +    active().length
 +      ? text(
-+          `${active().length} 项正在上传`,
-+          `Uploading ${active().length} items`,
++          `正在上传 ${active().length} 项，共 ${tasks().length} 项`,
++          `Uploading ${active().length} of ${tasks().length} items`,
 +        )
 +      : tasks().some((task) => task.status === "waiting_network")
 +        ? text("等待网络恢复", "Waiting for network")
@@ -2562,7 +2951,9 @@ index 8d4feca..9eadd3d 100644
 +            : tasks().some((task) => task.status === "error")
 +              ? text("部分文件上传失败", "Some uploads failed")
 +              : tasks().length
-+                ? text("上传完成", "Uploads complete")
++                ? tasks().every((task) => task.status === "cancelled")
++                  ? text("上传已取消", "Uploads cancelled")
++                  : text("上传完成", "Uploads complete")
 +                : text("添加文件开始上传", "Add files to upload")
 +  const canAdd = () =>
 +    !isShare() &&
@@ -2586,7 +2977,7 @@ index 8d4feca..9eadd3d 100644
 +    syncTarget()
 +    setOpened(true)
 +    setExpanded(true)
-   }
++  }
 +  bus.on("tool", open)
 +  const identityChanged = () => {
 +    staleIdentity = me()
@@ -2609,8 +3000,13 @@ index 8d4feca..9eadd3d 100644
 +    if (storageWarning() && active().length) {
 +      event.preventDefault()
 +      event.returnValue = ""
-+    }
-+  }
+     }
+-    refresh()
+-    // 再次延迟刷新一次，以便能看到后端异步生成的 BT 文件（如 189/189pc 驱动的 .cas.torrent）
+-    setTimeout(() => refresh(undefined, true), 5000)
+   }
+-  const setUpload = (path: string, key: keyof UploadFileProps, value: any) => {
+-    setUploadFiles("uploads", (upload) => upload.path === path, key, value)
 +  window.addEventListener("beforeunload", beforeUnload)
 +  window.addEventListener("openlist:identity-change", identityChanged)
 +  onCleanup(() => {
@@ -2631,24 +3027,8 @@ index 8d4feca..9eadd3d 100644
 +    overwrite: uploadConfig.overwrite,
 +    rapid: uploadConfig.rapid,
 +  })
-   let fileInput!: HTMLInputElement
-   let folderInput!: HTMLInputElement
--  // keep the File handles around so a failed row can be retried in place
--  const fileMap = new Map<string, File>()
--  const handleAddFiles = async (files: File[]) => {
--    if (files.length === 0) return
--    setUploading(true)
--    for (const file of files) {
--      const upload = File2Upload(file)
--      fileMap.set(upload.path, file)
--      setUploadFiles("uploads", (uploads) => [...uploads, upload])
--    }
--    for await (const ms of asyncPool(3, files, handleFile)) {
--      console.log(ms)
--    }
--    refresh()
--    // 再次延迟刷新一次，以便能看到后端异步生成的 BT 文件（如 189/189pc 驱动的 .cas.torrent）
--    setTimeout(() => refresh(undefined, true), 5000)
++  let fileInput!: HTMLInputElement
++  let folderInput!: HTMLInputElement
 +  let restoreInput!: HTMLInputElement
 +  let restoreId: number | undefined
 +  let pickerTarget: UploadTarget | undefined
@@ -2657,16 +3037,6 @@ index 8d4feca..9eadd3d 100644
 +    pickerTarget = snapshot()
 +    pickerOwner = me().id
 +    ;(folder ? folderInput : fileInput).click()
-   }
--  const setUpload = (path: string, key: keyof UploadFileProps, value: any) => {
--    setUploadFiles("uploads", (upload) => upload.path === path, key, value)
-+  const add = (
-+    files: File[],
-+    target: UploadTarget,
-+    owner: number | undefined,
-+  ) => {
-+    if (owner !== me().id) return
-+    queue.add(files, target)
    }
 -
 -  // All upload methods are available by default
@@ -2682,11 +3052,14 @@ index 8d4feca..9eadd3d 100644
 -    setUpload(path, "progress", 0)
 -    setUpload(path, "speed", 0)
 -    handleFile(file)
-+  const picked = (event: Event) => {
-+    const input = event.currentTarget as HTMLInputElement
-+    if (pickerTarget)
-+      add(Array.from(input.files ?? []), pickerTarget, pickerOwner)
-+    input.value = ""
++  const add = (
++    files: File[],
++    target: UploadTarget,
++    owner: number | undefined,
++  ) => {
++    if (owner !== me().id) return
++    setFilter("all")
++    queue.add(files, target)
    }
 -  const handleFile = async (file: File) => {
 -    const path = file.webkitRelativePath ? file.webkitRelativePath : file.name
@@ -2716,6 +3089,12 @@ index 8d4feca..9eadd3d 100644
 -      console.error(e)
 -      setUpload(path, "status", "error")
 -      setUpload(path, "msg", e.message)
++  const picked = (event: Event) => {
++    const input = event.currentTarget as HTMLInputElement
++    if (pickerTarget)
++      add(Array.from(input.files ?? []), pickerTarget, pickerOwner)
++    input.value = ""
++  }
 +  const pickOriginal = (id: number) => {
 +    restoreId = id
 +    pickerOwner = me().id
@@ -2869,11 +3248,19 @@ index 8d4feca..9eadd3d 100644
 +            fallback={
 +              <button
 +                class="upload-dock"
++                data-success={succeeded()}
 +                onClick={expand}
 +                aria-expanded="false"
 +              >
-+                <span class="upload-mark">↑</span>
-+                <span>{summary()}</span>
++                <span class="upload-mark">{succeeded() ? "✓" : "↑"}</span>
++                <span class="upload-summary-text">
++                  <b>{summary()}</b>
++                  <small>
++                    {active().length
++                      ? remaining()
++                      : `${tasks().filter((task) => task.status === "success").length} / ${tasks().length}`}
++                  </small>
++                </span>
 +                <strong>{progress()}%</strong>
 +                <span>⌃</span>
 +              </button>
@@ -2908,20 +3295,101 @@ index 8d4feca..9eadd3d 100644
 -                  icon={<RiDocumentFolderUploadFill size="1.2em" />}
 -                  onClick={() => {
 -                    folderInput.click()
+-                  }}
+-                />
+-                <Text fontSize="$sm" color="$neutral11" textAlign="center">
+-                  {t("home.upload.upload_folder")}
+-                </Text>
+-              </VStack>
+-
+-              <VStack spacing="$2" alignItems="center">
+-                <IconButton
+-                  compact
+-                  size="xl"
+-                  aria-label={t("home.upload.upload_files")}
+-                  icon={<RiDocumentFileUploadFill size="1.2em" />}
 +            <header class="upload-center-header">
-+              <span class="upload-mark">↑</span>
 +              <div>
-+                <h2>{text("上传任务", "Uploads")}</h2>
++                <h2>{text("上传项目", "Uploads")}</h2>
 +                <p aria-live="polite">{summary()}</p>
 +              </div>
++              <Show when={cancellable().length}>
++                <button
++                  class="upload-cancel-all"
+                   onClick={() => {
+-                    fileInput.click()
++                    for (const task of cancellable()) queue.cancel(task.id)
+                   }}
+-                />
+-                <Text fontSize="$sm" color="$neutral11" textAlign="center">
+-                  {t("home.upload.upload_files")}
+-                </Text>
+-              </VStack>
+-            </HStack>
+-            <Stack
+-              spacing={{ "@initial": "$2", "@md": "$4" }}
+-              direction={{ "@initial": "column", "@md": "row" }}
+-            >
+-              <Checkbox
+-                checked={!asTaskUnsupported() && uploadConfig.asTask}
+-                disabled={asTaskUnsupported()}
+-                onChange={() => {
+-                  setUploadConfig({ asTask: !uploadConfig.asTask })
+-                }}
+-              >
+-                {t("home.upload.add_as_task")}
+-              </Checkbox>
+-              <Checkbox
+-                checked={uploadConfig.overwrite}
+-                onChange={() => {
+-                  setUploadConfig({ overwrite: !uploadConfig.overwrite })
+-                }}
++                >
++                  {text("全部取消", "Cancel all")}
++                </button>
++              </Show>
 +              <button
 +                class="upload-icon-button"
 +                aria-label={text("收起上传面板", "Minimize uploads")}
 +                onClick={() => setExpanded(false)}
-+              >
-+                −
+               >
+-                {t("home.conflict_policy.overwrite_existing")}
+-              </Checkbox>
+-              <Checkbox
+-                checked={uploadConfig.rapid}
+-                onChange={() => {
+-                  setUploadConfig({ rapid: !uploadConfig.rapid })
+-                }}
++                ⌄
 +              </button>
 +            </header>
++            <Show when={tasks().length}>
++              <nav
++                class="upload-filters"
++                aria-label={text("筛选上传任务", "Filter uploads")}
+               >
+-                {t("home.upload.try_rapid")}
+-              </Checkbox>
+-            </Stack>
++                <For
++                  each={[
++                    ["all", text("所有上传项", "All")],
++                    ["success", text("已完成", "Completed")],
++                    ["cancelled", text("已取消", "Cancelled")],
++                    ["error", text("失败", "Failed")],
++                  ]}
++                >
++                  {([value, label]) => (
++                    <button
++                      aria-pressed={filter() === value}
++                      onClick={() => setFilter(value)}
++                    >
++                      {label}
++                    </button>
++                  )}
++                </For>
++              </nav>
++            </Show>
 +            <div class="upload-center-body">
 +              <Show when={storageWarning()}>
 +                <p class="upload-recovery-warning">
@@ -2942,25 +3410,12 @@ index 8d4feca..9eadd3d 100644
 +              <Show when={canAdd()}>
 +                <section
 +                  class="upload-picker"
++                  hidden={tasks().length > 0}
 +                  data-dragging={drag()}
 +                  onDragOver={(event) => {
 +                    event.preventDefault()
 +                    setDrag(true)
-                   }}
--                />
--                <Text fontSize="$sm" color="$neutral11" textAlign="center">
--                  {t("home.upload.upload_folder")}
--                </Text>
--              </VStack>
--
--              <VStack spacing="$2" alignItems="center">
--                <IconButton
--                  compact
--                  size="xl"
--                  aria-label={t("home.upload.upload_files")}
--                  icon={<RiDocumentFileUploadFill size="1.2em" />}
--                  onClick={() => {
--                    fileInput.click()
++                  }}
 +                  onDragLeave={() => setDrag(false)}
 +                  onDrop={async (event) => {
 +                    event.preventDefault()
@@ -2989,43 +3444,7 @@ index 8d4feca..9eadd3d 100644
 +                    } catch (error) {
 +                      notify.error(String(error))
 +                    }
-                   }}
--                />
--                <Text fontSize="$sm" color="$neutral11" textAlign="center">
--                  {t("home.upload.upload_files")}
--                </Text>
--              </VStack>
--            </HStack>
--            <Stack
--              spacing={{ "@initial": "$2", "@md": "$4" }}
--              direction={{ "@initial": "column", "@md": "row" }}
--            >
--              <Checkbox
--                checked={!asTaskUnsupported() && uploadConfig.asTask}
--                disabled={asTaskUnsupported()}
--                onChange={() => {
--                  setUploadConfig({ asTask: !uploadConfig.asTask })
--                }}
--              >
--                {t("home.upload.add_as_task")}
--              </Checkbox>
--              <Checkbox
--                checked={uploadConfig.overwrite}
--                onChange={() => {
--                  setUploadConfig({ overwrite: !uploadConfig.overwrite })
--                }}
--              >
--                {t("home.conflict_policy.overwrite_existing")}
--              </Checkbox>
--              <Checkbox
--                checked={uploadConfig.rapid}
--                onChange={() => {
--                  setUploadConfig({ rapid: !uploadConfig.rapid })
--                }}
--              >
--                {t("home.upload.try_rapid")}
--              </Checkbox>
--            </Stack>
++                  }}
 +                >
 +                  <p>
 +                    {drag()
@@ -3105,7 +3524,7 @@ index 8d4feca..9eadd3d 100644
 +              <Show when={tasks().length}>
 +                <div class="upload-list-heading">
 +                  <span>
-+                    {text("文件", "Files")} · {tasks().length}
++                    {text("上传项目", "Uploads")} · {filteredTasks().length}
 +                  </span>
 +                  <button
 +                    disabled={
@@ -3119,9 +3538,27 @@ index 8d4feca..9eadd3d 100644
 +                  </button>
 +                </div>
 +                <ul class="upload-task-list">
-+                  <For each={tasks()}>
++                  <For each={filteredTasks()}>
 +                    {(task) => (
 +                      <li class="upload-task" data-status={task.status}>
++                        <span class="upload-task-symbol" aria-hidden="true">
++                          {task.status === "success"
++                            ? "✓"
++                            : task.status === "error"
++                              ? "!"
++                              : task.status === "cancelled"
++                                ? "×"
++                                : "↑"}
++                        </span>
++                        <span class="upload-file-type">
++                          {task.name.includes(".")
++                            ? task.name
++                                .split(".")
++                                .pop()!
++                                .toUpperCase()
++                                .slice(0, 8)
++                            : text("文件", "FILE")}
++                        </span>
 +                        <div class="upload-task-top">
 +                          <strong title={task.path}>{task.name}</strong>
 +                          <span>{getFileSize(task.size)}</span>
@@ -3133,7 +3570,21 @@ index 8d4feca..9eadd3d 100644
 +                          {task.directory}
 +                        </p>
 +                        <div class="upload-task-status">
-+                          <span>{status(task)}</span>
++                          <span>
++                            {status(task)}
++                            <Show when={task.status === "uploading"}>
++                              {" "}
++                              ·{" "}
++                              {task.progress > 0
++                                ? getFileSize(
++                                    Math.round(
++                                      (task.size * task.progress) / 100,
++                                    ),
++                                  )
++                                : "0 B"}{" "}
++                              / {getFileSize(task.size)}
++                            </Show>
++                          </span>
 +                          <span>
 +                            {task.status === "uploading" && task.speed > 0
 +                              ? `${getFileSize(task.speed)}/s · `
@@ -3194,6 +3645,24 @@ index 8d4feca..9eadd3d 100644
 +                          />
 +                        </Show>
 +                        <div class="upload-task-actions">
++                          <Show when={task.status === "success"}>
++                            <button
++                              class="upload-row-action"
++                              onClick={() =>
++                                copy(
++                                  new URL(
++                                    joinBase(task.directory, task.path)
++                                      .split("/")
++                                      .map(encodeURIComponent)
++                                      .join("/"),
++                                    location.origin,
++                                  ).href,
++                                )
++                              }
++                            >
++                              {t("home.toolbar.copy_link")}
++                            </button>
++                          </Show>
 +                          <Show when={task.status === "needs_file"}>
 +                            <button
 +                              class="upload-row-action"
@@ -3265,13 +3734,68 @@ index 8d4feca..9eadd3d 100644
 +                    )}
 +                  </For>
 +                </ul>
++                <Show when={!filteredTasks().length}>
++                  <p class="upload-empty">
++                    {text("暂无此类上传任务", "No uploads in this category")}
++                  </p>
++                </Show>
 +              </Show>
 +            </div>
-+            <footer class="upload-center-footer">
-+              {text(
-+                "可以边上传边浏览。关闭页面后，重新选择原文件继续。",
-+                "Keep browsing. After closing, reselect original files to continue.",
-+              )}
++            <footer class="upload-center-footer" data-success={succeeded()}>
++              <span class="upload-mark">{succeeded() ? "✓" : "↑"}</span>
++              <div class="upload-summary-text" aria-live="polite">
++                <b>
++                  {succeeded()
++                    ? text("上传成功！", "Upload complete!")
++                    : summary()}
++                </b>
++                <small>
++                  {active().length
++                    ? remaining()
++                    : text(
++                        `已完成 ${tasks().filter((task) => task.status === "success").length} 项，共 ${tasks().length} 项`,
++                        `${tasks().filter((task) => task.status === "success").length} of ${tasks().length} completed`,
++                      )}
++                </small>
++              </div>
++              <Show when={canAdd()}>
++                <details class="upload-add-menu">
++                  <summary>{text("添加", "Add")} ⌄</summary>
++                  <div>
++                    <button
++                      onClick={(e) => {
++                        syncTarget()
++                        pick(false)
++                        e.currentTarget
++                          .closest("details")
++                          ?.removeAttribute("open")
++                      }}
++                    >
++                      {text("文件", "Files")}
++                    </button>
++                    <button
++                      onClick={(e) => {
++                        syncTarget()
++                        pick(true)
++                        e.currentTarget
++                          .closest("details")
++                          ?.removeAttribute("open")
++                      }}
++                    >
++                      {text("文件夹", "Folder")}
++                    </button>
++                  </div>
++                </details>
++              </Show>
++              <Show when={!cancellable().length && tasks().length}>
++                <button
++                  class="upload-icon-button"
++                  aria-label={text("关闭上传面板", "Close uploads")}
++                  onClick={() => setOpened(false)}
++                >
++                  ×
++                </button>
++              </Show>
 +            </footer>
            </Show>
 -        </VStack>
@@ -3928,10 +4452,10 @@ index 0000000..b3d3a93
 +})
 diff --git a/src/pages/home/uploads/upload-panel.css b/src/pages/home/uploads/upload-panel.css
 new file mode 100644
-index 0000000..a597519
+index 0000000..ec51a56
 --- /dev/null
 +++ b/src/pages/home/uploads/upload-panel.css
-@@ -0,0 +1,338 @@
+@@ -0,0 +1,388 @@
 +.upload-center {
 +  --up-bg: #fff;
 +  --up-text: #1e1919;
@@ -4270,6 +4794,56 @@ index 0000000..a597519
 +.upload-task[data-status="needs_file"] progress::-webkit-progress-value {
 +  background: #929292;
 +}
++
++/* Dropbox-style task center; its fixed dock never changes the file layout. */
++.upload-center, .upload-center[data-mode="dark"] { --up-bg: #1e1919; --up-text: #f7f5f2; --up-muted: #b5b1ad; --up-border: #57534f; --up-soft: #34302e; width: 460px; border-radius: 20px; box-shadow: 0 10px 32px #0003; }
++.upload-center-header { padding: 20px 24px 12px; border: 0; gap: 10px; }
++.upload-center-header > div { flex: 1; min-width: 0; }
++.upload-center h2 { font-size: 22px; font-weight: 500; }
++.upload-center-header p { display: none; }
++.upload-center .upload-cancel-all { padding: 6px 10px; font-size: 12px; }
++.upload-center .upload-icon-button { margin-left: 0; flex-shrink: 0; }
++.upload-filters { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 24px 18px; }
++.upload-center .upload-filters button { border-radius: 24px; border: 1px solid transparent; background: var(--up-soft); padding: 6px 10px; font-size: 12px; }
++.upload-center .upload-filters button[aria-pressed="true"] { border-color: #f7f5f2; background: #484440; }
++.upload-center-body { min-height: 230px; max-height: min(54dvh, 470px); }
++.upload-list-heading { padding: 8px 24px 16px; }
++.upload-task { margin: 0 24px; padding: 12px 0 18px 26px; position: relative; border-top: 0; }
++.upload-task-symbol { position: absolute; left: 0; top: 12px; font-size: 16px; color: var(--up-muted); }
++.upload-file-type { float: right; margin: 0 0 6px 8px; background: var(--up-soft); padding: 2px 5px; border-radius: 4px; color: var(--up-text); font-size: 10px; font-weight: 650; }
++.upload-task-top { gap: 6px; }
++.upload-task-top strong { font-weight: 600; }
++.upload-task-top > span { display: none; }
++.upload-task-status { gap: 8px; line-height: 1.6; align-items: flex-end; }
++.upload-task[data-status="success"] .upload-task-status { color: #83d0b2; }
++.upload-task[data-status="success"] progress, .upload-task[data-status="cancelled"] progress { display: none; }
++.upload-center .upload-row-action { color: var(--up-text); border-radius: 6px; background: var(--up-soft); padding: 5px 10px; margin: 0; }
++.upload-task-actions { gap: 8px; padding-top: 8px; }
++.upload-center-footer { margin: 12px; padding: 14px 12px; display: flex; align-items: center; gap: 12px; border: 0; border-radius: 12px; background: #0061ff; color: white; font-size: 13px; }
++.upload-center-footer[data-success="true"] { background: #217b5e; }
++.upload-mark { width: 42px; height: 42px; background: #0053d9; color: white; border-radius: 8px; font-size: 28px; }
++.upload-center-footer[data-success="true"] .upload-mark { background: #19694f; }
++.upload-summary-text { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
++.upload-summary-text b { font-size: 14px; font-weight: 550; }
++.upload-summary-text small { font-size: 11px; opacity: .85; font-weight: 400; }
++.upload-center .upload-dock { padding: 12px; gap: 12px; min-height: 80px; background: var(--up-bg); }
++.upload-dock[data-success="true"] .upload-mark { background: #217b5e; }
++.upload-dock .upload-summary-text { font-weight: 400; }
++.upload-add-menu { position: relative; flex-shrink: 0; }
++.upload-add-menu summary { list-style: none; cursor: pointer; padding: 8px 10px; border: 1px solid #ffffff80; border-radius: 8px; }
++.upload-add-menu summary::-webkit-details-marker { display: none; }
++.upload-add-menu > div { position: absolute; right: 0; bottom: calc(100% + 8px); display: grid; width: 140px; padding: 6px; background: var(--up-soft); border: 1px solid var(--up-border); border-radius: 8px; z-index: 2; }
++.upload-add-menu button { text-align: left; border: 0; }
++.upload-empty { padding: 30px 24px; color: var(--up-muted); text-align: center; }
++@media (max-width: 600px) {
++  .upload-center { width: calc(100vw - 24px); }
++  .upload-center-header { padding: 16px 16px 8px; }
++  .upload-filters { padding: 12px 16px; gap: 6px; }
++  .upload-center-body { min-height: 180px; max-height: 48dvh; }
++  .upload-task { margin: 0 16px; }
++  .upload-center-footer { margin: 8px; gap: 8px; padding: 10px; }
++  .upload-summary-text b { font-size: 12px; }
++}
 diff --git a/src/pages/home/uploads/uploads.ts b/src/pages/home/uploads/uploads.ts
 index f348fa0..c83cd37 100644
 --- a/src/pages/home/uploads/uploads.ts
@@ -4282,6 +4856,18 @@ index f348fa0..c83cd37 100644
 +// Recovery resolves the recorded method, not the currently browsed storage.
 +export const getUploader = (name: string) =>
 +  AllUploads.find((u) => u.name === name)?.upload
+diff --git a/src/store/inline_rename.ts b/src/store/inline_rename.ts
+new file mode 100644
+index 0000000..a8baec7
+--- /dev/null
++++ b/src/store/inline_rename.ts
+@@ -0,0 +1,6 @@
++import { createSignal } from "solid-js"
++export const [inlineRename, setInlineRename] = createSignal<{
++  directory: string
++  name: string
++  owner: number
++}>()
 diff --git a/src/utils/module_recovery.ts b/src/utils/module_recovery.ts
 new file mode 100644
 index 0000000..ab2558f
