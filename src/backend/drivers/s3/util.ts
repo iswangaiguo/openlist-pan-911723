@@ -527,7 +527,10 @@ export class S3Client {
       AbortSignal.timeout(30000),
     )
     const xml = await response.text()
-    if (!response.ok) throw parseS3Error(xml, response.status)
+    if (!response.ok || /<Error[\s>]/.test(xml))
+      throw parseS3Error(xml, response.status)
+    if (!/<ListBucketResult[\s>]/.test(xml))
+      throw new Error("Invalid S3 rename listing response")
     const block = parseXmlBlocks(xml, "Contents")[0]
     if (!block) return null
     const key = unescapeXml(parseXmlTag(block, "Key") || "")

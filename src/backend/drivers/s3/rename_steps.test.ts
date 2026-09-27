@@ -262,3 +262,20 @@ test("lost multipart completion response restarts copy without deleting the sour
   assert.equal(result.copy?.uploadId, "replacement-upload")
   assert.deepEqual(result.copy?.parts, [])
 })
+
+test("malformed listing cannot falsely complete a folder rename", async (t) => {
+  t.mock.method(
+    globalThis,
+    "fetch",
+    async () => new Response("<Error><Code>InternalError</Code></Error>"),
+  )
+  await assert.rejects(
+    new S3Driver(addition).renameStep("old", "new"),
+    /InternalError/,
+  )
+  t.mock.method(globalThis, "fetch", async () => new Response(""))
+  await assert.rejects(
+    new S3Driver(addition).renameStep("old", "new"),
+    /Invalid S3 rename listing/,
+  )
+})
