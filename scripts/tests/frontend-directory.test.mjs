@@ -287,3 +287,31 @@ test("real Solid store reconciliation keeps rows/selection while renewing signat
     ["B", "C"],
   )
 })
+
+
+test("home lists mounts directly without hover and ignores a late child response", async () => {
+  const { h, usePath } = await harness()
+  const nav = usePath()
+  nav.setPathAs("/B2/exam-materials")
+  h.path = "/B2/exam-materials"
+  const child = nav.handlePathChange(h.path)
+  const lateChild = h.calls.at(-1)
+  h.path = "/"
+  const home = nav.handlePathChange(h.path)
+  assert.equal(h.calls.at(-1).path, "/")
+  assert.equal(h.calls.at(-1).get, undefined, "home must request the mount listing, not object metadata")
+  const mounts = response("B2")
+  mounts.data.content[0].is_dir = true
+  mounts.data.provider = "Virtual"
+  h.calls.at(-1).resolve(mounts)
+  await home
+  lateChild.resolve(response("video.mp4"))
+  await child
+  assert.equal(h.state.objs[0].name, "B2")
+  assert.equal(h.state.provider, "Virtual")
+  const revisit = nav.handlePathChange("/")
+  assert.equal(h.state.objs[0].name, "B2", "cached home remains visible during revalidation")
+  h.calls.at(-1).resolve(mounts)
+  await revisit
+  assert.equal(h.state.objs[0].name, "B2")
+})

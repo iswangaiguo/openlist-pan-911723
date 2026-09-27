@@ -1,5 +1,5 @@
 diff --git a/src/hooks/usePath.ts b/src/hooks/usePath.ts
-index 96e6b38..5a182c1 100644
+index 96e6b38..7e0ad90 100644
 --- a/src/hooks/usePath.ts
 +++ b/src/hooks/usePath.ts
 @@ -1,3 +1,9 @@
@@ -12,18 +12,25 @@ index 96e6b38..5a182c1 100644
  import axios, { Canceler } from "axios"
  import {
    appendObjs,
-@@ -25,6 +31,7 @@ import { useFetch } from "./useFetch"
+@@ -25,11 +31,13 @@ import { useFetch } from "./useFetch"
  import { useRouter } from "./useRouter"
- 
+
  let first_fetch = true
 +let navigationVersion = 0
- 
+
  let cancelObj: Canceler
  let cancelList: Canceler
-@@ -92,6 +99,36 @@ export const usePath = () => {
+
+-const IsDirRecord: Record<string, boolean> = {}
++// The virtual home is always a directory, including touch/keyboard navigation.
++const IsDirRecord: Record<string, boolean> = { "/": true }
+ let globalPage = 1
+ export const getGlobalPage = () => {
+   return globalPage
+@@ -92,6 +100,36 @@ export const usePath = () => {
      }
    }
- 
+
 +  // Paging modes are separate keys; infinite-scroll pages are not restored as a
 +  // partial directory. They retain the normal load-more flow.
 +  const canSnapshot = () =>
@@ -57,7 +64,7 @@ index 96e6b38..5a182c1 100644
    // record is second time password is wrong
    let retry_pass = false
    // handle pathname change
-@@ -103,13 +140,25 @@ export const usePath = () => {
+@@ -103,13 +141,25 @@ export const usePath = () => {
      rp?: boolean,
      force?: boolean,
    ) => {
@@ -85,9 +92,9 @@ index 96e6b38..5a182c1 100644
      } else if (IsDirRecord[path]) {
        log(`handle [${getHistoryKey(path, index)}] as folder`)
        return handleFolder(path, index, undefined, undefined, force)
-@@ -120,9 +169,14 @@ export const usePath = () => {
+@@ -120,9 +170,14 @@ export const usePath = () => {
    }
- 
+
    // handle enter obj that don't know if it is dir or file
 -  const handleObj = async (path: string, index?: number) => {
 +  const handleObj = async (path: string, index?: number): Promise<void> => {
@@ -101,7 +108,7 @@ index 96e6b38..5a182c1 100644
      handleRespWithoutNotify(
        resp,
        (data) => {
-@@ -151,16 +205,41 @@ export const usePath = () => {
+@@ -151,16 +206,41 @@ export const usePath = () => {
      append = false,
      force?: boolean,
      onlyList = false,
@@ -145,7 +152,7 @@ index 96e6b38..5a182c1 100644
      handleRespWithoutNotify(
        resp,
        (data) => {
-@@ -168,12 +247,21 @@ export const usePath = () => {
+@@ -168,12 +248,21 @@ export const usePath = () => {
          if (append) {
            appendObjs(data.content)
          } else {
@@ -168,7 +175,7 @@ index 96e6b38..5a182c1 100644
          ObjStore.setReadme(data.readme)
          ObjStore.setHeader(data.header)
          ObjStore.setWrite(data.write)
-@@ -221,11 +309,18 @@ export const usePath = () => {
+@@ -221,11 +310,18 @@ export const usePath = () => {
    return {
      handlePathChange,
      handleFolder,
@@ -252,14 +259,14 @@ index ca7caf4..be3f529 100644
  import { encodePath } from "~/utils"
 @@ -9,6 +10,7 @@ interface History {
  }
- 
+
  export const HistoryMap = new Map<string, History>()
 +onDirectoryInvalidation(() => HistoryMap.clear())
- 
+
  const waitForNextFrame = () => {
    return new Promise((resolve) => setTimeout(resolve))
 @@ -21,9 +23,7 @@ export const getHistoryKey = (path: string, page?: number) => {
- 
+
  export const recordHistory = (path: string, page?: number) => {
    const obj = JSON.parse(JSON.stringify(objStore))
 -  if (
@@ -272,7 +279,7 @@ index ca7caf4..be3f529 100644
 @@ -39,16 +39,21 @@ export const recordHistory = (path: string, page?: number) => {
    console.log(`record history: [${key}]`)
  }
- 
+
 -export const recoverHistory = async (path: string, page?: number) => {
 +export const recoverHistory = async (
 +  path: string,
@@ -291,7 +298,7 @@ index ca7caf4..be3f529 100644
 -  window.scroll({ top: history.scroll })
 +  if (isCurrent()) window.scroll({ top: history.scroll })
  }
- 
+
  export const hasHistory = (path: string, page?: number) => {
 diff --git a/src/store/obj.ts b/src/store/obj.ts
 index da29682..31fd2dd 100644
@@ -481,9 +488,9 @@ index 5d6bc1a..a3f6bd3 100644
 +} from "./directory_snapshot"
  import axios from "axios"
  import { api, log } from "."
- 
+
 @@ -13,6 +17,8 @@ const instance = axios.create({
- 
+
  instance.interceptors.request.use(
    (config) => {
 +    if (isDirectoryMutation(config.method || "get", config.url || ""))
@@ -521,7 +528,7 @@ index 5d6bc1a..a3f6bd3 100644
 @@ -72,7 +94,20 @@ instance.interceptors.response.use(
  instance.defaults.headers.common["Authorization"] =
    localStorage.getItem("token") || ""
- 
+
 +function clearIdentity() {
 +  invalidateDirectories()
 +  window.dispatchEvent(new Event("openlist:identity-change"))
