@@ -1056,10 +1056,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..1a6082e
+index 0000000..f139aa5
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,826 @@
+@@ -0,0 +1,828 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1886,6 +1886,8 @@ index 0000000..1a6082e
 +  text-align: center;
 +  font-size: 13px;
 +}
++
++.drive-rename-progress { position: absolute; top: calc(100% + 2px); left: 0; z-index: 2; background: var(--drive-bg); color: var(--drive-muted); font-size: 12px; padding: 2px 6px; border-radius: 4px; }
 diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
 index 83f5780..17b1ac9 100644
 --- a/src/pages/home/file/File.tsx
@@ -1967,16 +1969,19 @@ index c19a217..a97bd09 100644
        </Show>
 diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
 new file mode 100644
-index 0000000..c5f7013
+index 0000000..0cbc8ad
 --- /dev/null
 +++ b/src/pages/home/folder/InlineRename.tsx
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,209 @@
++import { currentLang } from "~/app/i18n"
 +import { createSignal, onMount, Show } from "solid-js"
 +import { usePath, useRouter, useT } from "~/hooks"
 +import { me, objStore, userCan } from "~/store"
 +import { inlineRename, setInlineRename } from "~/store/inline_rename"
-+import { fsRename, notify, pathJoin, validateFilename } from "~/utils"
++import { notify, pathJoin, validateFilename, r } from "~/utils"
 +import { StoreObj } from "~/types"
++
++const activeRenames = new Set<string>()
 +
 +export const InlineRename = (props: { obj: StoreObj }) => {
 +  const session = inlineRename()!
@@ -1986,6 +1991,33 @@ index 0000000..c5f7013
 +  const [name, setName] = createSignal(session.name)
 +  const [busy, setBusy] = createSignal(false)
 +  const [error, setError] = createSignal("")
++  const key = `openlist:rename:${session.owner}:${session.directory}:${session.name}`
++  const [progress, setProgress] = createSignal("")
++  let ticket: string | undefined
++  let processed = 0
++  try {
++    const saved = JSON.parse(sessionStorage.getItem(key) || "null")
++    if (saved?.ticket && saved?.name) {
++      ticket = saved.ticket
++      processed = Number(saved.processed) || 0
++      setName(saved.name)
++    }
++  } catch {}
++  const remember = () => {
++    try {
++      sessionStorage.setItem(
++        key,
++        JSON.stringify({ ticket, name: name(), processed }),
++      )
++    } catch {}
++  }
++  const forget = () => {
++    try {
++      sessionStorage.removeItem(key)
++    } catch {}
++  }
++  const text = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
 +  let input!: HTMLInputElement
 +  onMount(() =>
 +    queueMicrotask(() => {
@@ -2023,26 +2055,72 @@ index 0000000..c5f7013
 +      close()
 +      return
 +    }
++    if (activeRenames.has(key)) {
++      setError(
++        text("该重命名仍在进行，请等待完成", "This rename is still running"),
++      )
++      return
++    }
++    activeRenames.add(key)
 +    setBusy(true)
 +    setError("")
 +    try {
-+      const response = await fsRename(
-+        pathJoin(session.directory, session.name),
-+        name(),
-+        false,
-+      )
-+      if (response.code !== 200) {
-+        setError(response.message)
-+        return
++      let response: any
++      setProgress(text("正在重命名…", "Renaming…"))
++      if (!ticket) {
++        response = await r.post("/fs/rename", {
++          path: pathJoin(session.directory, session.name),
++          name: name(),
++          overwrite: false,
++          staged: true,
++        })
++        if (response.code !== 200) throw new Error(response.message)
++        ticket = response.data?.ticket
++        if (ticket) remember()
 +      }
++      while (ticket) {
++        if (me().id !== session.owner)
++          throw new Error(
++            text("账号已切换，操作已暂停", "Account changed; rename paused"),
++          )
++        response = await r.post("/fs/rename/step", { ticket })
++        if (response.code !== 200) throw new Error(response.message)
++        if (response.data.processed) processed++
++        ticket = response.data.done ? undefined : response.data.ticket
++        if (!response.data.done && !ticket)
++          throw new Error("Invalid rename continuation")
++        remember()
++        setProgress(
++          response.data.part
++            ? text(
++                `已处理 ${processed} 项，正在复制分段 ${response.data.part}/${response.data.parts}`,
++                `Processed ${processed}; copying part ${response.data.part}/${response.data.parts}`,
++              )
++            : text(
++                `已处理 ${processed} 项…`,
++                `Processed ${processed} item(s)…`,
++              ),
++        )
++      }
++      forget()
 +      notify.success(t("global.success"))
 +      close()
 +      if (pathname() === session.directory && me().id === session.owner)
 +        refresh(undefined, true)
 +    } catch (error) {
-+      setError(String(error))
++      setError(
++        String(error) +
++          (ticket
++            ? text(
++                "；已处理内容保留在新目录，剩余内容仍在原目录。按 Enter 继续。",
++                "; completed items remain in the new folder, remaining items in the original. Press Enter to resume.",
++              )
++            : ""),
++      )
 +    } finally {
++      activeRenames.delete(key)
 +      setBusy(false)
++      setProgress("")
 +    }
 +  }
 +  return (
@@ -2064,7 +2142,14 @@ index 0000000..c5f7013
 +          void submit()
 +        } else if (e.key === "Escape" && !busy()) {
 +          e.preventDefault()
-+          close()
++          if (ticket)
++            setError(
++              text(
++                "文件夹重命名已开始，按 Enter 继续完成，避免留下未完成目录",
++                "Folder rename started; press Enter to resume",
++              ),
++            )
++          else close()
 +        }
 +      }}
 +    >
@@ -2072,7 +2157,7 @@ index 0000000..c5f7013
 +        ref={input}
 +        aria-label={t("home.toolbar.input_new_name")}
 +        value={name()}
-+        readOnly={busy()}
++        readOnly={busy() || !!ticket}
 +        aria-busy={busy()}
 +        enterkeyhint="done"
 +        onBlur={() => {
@@ -2084,6 +2169,11 @@ index 0000000..c5f7013
 +          setError("")
 +        }}
 +      />
++      <Show when={progress()}>
++        <span class="drive-rename-progress" role="status">
++          {progress()}
++        </span>
++      </Show>
 +      <Show when={error()}>
 +        <span class="drive-rename-error" role="alert">
 +          {error()}

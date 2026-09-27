@@ -45,6 +45,16 @@ export function normalizeS3Addition(a: any): S3Addition {
   return norm as S3Addition
 }
 
+export type RenameCopyState = {
+  key: string
+  target: string
+  size: number
+  etag: string
+  uploadId: string
+  parts: { partNumber: number; etag: string }[]
+  copiedEtag?: string
+}
+
 export class S3Driver implements StorageDriver {
   private client: S3Client
   private addition: S3Addition
@@ -143,7 +153,11 @@ export class S3Driver implements StorageDriver {
 
   async usagePage(cursor?: string) {
     await this.checkDogeToken()
-    return this.client.usagePage(this.getRemotePath("/"), cursor, this.addition.list_object_version === "v2" ? "v2" : "v1")
+    return this.client.usagePage(
+      this.getRemotePath("/"),
+      cursor,
+      this.addition.list_object_version === "v2" ? "v2" : "v1",
+    )
   }
 
   async list(virtualPath: string, physicalPath: string): Promise<FileItem[]> {
@@ -239,6 +253,145 @@ export class S3Driver implements StorageDriver {
     const placeholderName = getPlaceholderName(this.addition.placeholder)
     const placeholderKey = joinPath(remotePath, placeholderName)
     await this.client.putObject(placeholderKey, new Uint8Array(0))
+  }
+
+  async prepareRenameSteps(
+    physicalPath: string,
+    newName: string,
+  ): Promise<boolean> {
+    await this.checkDogeToken()
+    const src = this.getRemotePath(physicalPath)
+    if (await this.client.headObject(src)) return false
+    const dst = joinPath(getDirName(src), newName)
+    if (src === dst || isSubPath(src, dst))
+      throw new Error("Invalid rename destination")
+    if (
+      (await this.client.headObject(dst)) ||
+      (await this.client.firstObject(dst))
+    )
+      throw new Error(
+        "目标文件夹已存在；原有部分副本会保留，请使用其他名称或先整理已有目录",
+      )
+    return true
+  }
+
+  async renameStep(
+    physicalPath: string,
+    newName: string,
+    copy?: RenameCopyState,
+  ): Promise<{
+    done: boolean
+    processed?: boolean
+    copy?: RenameCopyState
+    part?: number
+    parts?: number
+  }> {
+    await this.checkDogeToken()
+    const src = this.getRemotePath(physicalPath)
+    const dst = joinPath(getDirName(src), newName)
+    if (copy) {
+      const partSize = 1024 * 1024 * 1024
+      const partCount = Math.ceil(copy.size / partSize)
+      if (!copy.copiedEtag && copy.parts.length < partCount) {
+        const partNumber = copy.parts.length + 1
+        const etag = await this.client.uploadCopyPart(
+          copy.key,
+          copy.target,
+          copy.uploadId,
+          partNumber,
+          (partNumber - 1) * partSize,
+          Math.min(partNumber * partSize, copy.size) - 1,
+          copy.etag,
+        )
+        return {
+          done: false,
+          copy: { ...copy, parts: [...copy.parts, { partNumber, etag }] },
+          part: partNumber,
+          parts: partCount,
+        }
+      }
+      if (!copy.copiedEtag) {
+        try {
+          await this.client.completeMultipartUpload(
+            copy.target,
+            copy.uploadId,
+            copy.parts.map((part) => `"${part.etag}"`),
+          )
+        } catch (error) {
+          // A lost completion response leaves the source untouched. Restart
+          // copying rather than guessing that an existing destination is ours.
+          if (!String(error).includes("NoSuchUpload")) throw error
+          return {
+            done: false,
+            copy: {
+              ...copy,
+              uploadId: await this.client.createMultipartUpload(copy.target),
+              parts: [],
+            },
+          }
+        }
+        const target = await this.client.headObject(copy.target)
+        if (!target || target.size !== copy.size || !target.etag)
+          throw new Error(
+            "Copy completion could not be confirmed; source retained",
+          )
+        return { done: false, copy: { ...copy, copiedEtag: target.etag } }
+      }
+      const target = await this.client.headObject(copy.target)
+      if (
+        !target ||
+        target.etag !== copy.copiedEtag ||
+        target.size !== copy.size
+      )
+        throw new Error("Destination changed; source retained")
+      await this.deleteRenamedSource(copy.key, copy.etag, copy.size)
+      return { done: false, processed: true }
+    }
+    const item = await this.client.firstObject(src)
+    if (!item) return { done: true }
+    const target = dst + item.key.slice(src.length)
+    if (item.size > 5_000_000_000) {
+      return {
+        done: false,
+        copy: {
+          ...item,
+          target,
+          uploadId: await this.client.createMultipartUpload(target),
+          parts: [],
+        },
+      }
+    }
+    // One object per invocation; wait for the copy result before deleting.
+    const copiedEtag = await this.client.copyObject(
+      item.key,
+      target,
+      item.size,
+      item.etag,
+    )
+    const destination = await this.client.headObject(target)
+    if (
+      !copiedEtag ||
+      !destination ||
+      destination.size !== item.size ||
+      destination.etag !== copiedEtag
+    )
+      throw new Error(
+        "Destination copy could not be confirmed; source retained",
+      )
+    await this.deleteRenamedSource(item.key, item.etag, item.size)
+    return { done: false, processed: true }
+  }
+
+  private async deleteRenamedSource(
+    key: string,
+    etag: string,
+    size: number,
+  ): Promise<void> {
+    const current = await this.client.headObject(key)
+    if (!current) return // The successful deletion response may have been lost.
+    if (current.etag !== etag || current.size !== size)
+      throw new Error("Source changed while renaming; source retained")
+    await this.client.deleteObject(key)
   }
 
   async rename(
