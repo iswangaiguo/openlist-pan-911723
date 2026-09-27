@@ -344,6 +344,7 @@ export class S3Client {
     body: string | Uint8Array | null = null,
     extraHeaders: Record<string, string> = {},
     bypassCache = false,
+    signal?: AbortSignal,
   ): Promise<Response> {
     const customHeaders: Record<string, string> = { ...extraHeaders }
     if (this.userAgent) {
@@ -364,6 +365,7 @@ export class S3Client {
     const reqInit: RequestInit = {
       method,
       headers,
+      signal,
     }
     // On a cold cache, Cloudflare may turn HEAD into GET when fetching the
     // origin. SigV4 signs the method, so that rewrite makes B2/S3 reject it.
@@ -506,12 +508,61 @@ export class S3Client {
     return { size, modified, etag }
   }
 
+  public async firstObject(
+    prefix: string,
+  ): Promise<{ key: string; size: number; etag: string } | null> {
+    const url = this.getUrl("", {
+      prefix: getKey(prefix, true),
+      "max-keys": "1",
+      ...(this.addition.list_object_version === "v2"
+        ? { "list-type": "2" }
+        : {}),
+    })
+    const response = await this.fetch(
+      "GET",
+      url,
+      null,
+      {},
+      true,
+      AbortSignal.timeout(30000),
+    )
+    const xml = await response.text()
+    if (!response.ok) throw parseS3Error(xml, response.status)
+    const block = parseXmlBlocks(xml, "Contents")[0]
+    if (!block) return null
+    const key = unescapeXml(parseXmlTag(block, "Key") || "")
+    const size = Number(parseXmlTag(block, "Size"))
+    const etag = unescapeXml(parseXmlTag(block, "ETag") || "").replace(/"/g, "")
+    if (
+      !key.startsWith(getKey(prefix, true)) ||
+      !Number.isFinite(size) ||
+      size < 0 ||
+      !etag
+    )
+      throw new Error("Invalid S3 rename listing")
+    return { key, size, etag }
+  }
+
   // One bounded page per Worker request; no object bodies, HEADs or download signatures.
-  public async usagePage(prefix: string, cursor?: string, version: "v1" | "v2" = "v1") {
-    const params: Record<string, string> = { prefix: getKey(prefix, true), "max-keys": "200" }
+  public async usagePage(
+    prefix: string,
+    cursor?: string,
+    version: "v1" | "v2" = "v1",
+  ) {
+    const params: Record<string, string> = {
+      prefix: getKey(prefix, true),
+      "max-keys": "200",
+    }
     if (version === "v2") params["list-type"] = "2"
-    if (cursor) params[version === "v2" ? "continuation-token" : "marker"] = cursor
-    const response = await this.fetch("GET", this.getUrl("", params), null, {}, true)
+    if (cursor)
+      params[version === "v2" ? "continuation-token" : "marker"] = cursor
+    const response = await this.fetch(
+      "GET",
+      this.getUrl("", params),
+      null,
+      {},
+      true,
+    )
     const xml = await response.text()
     if (!response.ok) throw parseS3Error(xml, response.status)
     let bytes = 0
@@ -519,13 +570,21 @@ export class S3Client {
     for (const block of parseXmlBlocks(xml, "Contents")) {
       const key = parseXmlTag(block, "Key")
       const size = Number(parseXmlTag(block, "Size"))
-      if (!key || !Number.isSafeInteger(size) || size < 0) throw new Error("Invalid storage usage listing")
+      if (!key || !Number.isSafeInteger(size) || size < 0)
+        throw new Error("Invalid storage usage listing")
       lastKey = unescapeXml(key)
       bytes += size
     }
     const truncated = parseXmlTag(xml, "IsTruncated") === "true"
-    const next = truncated ? unescapeXml(version === "v2" ? parseXmlTag(xml, "NextContinuationToken") || "" : parseXmlTag(xml, "NextMarker") || lastKey) : undefined
-    if (truncated && (!next || next === cursor)) throw new Error("Storage usage pagination did not advance")
+    const next = truncated
+      ? unescapeXml(
+          version === "v2"
+            ? parseXmlTag(xml, "NextContinuationToken") || ""
+            : parseXmlTag(xml, "NextMarker") || lastKey,
+        )
+      : undefined
+    if (truncated && (!next || next === cursor))
+      throw new Error("Storage usage pagination did not advance")
     return { bytes, cursor: next }
   }
 
@@ -578,6 +637,36 @@ export class S3Client {
     const xml = await response.text()
     if (!response.ok) throw parseS3Error(xml, response.status)
     return parseInitiateMultipartUpload(xml)
+  }
+
+  public async uploadCopyPart(
+    src: string,
+    dst: string,
+    uploadId: string,
+    partNumber: number,
+    start: number,
+    end: number,
+    etag: string,
+  ): Promise<string> {
+    const response = await this.fetch(
+      "PUT",
+      this.getUrl(dst, { uploadId, partNumber: String(partNumber) }),
+      null,
+      {
+        "x-amz-copy-source": rfc3986UriEncode(
+          `${this.bucket}/${getKey(src)}`,
+          false,
+        ),
+        "x-amz-copy-source-range": `bytes=${start}-${end}`,
+        "x-amz-copy-source-if-match": `"${etag}"`,
+      },
+      false,
+      AbortSignal.timeout(120000),
+    )
+    const xml = await response.text()
+    if (!response.ok || /<Error[\s>]/.test(xml))
+      throw parseS3Error(xml, response.status)
+    return parseCopyPartResult(xml)
   }
 
   public async uploadPart(
@@ -711,7 +800,8 @@ export class S3Client {
     srcKey: string,
     dstKey: string,
     size?: number,
-  ): Promise<void> {
+    sourceEtag?: string,
+  ): Promise<string | void> {
     if (size !== undefined && size > maxCopyObjectSize) {
       return this.copyMultipart(srcKey, dstKey, size)
     }
@@ -725,11 +815,24 @@ export class S3Client {
       "x-amz-copy-source": encodedSource,
     }
 
-    const resp = await this.fetch("PUT", url, null, extraHeaders)
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => "")
+    if (sourceEtag)
+      extraHeaders["x-amz-copy-source-if-match"] = `"${sourceEtag}"`
+    const resp = await this.fetch(
+      "PUT",
+      url,
+      null,
+      extraHeaders,
+      false,
+      sourceEtag ? AbortSignal.timeout(120000) : undefined,
+    )
+    // A successful HTTP status can contain a delayed S3 copy error. Never
+    // delete the source until the complete result body confirms the copy.
+    const text = await resp.text()
+    if (!resp.ok || /<Error[\s>]/.test(text))
       throw parseS3Error(text, resp.status)
-    }
+    if (!/<CopyObjectResult[\s>]/.test(text) || !parseXmlTag(text, "ETag"))
+      throw new Error("Invalid S3 copy completion response")
+    return unescapeXml(parseXmlTag(text, "ETag")!).replace(/"/g, "")
   }
 
   public async copyMultipart(

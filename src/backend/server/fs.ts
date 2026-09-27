@@ -40,6 +40,7 @@ import {
 } from "../internal/driver/storageopts"
 import { parseZip, extractZipEntry, ZipArchive } from "../internal/archive/zip"
 import { assertSafeUrl, getTrustedHosts } from "../pkg/http"
+import { renameStepsRouter, prepareRenameTicket } from "./rename_steps"
 import { seedRouter } from "./seed"
 import { S3Driver } from "../drivers/s3/driver"
 import { withDirectoryMutation } from "../internal/op/directory-cache"
@@ -731,10 +732,12 @@ fsRouter.post("/mkdir", async (c) => {
   }
 })
 
+fsRouter.route("/rename", renameStepsRouter)
+
 fsRouter.post("/rename", async (c) => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return permissionDenied(c)
-  const { path: oldPath, name: newName } = await c.req.json().catch(() => ({}))
+  const { path: oldPath, name: newName, staged } = await c.req.json().catch(() => ({}))
   let cleanName = ""
   try {
     validateDirPath(oldPath || "/")
@@ -744,6 +747,10 @@ fsRouter.post("/rename", async (c) => {
   }
   const requestContext = getStorageRequestContext(c)
   try {
+    if (staged === true) {
+      const ticket = await prepareRenameTicket(c, user, oldPath, cleanName)
+      if (ticket) return c.json({ code: 200, message: "success", data: { ticket, done: false } })
+    }
     const actualOldPath = getActualPath(user, oldPath || "/")
     await renameItem(actualOldPath, cleanName, requestContext)
     return c.json({ code: 200, message: "success", data: null })
