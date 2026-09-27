@@ -371,10 +371,10 @@ index 0000000..e4a15bd
 +}
 diff --git a/src/utils/directory_snapshot.ts b/src/utils/directory_snapshot.ts
 new file mode 100644
-index 0000000..5bf1f39
+index 0000000..95c8ba5
 --- /dev/null
 +++ b/src/utils/directory_snapshot.ts
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,103 @@
 +// Per-tab, memory-only directory snapshots. Never persist private listings.
 +// The Worker remains authoritative: every restored snapshot is revalidated.
 +export class DirectorySnapshots<T> {
@@ -468,6 +468,7 @@ index 0000000..5bf1f39
 +  if (!path.startsWith("/fs/")) return false
 +  return ![
 +    "list",
++    "usage",
 +    "get",
 +    "dirs",
 +    "search",
