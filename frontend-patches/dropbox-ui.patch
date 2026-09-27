@@ -30,7 +30,7 @@ index d2442c3..0153815 100644
          fallback={
            <Routes base={base_path}>
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
-index a8d032d..7507f6f 100644
+index a8d032d..70d7bb1 100644
 --- a/src/pages/home/Body.tsx
 +++ b/src/pages/home/Body.tsx
 @@ -3,6 +3,8 @@ import { Nav } from "./Nav"
@@ -38,15 +38,16 @@ index a8d032d..7507f6f 100644
  import { Readme } from "./Readme"
  import { Container } from "./Container"
 +import { DriveSelection } from "./DriveSelection"
-+import { DriveHeading } from "./DriveChrome"
++import { DriveHeading, DriveViewToolbar } from "./DriveChrome"
  import { Sidebar } from "./Sidebar"
 
  export const Body = () => {
-@@ -19,6 +21,8 @@ export const Body = () => {
+@@ -19,6 +21,9 @@ export const Body = () => {
        >
          <Readme files={["header.md", "top.md", "index.md"]} fromMeta="header" />
          <Nav />
 +        <DriveHeading />
++        <DriveViewToolbar />
 +        <DriveSelection />
          <Obj />
          <Readme
@@ -75,10 +76,10 @@ index bd2219d..6c92b35 100644
    )
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
 new file mode 100644
-index 0000000..87b839a
+index 0000000..1992286
 --- /dev/null
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,168 @@
 +import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import {
@@ -94,6 +95,7 @@ index 0000000..87b839a
 +import { UserMethods } from "~/types"
 +import { Layout } from "./header/layout"
 +import { bus } from "~/utils"
++import { DriveUsage } from "./DriveUsage"
 +
 +export const driveText = (key: "files" | "workspace" | "waiting") => {
 +  const zh = String(currentLang()).startsWith("zh")
@@ -148,25 +150,39 @@ index 0000000..87b839a
 +          <span>{t("home.toolbar.local_settings")}</span>
 +        </button>
 +      </nav>
-+      <button
-+        class="drive-account"
-+        onClick={() => to(UserMethods.is_guest(me()) ? "/@login" : "/@manage")}
-+      >
-+        <span class="drive-avatar">
-+          {(me().username || "O").slice(0, 1).toUpperCase()}
-+        </span>
-+        <span>
-+          <strong>{me().username || "OpenList"}</strong>
-+          <small>
-+            {t(
-+              UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage",
-+            )}
-+          </small>
-+        </span>
-+      </button>
++      <DriveUsage />
 +    </aside>
 +  )
 +}
++
++export const DriveAccount = () => {
++  const t = useT()
++  const { to } = useRouter()
++  return (
++    <button
++      class="drive-account drive-desktop-account"
++      onClick={() => to(UserMethods.is_guest(me()) ? "/@login" : "/@manage")}
++    >
++      <span class="drive-avatar">
++        {(me().username || "O").slice(0, 1).toUpperCase()}
++      </span>
++      <span>
++        <strong>{me().username || "OpenList"}</strong>
++        <small>
++          {t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}
++        </small>
++      </span>
++    </button>
++  )
++}
++
++export const DriveViewToolbar = () => (
++  <Show when={objStore.state === State.Folder}>
++    <div class="drive-view-toolbar">
++      <Layout />
++    </div>
++  </Show>
++)
 +
 +export const DriveHeading = () => {
 +  const t = useT()
@@ -339,6 +355,131 @@ index 0000000..eca8836
 +    </Show>
 +  )
 +}
+diff --git a/src/pages/home/DriveUsage.tsx b/src/pages/home/DriveUsage.tsx
+new file mode 100644
+index 0000000..35b84c0
+--- /dev/null
++++ b/src/pages/home/DriveUsage.tsx
+@@ -0,0 +1,119 @@
++import { createEffect, createSignal, on, onCleanup, Show } from "solid-js"
++import { currentLang } from "~/app/i18n"
++import { useRouter } from "~/hooks"
++import { me } from "~/store"
++import { UserMethods } from "~/types"
++import { r } from "~/utils"
++
++type Usage = { mount: string; bytes: number; at: number }
++const cache = new Map<string, Usage>()
++
++export const DriveUsage = () => {
++  const { pathname, isShare } = useRouter()
++  const media = window.matchMedia("(min-width: 761px)")
++  const [desktop, setDesktop] = createSignal(media.matches)
++  const resized = () => setDesktop(media.matches)
++  media.addEventListener("change", resized)
++  const [usage, setUsage] = createSignal<Usage>()
++  const [status, setStatus] = createSignal("loading")
++  let generation = 0
++  let controller: AbortController | undefined
++  let timer: ReturnType<typeof setTimeout> | undefined
++  const zh = () => String(currentLang()).startsWith("zh")
++  const load = async () => {
++    const version = ++generation
++    controller?.abort()
++    setUsage(undefined)
++    const path = pathname()
++    if (!desktop() || !UserMethods.is_admin(me()) || isShare()) return
++    const key = String(me().id)
++    controller = new AbortController()
++    const signal = controller.signal
++    setStatus("loading")
++    let cursor: string | undefined
++    let bytes = 0
++    try {
++      do {
++        const response = (await r.get("/fs/usage", {
++          params: { path, cursor },
++          signal,
++        })) as any
++        if (version !== generation) return
++        if (response.code !== 200) throw new Error("Usage unavailable")
++        const data = response.data
++        if (!data?.supported) {
++          setStatus(data.mount_path ? "unsupported" : "home")
++          return
++        }
++        const saved = cache.get(key + ":" + data.storage_id)
++        if (bytes === 0 && !cursor && saved && Date.now() - saved.at < 300000) {
++          setUsage(saved)
++          setStatus("ready")
++          return
++        }
++        bytes += data.bytes
++        cursor = data.cursor
++        if (!cursor) {
++          const value = { mount: data.mount_path, bytes, at: Date.now() }
++          cache.set(key + ":" + data.storage_id, value)
++          setUsage(value)
++          setStatus("ready")
++        }
++      } while (cursor)
++    } catch {
++      if (version === generation) setStatus("error")
++    }
++  }
++  createEffect(on([pathname, desktop, () => me().id, () => me().role], load))
++  const identityChanged = () => {
++    cache.clear()
++    generation++
++    controller?.abort()
++    setUsage(undefined)
++  }
++  window.addEventListener("openlist:identity-change", identityChanged)
++  const completed = () => {
++    cache.clear()
++    clearTimeout(timer)
++    timer = setTimeout(load, 500)
++  }
++  window.addEventListener("openlist:upload-complete", completed)
++  onCleanup(() => {
++    generation++
++    media.removeEventListener("change", resized)
++    controller?.abort()
++    clearTimeout(timer)
++    window.removeEventListener("openlist:upload-complete", completed)
++    window.removeEventListener("openlist:identity-change", identityChanged)
++  })
++  const label = () =>
++    ({
++      home: zh() ? "进入存储查看用量" : "Open a storage to view usage",
++      loading: zh() ? "正在统计用量…" : "Calculating usage…",
++      unsupported: zh()
++        ? "此存储不提供用量"
++        : "Usage unavailable for this storage",
++      error: zh() ? "暂时无法获取用量" : "Unable to load usage",
++    })[status()]
++  return (
++    <Show when={UserMethods.is_admin(me()) && !isShare()}>
++      <div class="drive-usage" aria-live="polite">
++        <span>{zh() ? "存储用量" : "Storage usage"}</span>
++        <Show when={usage()} fallback={<p>{label()}</p>}>
++          <strong>
++            {zh() ? "已使用" : "Used"}{" "}
++            {(usage()!.bytes / 1e9).toLocaleString(
++              String(currentLang()).startsWith("zh") ? "zh-CN" : "en-US",
++              { maximumFractionDigits: 2 },
++            )}{" "}
++            GB
++          </strong>
++          <small>{usage()!.mount}</small>
++        </Show>
++        <Show when={status() === "error"}>
++          <button onClick={load}>{zh() ? "重试" : "Retry"}</button>
++        </Show>
++      </div>
++    </Show>
++  )
++}
 diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
 index de14427..1cedec6 100644
 --- a/src/pages/home/Layout.tsx
@@ -467,10 +608,10 @@ index fb0f297..a5532d6 100644
      ObjStore.setObjs([])
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..558f01c
+index 0000000..b02d396
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,727 @@
+@@ -0,0 +1,777 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1198,6 +1339,56 @@ index 0000000..558f01c
 +    flex-basis: 36px;
 +  }
 +}
++
++.drive-header-tools .drive-desktop-account {
++  margin: 0;
++  padding: 0;
++  border: 0;
++  border-radius: 0;
++}
++.drive-view-toolbar {
++  display: flex;
++  justify-content: flex-end;
++  width: 100%;
++  margin-bottom: -12px;
++}
++@media (max-width: 760px) {
++  .drive-desktop-account,
++  .drive-view-toolbar {
++    display: none !important;
++  }
++}
++
++.drive-usage {
++  margin-top: auto;
++  padding: 20px 10px;
++  border-top: 1px solid var(--drive-line);
++}
++.drive-usage > span {
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-usage strong {
++  display: block;
++  margin-top: 10px;
++  font-size: 14px;
++}
++.drive-usage small {
++  display: block;
++  color: var(--drive-muted);
++  margin-top: 6px;
++}
++.drive-usage p {
++  color: var(--drive-muted);
++  font-size: 12px;
++  margin: 10px 0 0;
++}
++.drive-usage button {
++  border: 0;
++  background: transparent;
++  color: var(--drive-blue);
++  padding: 8px 0;
++}
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
 index 6ee0dd9..7f47cdc 100644
 --- a/src/pages/home/folder/List.tsx
@@ -1467,10 +1658,10 @@ index 0000000..3d9f239
 +  )
 +}
 diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
-index 8f552da..b5c584d 100644
+index 8f552da..6a35d8e 100644
 --- a/src/pages/home/header/Header.tsx
 +++ b/src/pages/home/header/Header.tsx
-@@ -1,90 +1,141 @@
+@@ -1,90 +1,136 @@
  import {
    HStack,
 -  useColorModeValue,
@@ -1502,10 +1693,10 @@ index 8f552da..b5c584d 100644
 +} from "solid-icons/bs"
 +import { useT, useRouter, usePath } from "~/hooks"
  import { Container } from "../Container"
-+import { driveText } from "../DriveChrome"
++import { DriveAccount, driveText } from "../DriveChrome"
 +import { UserMethods } from "~/types"
  import { bus } from "~/utils"
- import { Layout } from "./layout"
+-import { Layout } from "./layout"
  import { isMac } from "~/utils/compatibility"
 
  export const Header = () => {
@@ -1620,6 +1811,11 @@ index 8f552da..b5c584d 100644
 -                    <Kbd>K</Kbd>
 -                  </HStack>
 -                </HStack>
+-              </Show>
+-              <Layout />
+-            </Show>
+-          </HStack>
+-        </HStack>
 +                  <Icon as={BsPlusLg} />
 +                  <span>
 +                    {String(currentLang()).startsWith("zh") ? "新建" : "New"}
@@ -1658,15 +1854,7 @@ index 8f552da..b5c584d 100644
 +            </button>
 +          </Show>
 +          <div class="drive-header-tools">
-+            <div class="drive-desktop-layout">
-+              <Show when={objStore.state === State.Folder}>
-+                <Layout />
-               </Show>
--              <Layout />
--            </Show>
--          </HStack>
--        </HStack>
-+            </div>
++            <DriveAccount />
 +            <button
 +              class="drive-mobile-account drive-avatar"
 +              aria-label={`${me().username || "OpenList"} ${t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}`}

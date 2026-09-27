@@ -89,6 +89,33 @@ const getStorageRequestContext = (c: any) => {
   return context
 }
 
+// Storage-wide totals include paths outside a normal user's browsing permissions.
+// Only administrators may request them; shares and guests never enumerate a bucket.
+fsRouter.get("/usage", async (c) => {
+  c.header("Cache-Control", "private, no-store")
+  const user = await getUserFromContext(c)
+  if (!user || user.disabled || !isAdmin(user))
+    return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  const path = c.req.query("path") || "/"
+  if (path.startsWith("/@s")) return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  try {
+    const resolved = await resolvePath(getActualPath(user, path), c.env)
+    const storage = resolved.storage
+    if (!storage) return c.json({ code: 200, message: "success", data: { supported: false } })
+    const driver = await getDriver(storage.driver, storage)
+    const scope = { storage_id: storage.id, mount_path: storage.mount_path }
+    if (driver instanceof S3Driver) {
+      const page = await driver.usagePage(c.req.query("cursor"))
+      return c.json({ code: 200, message: "success", data: { ...scope, supported: true, ...page } })
+    }
+    const details = typeof (driver as any).getDetails === "function" ? await (driver as any).getDetails() : undefined
+    const bytes = details?.used_space
+    return c.json({ code: 200, message: "success", data: { ...scope, supported: Number.isFinite(bytes) && bytes >= 0, bytes } })
+  } catch (error) {
+    return c.json({ code: 500, message: safeErrorMessage(error), data: null })
+  }
+})
+
 // ---- 写操作权限校验 ----
 // 游客（未登录 / 无凭证 / token 无效）一律 403，普通用户需具备
 // WRITE_CONTENT 权限位，管理员放行。修复「任何人可匿名上传/删除文件」

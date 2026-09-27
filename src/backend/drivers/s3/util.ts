@@ -506,6 +506,28 @@ export class S3Client {
     return { size, modified, etag }
   }
 
+  // One bounded page per Worker request; no object bodies, HEADs or download signatures.
+  public async usagePage(prefix: string, cursor?: string) {
+    const params: Record<string, string> = { prefix: getKey(prefix, true), "max-keys": "200" }
+    if (cursor) params.marker = cursor
+    const response = await this.fetch("GET", this.getUrl("", params), null, {}, true)
+    const xml = await response.text()
+    if (!response.ok) throw parseS3Error(xml, response.status)
+    let bytes = 0
+    let lastKey = ""
+    for (const block of parseXmlBlocks(xml, "Contents")) {
+      const key = parseXmlTag(block, "Key")
+      const size = Number(parseXmlTag(block, "Size"))
+      if (!key || !Number.isSafeInteger(size) || size < 0) throw new Error("Invalid storage usage listing")
+      lastKey = unescapeXml(key)
+      bytes += size
+    }
+    const truncated = parseXmlTag(xml, "IsTruncated") === "true"
+    const next = truncated ? unescapeXml(parseXmlTag(xml, "NextMarker") || lastKey) : undefined
+    if (truncated && (!next || next === cursor)) throw new Error("Storage usage pagination did not advance")
+    return { bytes, cursor: next }
+  }
+
   public async listPrefixProbe(
     prefixKey: string,
     version: "v1" | "v2" = "v1",

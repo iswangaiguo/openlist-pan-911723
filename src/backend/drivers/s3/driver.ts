@@ -141,6 +141,11 @@ export class S3Driver implements StorageDriver {
     }
   }
 
+  async usagePage(cursor?: string) {
+    await this.checkDogeToken()
+    return this.client.usagePage(this.getRemotePath("/"), cursor)
+  }
+
   async list(virtualPath: string, physicalPath: string): Promise<FileItem[]> {
     return this.listObjects(physicalPath, true)
   }
