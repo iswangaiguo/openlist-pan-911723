@@ -573,10 +573,10 @@ index 0000000..5f69754
 +}
 diff --git a/src/pages/home/DriveUsage.tsx b/src/pages/home/DriveUsage.tsx
 new file mode 100644
-index 0000000..35b84c0
+index 0000000..6387c6b
 --- /dev/null
 +++ b/src/pages/home/DriveUsage.tsx
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,160 @@
 +import { createEffect, createSignal, on, onCleanup, Show } from "solid-js"
 +import { currentLang } from "~/app/i18n"
 +import { useRouter } from "~/hooks"
@@ -588,13 +588,14 @@ index 0000000..35b84c0
 +const cache = new Map<string, Usage>()
 +
 +export const DriveUsage = () => {
-+  const { pathname, isShare } = useRouter()
++  const { isShare } = useRouter()
 +  const media = window.matchMedia("(min-width: 761px)")
 +  const [desktop, setDesktop] = createSignal(media.matches)
 +  const resized = () => setDesktop(media.matches)
 +  media.addEventListener("change", resized)
 +  const [usage, setUsage] = createSignal<Usage>()
 +  const [status, setStatus] = createSignal("loading")
++  const [unavailable, setUnavailable] = createSignal(0)
 +  let generation = 0
 +  let controller: AbortController | undefined
 +  let timer: ReturnType<typeof setTimeout> | undefined
@@ -603,52 +604,81 @@ index 0000000..35b84c0
 +    const version = ++generation
 +    controller?.abort()
 +    setUsage(undefined)
-+    const path = pathname()
++    setUnavailable(0)
 +    if (!desktop() || !UserMethods.is_admin(me()) || isShare()) return
 +    const key = String(me().id)
 +    controller = new AbortController()
 +    const signal = controller.signal
 +    setStatus("loading")
-+    let cursor: string | undefined
-+    let bytes = 0
++    let total = 0
++    let counted = 0
++    let missing = 0
 +    try {
-+      do {
-+        const response = (await r.get("/fs/usage", {
-+          params: { path, cursor },
-+          signal,
-+        })) as any
-+        if (version !== generation) return
-+        if (response.code !== 200) throw new Error("Usage unavailable")
-+        const data = response.data
-+        if (!data?.supported) {
-+          setStatus(data.mount_path ? "unsupported" : "home")
-+          return
++      const inventory = (await r.get("/fs/usage", {
++        params: { scope: "all" },
++        signal,
++      })) as any
++      if (version !== generation) return
++      if (inventory.code !== 200 || !Array.isArray(inventory.data?.mounts))
++        throw new Error("Usage unavailable")
++      // Fetch bounded metadata pages separately to stay within Worker limits.
++      for (const mount of inventory.data.mounts) {
++        const cacheKey = key + ":" + mount.storage_id + ":" + mount.mount_path
++        const saved = cache.get(cacheKey)
++        if (saved && Date.now() - saved.at < 300000) {
++          total += saved.bytes
++          counted++
++          continue
 +        }
-+        const saved = cache.get(key + ":" + data.storage_id)
-+        if (bytes === 0 && !cursor && saved && Date.now() - saved.at < 300000) {
-+          setUsage(saved)
-+          setStatus("ready")
-+          return
++        let bytes = 0
++        let cursor: string | undefined
++        let supported = true
++        try {
++          do {
++            const response = (await r.get("/fs/usage", {
++              params: { path: mount.mount_path, cursor },
++              signal,
++            })) as any
++            if (version !== generation) return
++            if (response.code !== 200) throw new Error("Usage unavailable")
++            const data = response.data
++            if (!data?.supported || data.storage_id !== mount.storage_id) {
++              supported = false
++              break
++            }
++            if (!Number.isFinite(data.bytes) || data.bytes < 0)
++              throw new Error("Invalid usage")
++            bytes += data.bytes
++            cursor = data.cursor
++          } while (cursor)
++        } catch {
++          if (version !== generation) return
++          supported = false
 +        }
-+        bytes += data.bytes
-+        cursor = data.cursor
-+        if (!cursor) {
-+          const value = { mount: data.mount_path, bytes, at: Date.now() }
-+          cache.set(key + ":" + data.storage_id, value)
-+          setUsage(value)
-+          setStatus("ready")
++        if (!supported) {
++          missing++
++          continue
 +        }
-+      } while (cursor)
++        cache.set(cacheKey, { mount: mount.mount_path, bytes, at: Date.now() })
++        total += bytes
++        counted++
++      }
++      if (version !== generation) return
++      setUnavailable(missing)
++      if (missing && !counted) {
++        setStatus("error")
++        return
++      }
++      setUsage({ mount: "", bytes: total, at: Date.now() })
++      setStatus("ready")
 +    } catch {
 +      if (version === generation) setStatus("error")
 +    }
 +  }
-+  createEffect(on([pathname, desktop, () => me().id, () => me().role], load))
++  createEffect(on([desktop, () => me().id, () => me().role, isShare], load))
 +  const identityChanged = () => {
 +    cache.clear()
-+    generation++
-+    controller?.abort()
-+    setUsage(undefined)
++    void load()
 +  }
 +  window.addEventListener("openlist:identity-change", identityChanged)
 +  const completed = () => {
@@ -667,7 +697,6 @@ index 0000000..35b84c0
 +  })
 +  const label = () =>
 +    ({
-+      home: zh() ? "进入存储查看用量" : "Open a storage to view usage",
 +      loading: zh() ? "正在统计用量…" : "Calculating usage…",
 +      unsupported: zh()
 +        ? "此存储不提供用量"
@@ -677,17 +706,29 @@ index 0000000..35b84c0
 +  return (
 +    <Show when={UserMethods.is_admin(me()) && !isShare()}>
 +      <div class="drive-usage" aria-live="polite">
-+        <span>{zh() ? "存储用量" : "Storage usage"}</span>
++        <span>{zh() ? "总存储用量" : "Total storage usage"}</span>
 +        <Show when={usage()} fallback={<p>{label()}</p>}>
 +          <strong>
-+            {zh() ? "已使用" : "Used"}{" "}
++            {unavailable()
++              ? zh()
++                ? "已统计"
++                : "Counted"
++              : zh()
++                ? "已使用"
++                : "Used"}{" "}
 +            {(usage()!.bytes / 1e9).toLocaleString(
 +              String(currentLang()).startsWith("zh") ? "zh-CN" : "en-US",
 +              { maximumFractionDigits: 2 },
 +            )}{" "}
 +            GB
 +          </strong>
-+          <small>{usage()!.mount}</small>
++          <Show when={unavailable()}>
++            <small>
++              {zh()
++                ? `${unavailable()} 个存储暂无法统计`
++                : `Usage unavailable for ${unavailable()} storage(s)`}
++            </small>
++          </Show>
 +        </Show>
 +        <Show when={status() === "error"}>
 +          <button onClick={load}>{zh() ? "重试" : "Retry"}</button>
@@ -1806,12 +1847,11 @@ index 83f5780..17b1ac9 100644
            </Suspense>
 diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
 new file mode 100644
-index 0000000..d9bb95c
+index 0000000..5f01088
 --- /dev/null
 +++ b/src/pages/home/folder/InlineRename.tsx
-@@ -0,0 +1,138 @@
+@@ -0,0 +1,108 @@
 +import { createSignal, onMount, Show } from "solid-js"
-+import { currentLang } from "~/app/i18n"
 +import { usePath, useRouter, useT } from "~/hooks"
 +import { me, objStore, userCan } from "~/store"
 +import { inlineRename, setInlineRename } from "~/store/inline_rename"
@@ -1823,12 +1863,9 @@ index 0000000..d9bb95c
 +  const { pathname, isShare } = useRouter()
 +  const { refresh } = usePath()
 +  const t = useT()
-+  const text = (zh: string, en: string) =>
-+    String(currentLang()).startsWith("zh") ? zh : en
 +  const [name, setName] = createSignal(session.name)
 +  const [busy, setBusy] = createSignal(false)
 +  const [error, setError] = createSignal("")
-+  const [overwrite, setOverwrite] = createSignal(false)
 +  let input!: HTMLInputElement
 +  onMount(() =>
 +    queueMicrotask(() => {
@@ -1873,7 +1910,7 @@ index 0000000..d9bb95c
 +      const response = await fsRename(
 +        pathJoin(session.directory, session.name),
 +        name(),
-+        overwrite(),
++        false,
 +      )
 +      if (response.code !== 200) {
 +        setError(response.message)
@@ -1914,32 +1951,6 @@ index 0000000..d9bb95c
 +          setError("")
 +        }}
 +      />
-+      <button
-+        type="submit"
-+        class="drive-icon-button"
-+        disabled={busy()}
-+        aria-label={text("保存名称", "Save name")}
-+      >
-+        ✓
-+      </button>
-+      <button
-+        type="button"
-+        class="drive-icon-button"
-+        disabled={busy()}
-+        onClick={close}
-+        aria-label={text("取消重命名", "Cancel rename")}
-+      >
-+        ×
-+      </button>
-+      <label class="drive-rename-overwrite">
-+        <input
-+          type="checkbox"
-+          checked={overwrite()}
-+          disabled={busy()}
-+          onChange={(e) => setOverwrite(e.currentTarget.checked)}
-+        />
-+        {t("home.conflict_policy.overwrite_existing")}
-+      </label>
 +      <Show when={error()}>
 +        <span class="drive-rename-error" role="alert">
 +          {error()}

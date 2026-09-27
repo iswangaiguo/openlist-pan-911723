@@ -12,7 +12,7 @@ import {
   getDriver,
 } from "../internal/op/storage"
 import { resolveShare } from "../internal/op/share"
-import { resolvePath } from "../internal/model/db"
+import { getDb, resolvePath } from "../internal/model/db"
 import { getUserFromContext } from "./middlewares"
 import { canWrite, canRemove, getActualPath, isAdmin } from "../pkg/permission"
 import {
@@ -99,6 +99,12 @@ fsRouter.get("/usage", async (c) => {
   const path = c.req.query("path") || "/"
   if (path.startsWith("/@s")) return c.json({ code: 403, message: "Forbidden", data: null }, 403)
   try {
+    if (c.req.query("scope") === "all") {
+      const db = await getDb(c.env)
+      const mounts = (db.storages || []).filter(storage => !storage.disabled)
+        .map(storage => ({ storage_id: storage.id, mount_path: storage.mount_path }))
+      return c.json({ code: 200, message: "success", data: { mounts } })
+    }
     const resolved = await resolvePath(getActualPath(user, path), c.env)
     const storage = resolved.storage
     if (!storage) return c.json({ code: 200, message: "success", data: { supported: false } })
