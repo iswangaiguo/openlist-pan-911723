@@ -75,23 +75,24 @@ index bd2219d..6c92b35 100644
    )
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
 new file mode 100644
-index 0000000..f63c6ef
+index 0000000..87b839a
 --- /dev/null
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,153 @@
 +import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import {
 +  BsFolder2,
-+  BsArrowUpCircle,
 +  BsGear,
-+  BsPlusLg,
 +  BsArrowClockwise,
++  BsFolderPlus,
++  BsArrowUp,
 +} from "solid-icons/bs"
 +import { useRouter, usePath, useT } from "~/hooks"
 +import { currentLang } from "~/app/i18n"
 +import { getSetting, me, objStore, State, userCan } from "~/store"
 +import { UserMethods } from "~/types"
++import { Layout } from "./header/layout"
 +import { bus } from "~/utils"
 +
 +export const driveText = (key: "files" | "workspace" | "waiting") => {
@@ -178,14 +179,24 @@ index 0000000..f63c6ef
 +    objStore.write
 +  return (
 +    <div class="drive-heading">
-+      <h1>
-+        {pathname() === "/"
-+          ? driveText("files")
-+          : pathname().split("/").filter(Boolean).pop()}
-+      </h1>
++      <div class="drive-heading-title">
++        <h1>
++          {pathname() === "/"
++            ? driveText("files")
++            : pathname().split("/").filter(Boolean).pop()}
++        </h1>
++        <button
++          class="drive-icon-button drive-heading-settings"
++          aria-label={t("home.toolbar.local_settings")}
++          title={t("home.toolbar.local_settings")}
++          onClick={() => bus.emit("tool", "local_settings")}
++        >
++          <Icon as={BsGear} />
++        </button>
++      </div>
 +      <div class="drive-actions">
 +        <button
-+          class="drive-icon-button"
++          class="drive-icon-button drive-heading-refresh"
 +          aria-label={t("home.toolbar.refresh")}
 +          title={t("home.toolbar.refresh")}
 +          onClick={() => refresh(undefined, true)}
@@ -194,30 +205,39 @@ index 0000000..f63c6ef
 +        </button>
 +        <Show when={canWrite()}>
 +          <button
-+            class="drive-button"
++            class="drive-button drive-heading-mkdir"
++            aria-label={t("home.toolbar.mkdir")}
++            title={t("home.toolbar.mkdir")}
 +            onClick={() => bus.emit("tool", "mkdir")}
 +          >
-+            <Icon as={BsPlusLg} />
++            <Icon as={BsFolderPlus} />
 +            <span>{t("home.toolbar.mkdir")}</span>
 +          </button>
 +          <button
-+            class="drive-button drive-button-primary"
++            class="drive-button drive-button-primary drive-heading-upload"
++            aria-label={t("home.toolbar.upload")}
++            title={t("home.toolbar.upload")}
 +            onClick={() => bus.emit("tool", "upload")}
 +          >
-+            <Icon as={BsArrowUpCircle} />
++            <Icon as={BsArrowUp} />
 +            <span>{t("home.toolbar.upload")}</span>
 +          </button>
 +        </Show>
++        <div class="drive-heading-layout">
++          <Show when={objStore.state === State.Folder}>
++            <Layout />
++          </Show>
++        </div>
 +      </div>
 +    </div>
 +  )
 +}
 diff --git a/src/pages/home/DriveSelection.tsx b/src/pages/home/DriveSelection.tsx
 new file mode 100644
-index 0000000..462c67c
+index 0000000..eca8836
 --- /dev/null
 +++ b/src/pages/home/DriveSelection.tsx
-@@ -0,0 +1,100 @@
+@@ -0,0 +1,101 @@
 +import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
 +import { For, Show } from "solid-js"
 +import { BsCheck2Square, BsDownload, BsThreeDots } from "solid-icons/bs"
@@ -230,6 +250,7 @@ index 0000000..462c67c
 +  selectAll,
 +  State,
 +  toggleCheckbox,
++  layout,
 +  userCan,
 +} from "~/store"
 +import { currentLang } from "~/app/i18n"
@@ -247,7 +268,7 @@ index 0000000..462c67c
 +    !isShare() && objStore.write && userCan(name)
 +  const closeSelection = () => {
 +    selectAll(false)
-+    if (checkboxOpen()) toggleCheckbox()
++    if (layout() !== "list" && checkboxOpen()) toggleCheckbox()
 +  }
 +  const selectLabel = () =>
 +    String(currentLang()).startsWith("zh") ? "选择文件" : "Select files"
@@ -256,10 +277,10 @@ index 0000000..462c67c
 +      ? "勾选文件后可下载或管理"
 +      : "Select files to download or manage"
 +  return (
-+    <Show when={isFolder()}>
++    <Show when={isFolder() && (haveSelected() || layout() !== "list")}>
 +      <div class="drive-file-tools" role="group" aria-label={selectLabel()}>
 +        <Show
-+          when={checkboxOpen()}
++          when={haveSelected() || checkboxOpen()}
 +          fallback={
 +            <button class="drive-select-button" onClick={toggleCheckbox}>
 +              <Icon as={BsCheck2Square} />
@@ -388,10 +409,10 @@ index fb0f297..a5532d6 100644
      ObjStore.setObjs([])
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..eeba14c
+index 0000000..8292032
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,479 @@
+@@ -0,0 +1,705 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -871,11 +892,246 @@ index 0000000..eeba14c
 +    margin-left: auto;
 +  }
 +}
++
++/* Compact mobile navigation and directly accessible file actions. */
++.drive-mobile-nav,
++.drive-mobile-create,
++.drive-mobile-account,
++.drive-heading-settings,
++.drive-heading-layout {
++  display: none;
++}
++.drive-heading-title {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-width: 0;
++}
++.drive-file-row {
++  display: flex;
++  align-items: stretch;
++  width: 100%;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-shell .drive-file-row .list-item {
++  flex: 1;
++  min-width: 0;
++  width: auto;
++  border-bottom: 0;
++}
++.drive-file-row-selected {
++  background: var(--drive-selected);
++}
++.drive-file-row:hover {
++  background: var(--drive-hover);
++}
++.drive-file-row-selected:hover {
++  background: var(--drive-selected);
++}
++.drive-row-actions {
++  display: flex;
++  align-items: center;
++  flex: 0 0 44px;
++}
++.drive-row-menu {
++  width: 40px;
++  min-height: 44px;
++  border: 0;
++  background: transparent;
++}
++.drive-row-menu-space {
++  flex: 0 0 28px;
++}
++.drive-shell .name-box {
++  min-width: 0;
++}
++.drive-shell .name-box .hope-checkbox {
++  flex-shrink: 0;
++  margin-right: 10px;
++}
++.drive-shell .drive-selection-count {
++  width: auto;
++}
++@media (max-width: 760px) {
++  .drive-mobile-nav,
++  .drive-mobile-create {
++    display: block;
++  }
++  .drive-mobile-account {
++    display: grid;
++    border: 0;
++  }
++  .drive-desktop-layout {
++    display: none;
++  }
++  .drive-header-inner {
++    height: 76px;
++    min-height: 76px;
++    padding-block: 12px;
++    flex-wrap: nowrap;
++    gap: 10px;
++  }
++  .drive-menu-button {
++    border: 0;
++    width: 32px;
++    background: transparent;
++  }
++  .drive-create-button {
++    background: var(--drive-text);
++    color: var(--drive-bg);
++    border-color: var(--drive-text);
++    border-radius: 16px;
++    padding-inline: 12px;
++    white-space: nowrap;
++  }
++  .drive-create-button:hover {
++    background: var(--drive-text);
++    color: var(--drive-bg);
++    opacity: 0.85;
++  }
++  .drive-search {
++    order: initial;
++    width: auto;
++    flex: 1;
++    min-width: 40px;
++    max-width: 160px;
++    gap: 8px;
++    padding-inline: 10px;
++    background: var(--drive-bg);
++    border-radius: 14px;
++  }
++  .drive-header-tools {
++    gap: 0;
++  }
++  .drive-heading {
++    flex-wrap: nowrap;
++    gap: 8px;
++    margin-block: 0 8px;
++  }
++  .drive-heading h1 {
++    font-size: 24px;
++    overflow: hidden;
++    white-space: nowrap;
++    text-overflow: ellipsis;
++  }
++  .drive-heading-settings {
++    display: inline-flex;
++    flex-shrink: 0;
++    width: 32px;
++    min-height: 36px;
++    border: 0;
++    background: transparent;
++  }
++  .drive-heading-refresh {
++    display: none;
++  }
++  .drive-heading-mkdir,
++  .drive-heading-upload {
++    width: 40px;
++    padding: 0;
++    background: var(--drive-hover);
++    border-color: transparent;
++    color: var(--drive-text);
++    border-radius: 10px;
++  }
++  .drive-heading-mkdir span,
++  .drive-heading-upload span {
++    display: none;
++  }
++  .drive-heading-mkdir svg,
++  .drive-heading-upload svg {
++    width: 21px;
++    height: 21px;
++  }
++  .drive-heading-mkdir {
++    order: 2;
++  }
++  .drive-heading-upload {
++    order: 1;
++  }
++  .drive-heading-layout {
++    display: block;
++    order: 3;
++  }
++  .drive-heading-layout button {
++    width: 32px;
++    background: transparent;
++    color: var(--drive-text);
++  }
++  .drive-actions {
++    gap: 4px;
++  }
++  .drive-shell .body {
++    padding-top: 16px;
++    gap: 12px;
++  }
++  .drive-file-tools {
++    margin-top: 0;
++    padding: 8px;
++    background: var(--drive-hover);
++    border-radius: 8px;
++    justify-content: space-between;
++  }
++  .drive-selection-actions {
++    width: auto;
++    gap: 4px;
++  }
++  .drive-selection-actions .drive-button {
++    padding-inline: 8px;
++    min-height: 36px;
++  }
++  .drive-selection-actions .drive-select-button {
++    min-height: 36px;
++    padding-inline: 4px;
++  }
++  .drive-shell .list-item {
++    padding: 14px 4px;
++  }
++  .drive-shell .list .title {
++    padding-inline: 4px;
++  }
++  .drive-row-actions {
++    flex-basis: 36px;
++  }
++  .drive-row-menu {
++    width: 36px;
++  }
++  .drive-row-menu-space {
++    flex-basis: 20px;
++  }
++  .drive-shell .name-box .hope-checkbox {
++    margin-right: 6px;
++  }
++}
++
++.drive-row-check {
++  flex: 0 0 36px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++}
++@media (max-width: 760px) {
++  .drive-row-check {
++    flex-basis: 30px;
++  }
++}
++.drive-header-tools > .drive-mobile-account {
++  border-radius: 50%;
++}
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
-index 6ee0dd9..0e4a3a2 100644
+index 6ee0dd9..ca8f62b 100644
 --- a/src/pages/home/folder/List.tsx
 +++ b/src/pages/home/folder/List.tsx
-@@ -9,7 +9,6 @@ import {
+@@ -1,15 +1,14 @@
++import { currentLang } from "~/app/i18n"
+ import { HStack, VStack, Text } from "@hope-ui/solid"
+ import { batch, createEffect, createSignal, For, Show, onMount } from "solid-js"
+ import { useT, useRouter } from "~/hooks"
+ import {
+   allChecked,
+-  checkboxOpen,
+   countMsg,
+   isIndeterminate,
    local,
    objStore,
    selectAll,
@@ -883,7 +1139,21 @@ index 6ee0dd9..0e4a3a2 100644
    sortObjs,
  } from "~/store"
  import { OrderBy } from "~/store"
-@@ -102,11 +101,7 @@ export const ListTitle = (props: {
+@@ -93,20 +92,19 @@ export const ListTitle = (props: {
+   return (
+     <HStack class="title" w="$full" p="$2">
+       <HStack w={cols[0].w} spacing="$1">
+-        <Show when={!props.disableCheckbox && checkboxOpen()}>
++        <Show when={!props.disableCheckbox}>
+           <ItemCheckbox
+-            checked={allChecked()}
++            aria-label={
++              String(currentLang()).startsWith("zh") ? "选择全部" : "Select all"
++            }
++            checked={objStore.objs.length > 0 && allChecked()}
+             indeterminate={isIndeterminate()}
+             onChange={(e: any) => {
+               selectAll(e.target.checked as boolean)
              }}
            />
          </Show>
@@ -896,32 +1166,233 @@ index 6ee0dd9..0e4a3a2 100644
        </HStack>
        <Text w={cols[1].w} {...itemProps(cols[1])}>
          {t(`home.obj.${cols[1].name}`)}
+@@ -118,6 +116,7 @@ export const ListTitle = (props: {
+       >
+         {t(`home.obj.${cols[2].name}`)}
+       </Text>
++      <span class="drive-row-menu-space" aria-hidden="true" />
+     </HStack>
+   )
+ }
+diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
+index 4893a59..94cde0d 100644
+--- a/src/pages/home/folder/ListItem.tsx
++++ b/src/pages/home/folder/ListItem.tsx
+@@ -6,13 +6,13 @@ import {
+   ProgressLabel,
+   Text,
+ } from "@hope-ui/solid"
++import { currentLang } from "~/app/i18n"
+ import { Motion } from "solid-motionone"
+ import { useContextMenu } from "solid-contextmenu"
+ import { batch, Show } from "solid-js"
+ import { LinkWithPush } from "~/components"
+ import { usePath, useRouter, useUtil } from "~/hooks"
+ import {
+-  checkboxOpen,
+   getMainColor,
+   getSettingBool,
+   local,
+@@ -31,6 +31,7 @@ import {
+   nearlyFull,
+ } from "~/utils"
+ import { getIconByObj } from "~/utils/icon"
++import { RowActions } from "./RowActions"
+ import { ItemCheckbox, useSelectWithMouse } from "./helper"
+
+ export interface Col {
+@@ -61,10 +62,25 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+       initial={{ opacity: 0, scale: 0.95 }}
+       animate={{ opacity: 1, scale: 1 }}
+       transition={{ duration: 0.2 }}
+-      style={{
+-        width: "100%",
+-      }}
++      class="drive-file-row"
++      classList={{ "drive-file-row-selected": !!props.obj.selected }}
++      style={{ width: "100%" }}
+     >
++      <div class="drive-row-check">
++        <ItemCheckbox
++          aria-label={`${String(currentLang()).startsWith("zh") ? "选择" : "Select"} ${props.obj.name}`}
++          on:mousedown={(e: MouseEvent) => {
++            e.stopPropagation()
++          }}
++          on:click={(e: MouseEvent) => {
++            e.stopPropagation()
++          }}
++          checked={props.obj.selected}
++          onChange={(e: any) => {
++            selectIndex(props.index, e.target.checked)
++          }}
++        />
++      </div>
+       <HStack
+         classList={{ selected: !!props.obj.selected }}
+         class="list-item viselect-item"
+@@ -111,21 +127,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+         }}
+       >
+         <HStack class="name-box" spacing="$1" w={cols[0].w}>
+-          <Show when={checkboxOpen()}>
+-            <ItemCheckbox
+-              // colorScheme="neutral"
+-              on:mousedown={(e: MouseEvent) => {
+-                e.stopPropagation()
+-              }}
+-              on:click={(e: MouseEvent) => {
+-                e.stopPropagation()
+-              }}
+-              checked={props.obj.selected}
+-              onChange={(e: any) => {
+-                selectIndex(props.index, e.target.checked)
+-              }}
+-            />
+-          </Show>
+           <Icon
+             class="icon"
+             boxSize="$6"
+@@ -215,6 +216,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+           {formatDate(props.obj.modified)}
+         </Text>
+       </HStack>
++      <RowActions obj={props.obj} index={props.index} />
+     </Motion.div>
+   )
+ }
+diff --git a/src/pages/home/folder/RowActions.tsx b/src/pages/home/folder/RowActions.tsx
+new file mode 100644
+index 0000000..3d9f239
+--- /dev/null
++++ b/src/pages/home/folder/RowActions.tsx
+@@ -0,0 +1,89 @@
++import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
++import { currentLang } from "~/app/i18n"
++import { For, Show } from "solid-js"
++import { BsThreeDots } from "solid-icons/bs"
++import { useCopyLink, useDownload, usePath, useRouter, useT } from "~/hooks"
++import { getSettingBool, me, objStore, selectIndex, userCan } from "~/store"
++import { StoreObj, UserMethods } from "~/types"
++import { bus, notify } from "~/utils"
++
++// Row actions target only this row. Opening the menu preserves bulk selection;
++// choosing an operation hands the existing dialogs a single selected object.
++export const RowActions = (props: { obj: StoreObj; index: number }) => {
++  const t = useT()
++  const { isShare, pushHref, to } = useRouter()
++  const { setPathAs } = usePath()
++  const { batchDownloadSelected } = useDownload()
++  const { copySelectedPreviewPage, copySelectedRawLink } = useCopyLink()
++  const choose = (action: () => void) => {
++    selectIndex(props.index, true, true)
++    setPathAs(props.obj.name, props.obj.is_dir, true)
++    action()
++  }
++  const canEdit = (name: "rename" | "move" | "copy" | "delete") =>
++    !isShare() && objStore.write && userCan(name)
++  return (
++    <div class="drive-row-actions" onMouseDown={(e) => e.stopPropagation()}>
++      <Menu placement="bottom-end">
++        <MenuTrigger
++          as="button"
++          class="drive-icon-button drive-row-menu"
++          aria-label={`${props.obj.name} · ${t("home.toolbar.more")}`}
++          title={t("home.toolbar.more")}
++        >
++          <Icon as={BsThreeDots} />
++        </MenuTrigger>
++        <MenuContent aria-label={props.obj.name}>
++          <MenuItem onSelect={() => to(pushHref(props.obj.name))}>
++            {String(currentLang()).startsWith("zh") ? "打开" : "Open"}
++          </MenuItem>
++          <MenuItem
++            onSelect={() =>
++              choose(() => {
++                if (props.obj.is_dir) {
++                  if (
++                    !UserMethods.is_admin(me()) &&
++                    !getSettingBool("package_download")
++                  ) {
++                    notify.warning(t("home.toolbar.package_download_disabled"))
++                    return
++                  }
++                  bus.emit("tool", "package_download")
++                } else batchDownloadSelected()
++              })
++            }
++          >
++            {t("home.toolbar.download")}
++          </MenuItem>
++          <MenuItem
++            onSelect={() =>
++              choose(() => {
++                if (props.obj.is_dir) copySelectedPreviewPage()
++                else copySelectedRawLink(true)
++              })
++            }
++          >
++            {t("home.toolbar.copy_link")}
++          </MenuItem>
++          <For each={["rename", "move", "copy", "delete"] as const}>
++            {(name) => (
++              <Show when={canEdit(name)}>
++                <MenuItem
++                  colorScheme={name === "delete" ? "danger" : "neutral"}
++                  onSelect={() => choose(() => bus.emit("tool", name))}
++                >
++                  {t(`home.toolbar.${name}`)}
++                </MenuItem>
++              </Show>
++            )}
++          </For>
++          <Show when={!isShare() && userCan("share")}>
++            <MenuItem onSelect={() => choose(() => bus.emit("tool", "share"))}>
++              {t("home.toolbar.share")}
++            </MenuItem>
++          </Show>
++        </MenuContent>
++      </Menu>
++    </div>
++  )
++}
 diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
-index 8f552da..ea15483 100644
+index 8f552da..b5c584d 100644
 --- a/src/pages/home/header/Header.tsx
 +++ b/src/pages/home/header/Header.tsx
-@@ -1,90 +1,65 @@
--import {
--  HStack,
+@@ -1,90 +1,141 @@
+ import {
+   HStack,
 -  useColorModeValue,
 -  Image,
 -  Center,
--  Icon,
--  Kbd,
+   Icon,
+   Kbd,
 -  CenterProps,
--} from "@hope-ui/solid"
++  Menu,
++  MenuContent,
++  MenuItem,
++  MenuTrigger,
+ } from "@hope-ui/solid"
 -import { changeColor } from "seemly"
 -import { Show, createMemo } from "solid-js"
 -import { getMainColor, getSetting, local, objStore, State } from "~/store"
 -import { BsSearch } from "solid-icons/bs"
 -import { CenterLoading } from "~/components"
-+import { HStack, Icon, Kbd } from "@hope-ui/solid"
++import { currentLang } from "~/app/i18n"
 +import { Show } from "solid-js"
-+import { getSetting, local, objStore, State } from "~/store"
-+import { BsSearch, BsGear } from "solid-icons/bs"
-+import { useT } from "~/hooks"
++import { getSetting, local, objStore, State, me, userCan } from "~/store"
++import {
++  BsSearch,
++  BsList,
++  BsPlusLg,
++  BsFolderPlus,
++  BsArrowUp,
++  BsArrowClockwise,
++} from "solid-icons/bs"
++import { useT, useRouter, usePath } from "~/hooks"
  import { Container } from "../Container"
-+import { DriveBrand } from "../DriveChrome"
++import { driveText } from "../DriveChrome"
++import { UserMethods } from "~/types"
  import { bus } from "~/utils"
  import { Layout } from "./layout"
  import { isMac } from "~/utils/compatibility"
@@ -940,6 +1411,13 @@ index 8f552da..ea15483 100644
 -  })
 -
 +  const t = useT()
++  const { to, isShare } = useRouter()
++  const { refresh } = usePath()
++  const canWrite = () =>
++    objStore.state === State.Folder &&
++    !isShare() &&
++    (userCan("write_content") || objStore.write_content_bypass) &&
++    objStore.write
    return (
 -    <Center
 -      {...stickyProps}
@@ -974,30 +1452,7 @@ index 8f552da..ea15483 100644
 -            />
 -          </HStack>
 -          <HStack class="header-right" spacing="$2">
-+        <div class="drive-header-inner">
-+          <div class="drive-mobile-brand">
-+            <DriveBrand />
-+          </div>
-+          <Show
-+            when={
-+              objStore.state === State.Folder &&
-+              getSetting("search_index") !== "none"
-+            }
-+          >
-+            <button
-+              class="drive-search"
-+              onClick={() => bus.emit("tool", "search")}
-+            >
-+              <Icon as={BsSearch} />
-+              <span>{t("home.search.search")}</span>
-+              <HStack class="drive-search-shortcut">
-+                <Kbd>{isMac ? "Cmd" : "Ctrl"}</Kbd>
-+                <Kbd>K</Kbd>
-+              </HStack>
-+            </button>
-+          </Show>
-+          <div class="drive-header-tools">
-             <Show when={objStore.state === State.Folder}>
+-            <Show when={objStore.state === State.Folder}>
 -              <Show when={getSetting("search_index") !== "none"}>
 -                <HStack
 -                  bg="$neutral4"
@@ -1015,24 +1470,100 @@ index 8f552da..ea15483 100644
 -                  onClick={() => {
 -                    bus.emit("tool", "search")
 -                  }}
--                >
++        <div class="drive-header-inner">
++          <div class="drive-mobile-nav">
++            <Menu placement="bottom-start">
++              <MenuTrigger
++                as="button"
++                class="drive-icon-button drive-menu-button"
++                aria-label={String(t("home.toolbar.more"))}
++              >
++                <Icon as={BsList} />
++              </MenuTrigger>
++              <MenuContent>
++                <Show when={!isShare()}>
++                  <MenuItem onSelect={() => to("/")}>
++                    {driveText("files")}
++                  </MenuItem>
++                </Show>
++                <MenuItem onSelect={() => refresh(undefined, true)}>
++                  <Icon as={BsArrowClockwise} />
++                  {t("home.toolbar.refresh")}
++                </MenuItem>
++                <MenuItem onSelect={() => bus.emit("tool", "local_settings")}>
++                  {t("home.toolbar.local_settings")}
++                </MenuItem>
++              </MenuContent>
++            </Menu>
++          </div>
++          <Show when={canWrite()}>
++            <div class="drive-mobile-create">
++              <Menu placement="bottom-start">
++                <MenuTrigger
++                  as="button"
++                  class="drive-button drive-create-button"
+                 >
 -                  <Icon as={BsSearch} />
 -                  <HStack>
 -                    {isMac ? <Kbd>Cmd</Kbd> : <Kbd>Ctrl</Kbd>}
 -                    <Kbd>K</Kbd>
 -                  </HStack>
 -                </HStack>
--              </Show>
-               <Layout />
-             </Show>
++                  <Icon as={BsPlusLg} />
++                  <span>
++                    {String(currentLang()).startsWith("zh") ? "新建" : "New"}
++                  </span>
++                </MenuTrigger>
++                <MenuContent>
++                  <MenuItem onSelect={() => bus.emit("tool", "mkdir")}>
++                    <Icon as={BsFolderPlus} />
++                    {t("home.toolbar.mkdir")}
++                  </MenuItem>
++                  <MenuItem onSelect={() => bus.emit("tool", "upload")}>
++                    <Icon as={BsArrowUp} />
++                    {t("home.toolbar.upload")}
++                  </MenuItem>
++                </MenuContent>
++              </Menu>
++            </div>
++          </Show>
++          <Show
++            when={
++              objStore.state === State.Folder &&
++              getSetting("search_index") !== "none"
++            }
++          >
++            <button
++              aria-label={t("home.search.search")}
++              class="drive-search"
++              onClick={() => bus.emit("tool", "search")}
++            >
++              <Icon as={BsSearch} />
++              <span>{t("home.search.search")}</span>
++              <HStack class="drive-search-shortcut">
++                <Kbd>{isMac ? "Cmd" : "Ctrl"}</Kbd>
++                <Kbd>K</Kbd>
++              </HStack>
++            </button>
++          </Show>
++          <div class="drive-header-tools">
++            <div class="drive-desktop-layout">
++              <Show when={objStore.state === State.Folder}>
++                <Layout />
+               </Show>
+-              <Layout />
+-            </Show>
 -          </HStack>
 -        </HStack>
++            </div>
 +            <button
-+              class="drive-icon-button drive-mobile-settings"
-+              aria-label={t("home.toolbar.local_settings")}
-+              onClick={() => bus.emit("tool", "local_settings")}
++              class="drive-mobile-account drive-avatar"
++              aria-label={`${me().username || "OpenList"} ${t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}`}
++              onClick={() =>
++                to(UserMethods.is_guest(me()) ? "/@login" : "/@manage")
++              }
 +            >
-+              <Icon as={BsGear} />
++              {(me().username || "O").slice(0, 1).toUpperCase()}
 +            </button>
 +          </div>
 +        </div>
