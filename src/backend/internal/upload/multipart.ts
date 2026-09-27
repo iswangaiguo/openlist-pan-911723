@@ -26,6 +26,8 @@ export interface MultipartSession {
   /** Owner, actual directory and storage configuration fingerprint. */
   scope: string
   file_md5: string
+  /** Client task identity; absent on legacy uploads. */
+  resume_token?: string
   state: MultipartState
   attempt: number
   path: string
@@ -218,6 +220,7 @@ export async function uploadScope(
   storage: any,
   actualDir: string,
   md5: string,
+  resumeToken = "",
 ): Promise<string> {
   const bytes = new TextEncoder().encode(
     JSON.stringify([
@@ -229,6 +232,7 @@ export async function uploadScope(
       storage.mount_path,
       storage.addition,
       md5,
+      ...(resumeToken ? [resumeToken] : []),
     ]),
   )
   const hash = await crypto.subtle.digest("SHA-256", bytes)
