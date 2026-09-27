@@ -969,10 +969,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..7868edb
+index 0000000..2e448f1
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,801 @@
+@@ -0,0 +1,810 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1774,6 +1774,15 @@ index 0000000..7868edb
 +  .drive-rename-overwrite { position: absolute; right: 0; bottom: -16px; font-size: 10px; }
 +}
 +.drive-list-toolbar:empty { display: none; }
++
++/* Compact rows retain a comfortable selection and action target. */
++.drive-shell .drive-file-row .list-item {
++  min-height: 48px;
++  padding-block: 10px;
++}
++.drive-shell .drive-file-row-renaming .list-item {
++  padding-block: 4px;
++}
 diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
 index 83f5780..17b1ac9 100644
 --- a/src/pages/home/file/File.tsx
