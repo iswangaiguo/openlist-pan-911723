@@ -382,6 +382,64 @@ index de14427..1cedec6 100644
    )
  }
 
+diff --git a/src/pages/home/Nav.tsx b/src/pages/home/Nav.tsx
+index 0d0ed69..e9e28d3 100644
+--- a/src/pages/home/Nav.tsx
++++ b/src/pages/home/Nav.tsx
+@@ -12,7 +12,7 @@ import { getSetting, local } from "~/store"
+ import { encodePath, hoverColor, joinBase } from "~/utils"
+
+ export const Nav = () => {
+-  const { pathname, isShare } = useRouter()
++  const { pathname, isShare, to } = useRouter()
+   const paths = createMemo(() => {
+     if (!isShare()) {
+       return ["", ...pathname().split("/").filter(Boolean)]
+@@ -59,10 +59,15 @@ export const Nav = () => {
+       <For each={paths()}>
+         {(name, i) => {
+           const isLast = createMemo(() => i() === paths().length - 1)
+-          const path = paths()
+-            .slice(0, i() + 1)
+-            .join("/")
+-          const href = encodePath(path)
++          const path = createMemo(
++            () =>
++              "/" +
++              paths()
++                .slice(0, i() + 1)
++                .filter(Boolean)
++                .join("/"),
++          )
++          const href = () => encodePath(path())
+           let text = () => name
+           if (!isShare() && text() === "") {
+             text = () => getSetting("home_icon") + t("manage.sidemenu.home")
+@@ -84,8 +89,22 @@ export const Nav = () => {
+                 rounded="$lg"
+                 currentPage={isLast()}
+                 as={isLast() ? undefined : Link}
+-                href={joinBase(href)}
+-                onMouseEnter={() => setPathAs(path)}
++                href={joinBase(href())}
++                onMouseEnter={() => setPathAs(path())}
++                onClick={(event: MouseEvent) => {
++                  if (
++                    isLast() ||
++                    event.button !== 0 ||
++                    event.ctrlKey ||
++                    event.metaKey ||
++                    event.shiftKey ||
++                    event.altKey
++                  )
++                    return
++                  event.preventDefault()
++                  setPathAs(path())
++                  to(href())
++                }}
+               >
+                 {text()}
+               </BreadcrumbLink>
 diff --git a/src/pages/home/Obj.tsx b/src/pages/home/Obj.tsx
 index fb0f297..a5532d6 100644
 --- a/src/pages/home/Obj.tsx
@@ -409,10 +467,10 @@ index fb0f297..a5532d6 100644
      ObjStore.setObjs([])
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..8292032
+index 0000000..558f01c
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,727 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1118,8 +1176,30 @@ index 0000000..8292032
 +.drive-header-tools > .drive-mobile-account {
 +  border-radius: 50%;
 +}
++
++/* The title and rows share the same selection, content and actions columns. */
++.drive-list-title {
++  display: flex;
++  align-items: center;
++  width: 100%;
++  border-bottom: 1px solid var(--drive-border);
++}
++.drive-shell .drive-list-title .title {
++  flex: 1;
++  min-width: 0;
++  width: auto;
++  border-bottom: 0;
++}
++.drive-title-actions-space {
++  flex: 0 0 44px;
++}
++@media (max-width: 760px) {
++  .drive-title-actions-space {
++    flex-basis: 36px;
++  }
++}
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
-index 6ee0dd9..ca8f62b 100644
+index 6ee0dd9..7f47cdc 100644
 --- a/src/pages/home/folder/List.tsx
 +++ b/src/pages/home/folder/List.tsx
 @@ -1,15 +1,14 @@
@@ -1139,12 +1219,19 @@ index 6ee0dd9..ca8f62b 100644
    sortObjs,
  } from "~/store"
  import { OrderBy } from "~/store"
-@@ -93,20 +92,19 @@ export const ListTitle = (props: {
+@@ -91,34 +90,41 @@ export const ListTitle = (props: {
+     }
+   }
    return (
-     <HStack class="title" w="$full" p="$2">
-       <HStack w={cols[0].w} spacing="$1">
+-    <HStack class="title" w="$full" p="$2">
+-      <HStack w={cols[0].w} spacing="$1">
 -        <Show when={!props.disableCheckbox && checkboxOpen()}>
-+        <Show when={!props.disableCheckbox}>
++    <div
++      class="drive-list-title"
++      classList={{ "drive-list-title-no-checkbox": !!props.disableCheckbox }}
++    >
++      <Show when={!props.disableCheckbox}>
++        <div class="drive-row-check">
            <ItemCheckbox
 -            checked={allChecked()}
 +            aria-label={
@@ -1152,28 +1239,52 @@ index 6ee0dd9..ca8f62b 100644
 +            }
 +            checked={objStore.objs.length > 0 && allChecked()}
              indeterminate={isIndeterminate()}
-             onChange={(e: any) => {
-               selectAll(e.target.checked as boolean)
-             }}
+-            onChange={(e: any) => {
+-              selectAll(e.target.checked as boolean)
+-            }}
++            onChange={(e: any) => selectAll(e.target.checked as boolean)}
            />
-         </Show>
+-        </Show>
 -        {selectedMsg() ? (
 -          <Text {...itemProps(cols[0])}>{selectedMsg()}</Text>
 -        ) : (
 -          <Text {...itemProps(cols[0])}>{t(`home.obj.${cols[0].name}`)}</Text>
 -        )}
-+        <Text {...itemProps(cols[0])}>{t(`home.obj.${cols[0].name}`)}</Text>
++        </div>
++      </Show>
++      <HStack class="title" w="$full" p="$2">
++        <Text w={cols[0].w} {...itemProps(cols[0])}>
++          {t(`home.obj.${cols[0].name}`)}
++        </Text>
++        <Text w={cols[1].w} {...itemProps(cols[1])}>
++          {t(`home.obj.${cols[1].name}`)}
++        </Text>
++        <Text
++          w={cols[2].w}
++          {...itemProps(cols[2])}
++          display={{ "@initial": "none", "@md": "inline" }}
++        >
++          {t(`home.obj.${cols[2].name}`)}
++        </Text>
        </HStack>
-       <Text w={cols[1].w} {...itemProps(cols[1])}>
-         {t(`home.obj.${cols[1].name}`)}
-@@ -118,6 +116,7 @@ export const ListTitle = (props: {
-       >
-         {t(`home.obj.${cols[2].name}`)}
-       </Text>
-+      <span class="drive-row-menu-space" aria-hidden="true" />
-     </HStack>
+-      <Text w={cols[1].w} {...itemProps(cols[1])}>
+-        {t(`home.obj.${cols[1].name}`)}
+-      </Text>
+-      <Text
+-        w={cols[2].w}
+-        {...itemProps(cols[2])}
+-        display={{ "@initial": "none", "@md": "inline" }}
+-      >
+-        {t(`home.obj.${cols[2].name}`)}
+-      </Text>
+-    </HStack>
++      <Show when={!props.disableCheckbox}>
++        <span class="drive-title-actions-space" aria-hidden="true" />
++      </Show>
++    </div>
    )
  }
+
 diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
 index 4893a59..94cde0d 100644
 --- a/src/pages/home/folder/ListItem.tsx
