@@ -1967,10 +1967,10 @@ index c19a217..a97bd09 100644
        </Show>
 diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
 new file mode 100644
-index 0000000..5f01088
+index 0000000..c5f7013
 --- /dev/null
 +++ b/src/pages/home/folder/InlineRename.tsx
-@@ -0,0 +1,108 @@
+@@ -0,0 +1,121 @@
 +import { createSignal, onMount, Show } from "solid-js"
 +import { usePath, useRouter, useT } from "~/hooks"
 +import { me, objStore, userCan } from "~/store"
@@ -2001,9 +2001,8 @@ index 0000000..5f01088
 +  const close = () => {
 +    if (inlineRename() === session) setInlineRename(undefined)
 +  }
-+  const submit = async (event: Event) => {
-+    event.preventDefault()
-+    if (busy()) return
++  const submit = async () => {
++    if (busy() || inlineRename() !== session) return
 +    if (
 +      pathname() !== session.directory ||
 +      me().id !== session.owner ||
@@ -2049,12 +2048,21 @@ index 0000000..5f01088
 +  return (
 +    <form
 +      class="drive-inline-rename"
-+      onSubmit={submit}
++      onSubmit={(event) => {
++        event.preventDefault()
++        void submit()
++      }}
 +      onMouseDown={(e) => e.stopPropagation()}
 +      onClick={(e) => e.stopPropagation()}
 +      onKeyDown={(e) => {
 +        e.stopPropagation()
-+        if (e.key === "Escape" && !busy()) {
++        // Enter used to depend on implicit form submission, which differs
++        // across browsers. IME confirmation must not submit a partial name.
++        if (e.isComposing || e.keyCode === 229) return
++        if (e.key === "Enter") {
++          e.preventDefault()
++          void submit()
++        } else if (e.key === "Escape" && !busy()) {
 +          e.preventDefault()
 +          close()
 +        }
@@ -2064,7 +2072,12 @@ index 0000000..5f01088
 +        ref={input}
 +        aria-label={t("home.toolbar.input_new_name")}
 +        value={name()}
-+        disabled={busy()}
++        readOnly={busy()}
++        aria-busy={busy()}
++        enterkeyhint="done"
++        onBlur={() => {
++          if (!error()) void submit()
++        }}
 +        aria-invalid={!!error()}
 +        onInput={(e) => {
 +          setName(e.currentTarget.value)
