@@ -371,3 +371,47 @@ test("existing disabled setting is respected and an oversized frontend threshold
   assert.equal(settings.multipart_enabled, "false")
   assert.equal(settings.multipart_chunk_size, "8")
 })
+
+test("client recovery tokens isolate same-path same-size uploads and retain cold-start ownership checks", async (t) => {
+  const x = await setup(t)
+  const headers = {
+    "File-Path": encodeURIComponent("/B2/recovery.mp4"),
+    "X-File-Size": String(5 * MiB + 7),
+    "X-Chunk-Size": String(5 * MiB),
+    "X-Upload-Token": "recovery-token-11111111",
+  }
+  const first = await (await x.request("init", "POST", headers)).json()
+  assert.equal(first.code, 200)
+  assert.equal(first.data.resume_token, headers["X-Upload-Token"])
+  const chunk = await x.request("chunk", "PUT", {
+    "X-Upload-Id": first.data.upload_id, "X-Chunk-Index": "1",
+  }, new Uint8Array(7), token, uploadDatabase(x.db.sqlite))
+  assert.equal(chunk.status, 200, await chunk.clone().text())
+  const resumed = await (await x.request("init", "POST", headers, undefined, token, uploadDatabase(x.db.sqlite))).json()
+  assert.equal(resumed.data.upload_id, first.data.upload_id)
+  assert.equal(resumed.data.resumed, true)
+  assert.deepEqual(resumed.data.received, [[1, 1]])
+  const second = await (await x.request("init", "POST", { ...headers, "X-Upload-Token": "recovery-token-22222222" })).json()
+  assert.notEqual(second.data.upload_id, first.data.upload_id)
+  assert.deepEqual(second.data.received, [])
+  const legacy = await (await x.request("init", "POST", { ...headers, "X-Upload-Token": "" })).json()
+  assert.notEqual(legacy.data.upload_id, first.data.upload_id)
+  assert.deepEqual(legacy.data.received, [])
+  const writer = await sign({ id: 2, exp: Math.floor(Date.now() / 1000) + 60 }, x.env.JWT_SECRET, "HS256")
+  const other = await x.request(`status?upload_id=${first.data.upload_id}`, "GET", {}, undefined, writer, uploadDatabase(x.db.sqlite))
+  assert.equal(other.status, 404)
+  const owned = await (await x.request(`status?upload_id=${first.data.upload_id}`, "GET", {}, undefined, token, uploadDatabase(x.db.sqlite))).json()
+  assert.equal(owned.data.received_bytes, 7)
+})
+
+test("invalid client recovery tokens are rejected before creating a provider upload", async (t) => {
+  const x = await setup(t)
+  for (const recoveryToken of ["short", "invalid-token-with-/slashes", "a".repeat(129)]) {
+    const response = await x.request("init", "POST", {
+      "File-Path": "/B2/recovery.mp4", "X-File-Size": String(5 * MiB + 7),
+      "X-Upload-Token": recoveryToken,
+    })
+    assert.equal(response.status, 400)
+  }
+  assert.equal(x.providerCalls.length, 0)
+})

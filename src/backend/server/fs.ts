@@ -1417,6 +1417,7 @@ async function ownedMultipartSession(c: any, user: any, uploadId: string) {
     resolved.storage,
     actualDir,
     session.file_md5,
+    session.resume_token,
   )
   return scope === session.scope ? session : undefined
 }
@@ -1429,6 +1430,10 @@ fsRouter.post("/multipart/init", async (c) => {
   const size = Number(c.req.header("X-File-Size") || "0")
   const rawChunk = Number(c.req.header("X-Chunk-Size") || "0")
   const md5 = c.req.header("X-File-Md5") || ""
+  const resumeToken = c.req.header("X-Upload-Token") || ""
+  if (resumeToken && !/^[a-zA-Z0-9_-]{16,128}$/.test(resumeToken)) {
+    return c.json({ code: 400, message: "Invalid X-Upload-Token", data: null }, 400)
+  }
 
   if (!rawPath.trim() || !Number.isSafeInteger(size) || size <= 0) {
     return c.json(
@@ -1480,9 +1485,10 @@ fsRouter.post("/multipart/init", async (c) => {
         400,
       )
     }
-    const scope = await uploadScope(user, resolved.storage, actualDir, md5)
+    const scope = await uploadScope(user, resolved.storage, actualDir, md5, resumeToken)
 
-    // 断点续传：同 path+size 的未完成会话直接复用
+    // Resume only within the same owner/storage/file/task scope. Legacy clients
+    // without a task token retain the existing path+size behavior.
     let session: MultipartSession
     let resumed = false
     await pruneSessions(c.env)
@@ -1502,6 +1508,7 @@ fsRouter.post("/multipart/init", async (c) => {
         upload_id: newUploadId(),
         scope,
         file_md5: md5,
+        resume_token: resumeToken || undefined,
         state: "receiving",
         attempt: 0,
         path: rawPath,
@@ -1546,7 +1553,7 @@ fsRouter.post("/multipart/init", async (c) => {
     return c.json({
       code: 200,
       message: "success",
-      data: { ...mpSnapshot(session), resumed },
+      data: { ...mpSnapshot(session), resumed, resume_token: session.resume_token },
     })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null }, 500)
