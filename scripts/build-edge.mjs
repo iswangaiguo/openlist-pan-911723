@@ -112,7 +112,9 @@ const normalizeHtmlEolPlugin = {
   setup(build) {
     build.onLoad({ filter: /\.html$/ }, async (args) => {
       const contents = await fs.promises.readFile(args.path, "utf8")
-      return { contents: contents.replace(/\r\n?/g, "\n"), loader: "text" }
+      // Removed preload tags can leave blank lines containing indentation.
+      const normalized = contents.replace(/\r\n?/g, "\n").replace(/^[\t ]+$/gm, "")
+      return { contents: normalized, loader: "text" }
     })
   },
 }

@@ -1,8 +1,15 @@
 diff --git a/src/app/App.tsx b/src/app/App.tsx
-index d2442c3..0153815 100644
+index d2442c3..e9b147b 100644
 --- a/src/app/App.tsx
 +++ b/src/app/App.tsx
-@@ -8,6 +8,8 @@ import {
+@@ -2,12 +2,15 @@ import { Progress, ProgressIndicator } from "@hope-ui/solid"
+ import { Route, Routes, useIsRouting } from "@solidjs/router"
+ import {
+   Component,
++  ErrorBoundary,
+   createEffect,
+   createSignal,
+   lazy,
    Match,
    onCleanup,
    Switch,
@@ -11,7 +18,12 @@ index d2442c3..0153815 100644
  } from "solid-js"
  import { Portal } from "solid-js/web"
  import { Error, FullScreenLoading } from "~/components"
-@@ -27,6 +29,7 @@ import { MustUser, UserOrGuest } from "./MustUser"
+@@ -23,10 +26,12 @@ import {
+   r,
+ } from "~/utils"
+ import { applyCustomize } from "~/utils/customize"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { MustUser, UserOrGuest } from "./MustUser"
  import "./index.css"
  import { globalStyles } from "./theme"
 
@@ -19,16 +31,214 @@ index d2442c3..0153815 100644
  const Home = lazy(() => import("~/pages/home/Layout"))
  const Manage = lazy(() => import("~/pages/manage"))
  const Login = lazy(() => import("~/pages/login"))
-@@ -121,6 +124,9 @@ const App: Component = () => {
+@@ -121,54 +126,61 @@ const App: Component = () => {
            <ProgressIndicator />
          </Progress>
        </Portal>
+-      <Switch
+-        fallback={
+-          <Routes base={base_path}>
+-            <Route path="/@test" component={Test} />
+-            <Route path="/@login" component={Login} />
+-            <Route path="/@init" component={Init} />
+-            <Route
+-              path="/@manage/*"
+-              element={
+-                <MustUser>
+-                  <Manage />
+-                </MustUser>
+-              }
+-            />
+-            <Route
+-              path={["/@s/*", "/%40s/*"]}
+-              element={
+-                <UserOrGuest>
+-                  <Home />
+-                </UserOrGuest>
+-              }
+-            />
+-            <Route
+-              path="*"
+-              element={
+-                <MustUser>
+-                  <Home />
+-                </MustUser>
 +      <Show when={!loading() && err().length === 0 && initialized()}>
-+        <Suspense><Upload /></Suspense>
++        <Suspense>
++          <Upload />
++        </Suspense>
 +      </Show>
-       <Switch
-         fallback={
-           <Routes base={base_path}>
++      <ErrorBoundary fallback={(error) => <ModuleLoadError error={error} />}>
++        <Switch
++          fallback={
++            <Routes base={base_path}>
++              <Route path="/@test" component={Test} />
++              <Route path="/@login" component={Login} />
++              <Route path="/@init" component={Init} />
++              <Route
++                path="/@manage/*"
++                element={
++                  <MustUser>
++                    <Manage />
++                  </MustUser>
++                }
++              />
++              <Route
++                path={["/@s/*", "/%40s/*"]}
++                element={
++                  <UserOrGuest>
++                    <Home />
++                  </UserOrGuest>
++                }
++              />
++              <Route
++                path="*"
++                element={
++                  <MustUser>
++                    <Home />
++                  </MustUser>
++                }
++              />
++            </Routes>
++          }
++        >
++          <Match when={err().length > 0}>
++            <Error
++              h="100vh"
++              msg={
++                t("home.fetching_settings_failed") +
++                err()
++                  .map((e) => t("home." + e))
++                  .join(", ")
+               }
+             />
+-          </Routes>
+-        }
+-      >
+-        <Match when={err().length > 0}>
+-          <Error
+-            h="100vh"
+-            msg={
+-              t("home.fetching_settings_failed") +
+-              err()
+-                .map((e) => t("home." + e))
+-                .join(", ")
+-            }
+-          />
+-        </Match>
+-        <Match when={loading()}>
+-          <FullScreenLoading />
+-        </Match>
+-      </Switch>
++          </Match>
++          <Match when={loading()}>
++            <FullScreenLoading />
++          </Match>
++        </Switch>
++      </ErrorBoundary>
+     </>
+   )
+ }
+diff --git a/src/app/index.tsx b/src/app/index.tsx
+index fa3b363..bd837ee 100644
+--- a/src/app/index.tsx
++++ b/src/app/index.tsx
+@@ -2,6 +2,7 @@ import { HopeProvider, NotificationsProvider } from "@hope-ui/solid"
+ import { ErrorBoundary, Suspense } from "solid-js"
+ import { Error, FullScreenLoading } from "~/components"
+ import App from "./App"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { globalStyles, theme } from "./theme"
+
+ const Index = () => {
+@@ -11,7 +12,7 @@ const Index = () => {
+       <ErrorBoundary
+         fallback={(err) => {
+           console.error("error", err)
+-          return <Error msg={`System error: ${err}`} h="100vh" />
++          return <ModuleLoadError error={err} />
+         }}
+       >
+         <NotificationsProvider duration={3000}>
+diff --git a/src/components/ModuleLoadError.tsx b/src/components/ModuleLoadError.tsx
+new file mode 100644
+index 0000000..aae3eeb
+--- /dev/null
++++ b/src/components/ModuleLoadError.tsx
+@@ -0,0 +1,73 @@
++import { Button, Text } from "@hope-ui/solid"
++import { onMount, Show } from "solid-js"
++import { currentLang } from "~/app/i18n"
++import {
++  claimModuleReload,
++  isModuleLoadError,
++  unfinishedUploads,
++} from "~/utils/module_recovery"
++import { Error } from "./Base"
++
++export const ModuleLoadError = (props: { error: unknown }) => {
++  const moduleError = () => isModuleLoadError(props.error)
++  const text = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
++  // Only the initial failure may reload automatically. Finishing an upload later
++  // does not unexpectedly refresh a page the user has continued working in.
++  const blockedInitially = unfinishedUploads() > 0
++  onMount(() => {
++    if (!moduleError() || blockedInitially) return
++    try {
++      if (
++        claimModuleReload(sessionStorage, Date.now(), unfinishedUploads() > 0)
++      )
++        location.reload()
++    } catch {
++      /* Show the explicit recovery button if storage is unavailable. */
++    }
++  })
++  const reload = () => {
++    if (unfinishedUploads() > 0) return
++    try {
++      sessionStorage.setItem("openlist:module-reload", String(Date.now()))
++    } catch {}
++    location.reload()
++  }
++  return (
++    <Error
++      msg={
++        moduleError()
++          ? text(
++              "页面资源未能加载，可能是版本更新或网络问题。",
++              "Page resources could not load. The site may have updated or the network may be unavailable.",
++            )
++          : String(props.error)
++      }
++      disableColor
++      actions={
++        <Show when={moduleError()}>
++          <div
++            style={{
++              display: "flex",
++              "flex-direction": "column",
++              gap: "16px",
++              "align-items": "center",
++            }}
++          >
++            <Show when={unfinishedUploads() > 0}>
++              <Text>
++                {text(
++                  "上传任务仍保留，请先完成或取消任务，再重新加载页面。",
++                  "Uploads are preserved. Finish or cancel them before reloading.",
++                )}
++              </Text>
++            </Show>
++            <Button disabled={unfinishedUploads() > 0} onClick={reload}>
++              {text("重新加载页面", "Reload page")}
++            </Button>
++          </div>
++        </Show>
++      }
++    />
++  )
++}
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
 index a8d032d..70d7bb1 100644
 --- a/src/pages/home/Body.tsx
@@ -582,10 +792,26 @@ index 0d0ed69..e9e28d3 100644
                  {text()}
                </BreadcrumbLink>
 diff --git a/src/pages/home/Obj.tsx b/src/pages/home/Obj.tsx
-index fb0f297..a5532d6 100644
+index fb0f297..aa28b74 100644
 --- a/src/pages/home/Obj.tsx
 +++ b/src/pages/home/Obj.tsx
-@@ -40,6 +40,20 @@ export const Obj = () => {
+@@ -1,6 +1,7 @@
+ import { Text, useColorModeValue, VStack, Button } from "@hope-ui/solid"
+ import {
+   createEffect,
++  ErrorBoundary,
+   createMemo,
+   createSignal,
+   lazy,
+@@ -12,6 +13,7 @@ import {
+   Suspense,
+   Switch,
+ } from "solid-js"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { Error, FullLoading, LinkWithBase } from "~/components"
+ import { useObjTitle, usePath, useRouter, useT } from "~/hooks"
+ import {
+@@ -40,6 +42,22 @@ export const Obj = () => {
    const cardBg = useColorModeValue("white", "$neutral3")
    const { pathname, searchParams, isShare, to } = useRouter()
    const { handlePathChange, refresh, cancel } = usePath()
@@ -598,7 +824,9 @@ index fb0f297..a5532d6 100644
 +      if (pathname() === directory) refresh(undefined, true)
 +    }, 300)
 +  }
-+  onMount(() => window.addEventListener("openlist:upload-complete", uploadCompleted))
++  onMount(() =>
++    window.addEventListener("openlist:upload-complete", uploadCompleted),
++  )
 +  onCleanup(() => {
 +    clearTimeout(uploadRefreshTimer)
 +    window.removeEventListener("openlist:upload-complete", uploadCompleted)
@@ -606,6 +834,133 @@ index fb0f297..a5532d6 100644
    const identityChanged = () => {
      cancel()
      ObjStore.setObjs([])
+@@ -107,63 +125,72 @@ export const Obj = () => {
+       shadow="$lg"
+       spacing="$2"
+     >
+-      <Suspense fallback={<FullLoading />}>
+-        <Switch>
+-          <Match when={objStore.err}>
+-            <Error
+-              msg={objStore.err}
+-              disableColor
+-              show404Face={isShare() && objStore.err === t("shares.share_gone")}
+-              actions={
+-                shouldShowStorageButton() ? storageErrorActions() : undefined
+-              }
+-            />
+-          </Match>
+-          <Match
+-            when={[State.FetchingObj, State.FetchingObjs].includes(
+-              objStore.state,
+-            )}
+-          >
+-            <FullLoading />
+-            {/* <Show when={layout() === "list"} fallback={<GridSkeleton />}>
++      <ErrorBoundary
++        fallback={(error, reset) => {
++          createEffect(on(pathname, reset, { defer: true }))
++          return <ModuleLoadError error={error} />
++        }}
++      >
++        <Suspense fallback={<FullLoading />}>
++          <Switch>
++            <Match when={objStore.err}>
++              <Error
++                msg={objStore.err}
++                disableColor
++                show404Face={
++                  isShare() && objStore.err === t("shares.share_gone")
++                }
++                actions={
++                  shouldShowStorageButton() ? storageErrorActions() : undefined
++                }
++              />
++            </Match>
++            <Match
++              when={[State.FetchingObj, State.FetchingObjs].includes(
++                objStore.state,
++              )}
++            >
++              <FullLoading />
++              {/* <Show when={layout() === "list"} fallback={<GridSkeleton />}>
+               <ListSkeleton />
+             </Show> */}
+-          </Match>
+-          <Match when={objStore.state === State.NeedPassword}>
+-            <Password
+-              title={
+-                isShare()
+-                  ? t("shares.input_password")
+-                  : t("home.input_password")
+-              }
+-              password={password}
+-              setPassword={setPassword}
+-              enterCallback={() => refresh(true)}
++            </Match>
++            <Match when={objStore.state === State.NeedPassword}>
++              <Password
++                title={
++                  isShare()
++                    ? t("shares.input_password")
++                    : t("home.input_password")
++                }
++                password={password}
++                setPassword={setPassword}
++                enterCallback={() => refresh(true)}
++              >
++                <Show when={!isShare()}>
++                  <Text>{t("global.have_account")}</Text>
++                  <Text
++                    color="$info9"
++                    as={LinkWithBase}
++                    href={`/@login?redirect=${encodeURIComponent(
++                      location.pathname,
++                    )}`}
++                  >
++                    {t("global.go_login")}
++                  </Text>
++                </Show>
++              </Password>
++            </Match>
++            <Match
++              when={[State.Folder, State.FetchingMore].includes(objStore.state)}
+             >
+-              <Show when={!isShare()}>
+-                <Text>{t("global.have_account")}</Text>
+-                <Text
+-                  color="$info9"
+-                  as={LinkWithBase}
+-                  href={`/@login?redirect=${encodeURIComponent(
+-                    location.pathname,
+-                  )}`}
+-                >
+-                  {t("global.go_login")}
+-                </Text>
+-              </Show>
+-            </Password>
+-          </Match>
+-          <Match
+-            when={[State.Folder, State.FetchingMore].includes(objStore.state)}
+-          >
+-            <Folder />
+-          </Match>
+-          <Match when={objStore.state === State.File}>
+-            <File />
+-          </Match>
+-        </Switch>
+-      </Suspense>
++              <Folder />
++            </Match>
++            <Match when={objStore.state === State.File}>
++              <File />
++            </Match>
++          </Switch>
++        </Suspense>
++      </ErrorBoundary>
+     </VStack>
+   )
+ }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
 index 0000000..b02d396
@@ -1389,6 +1744,27 @@ index 0000000..b02d396
 +  color: var(--drive-blue);
 +  padding: 8px 0;
 +}
+diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
+index 83f5780..17b1ac9 100644
+--- a/src/pages/home/file/File.tsx
++++ b/src/pages/home/file/File.tsx
+@@ -2,6 +2,7 @@ import { HStack, VStack } from "@hope-ui/solid"
+ import { createMemo, ErrorBoundary, Show, Suspense } from "solid-js"
+ import { Dynamic } from "solid-js/web"
+ import { Error, FullLoading, SelectWrapper } from "~/components"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { objStore } from "~/store"
+ import { useRouter } from "~/hooks"
+ import { Download } from "../previews/download"
+@@ -38,7 +39,7 @@ const File = () => {
+           />
+           <OpenWith />
+         </HStack>
+-        <ErrorBoundary fallback={(err) => <Error msg={String(err)} />}>
++        <ErrorBoundary fallback={(err) => <ModuleLoadError error={err} />}>
+           <Suspense fallback={<FullLoading />}>
+             <Dynamic component={cur()?.component} />
+           </Suspense>
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
 index 6ee0dd9..7f47cdc 100644
 --- a/src/pages/home/folder/List.tsx
@@ -1917,10 +2293,10 @@ index e55e19b..d38471c 100644
        <BackTop />
      </Portal>
 diff --git a/src/pages/home/uploads/Upload.tsx b/src/pages/home/uploads/Upload.tsx
-index 8d4feca..88617eb 100644
+index 8d4feca..9eadd3d 100644
 --- a/src/pages/home/uploads/Upload.tsx
 +++ b/src/pages/home/uploads/Upload.tsx
-@@ -1,369 +1,630 @@
+@@ -1,369 +1,638 @@
 +import { useColorModeValue } from "@hope-ui/solid"
  import {
 -  VStack,
@@ -2028,6 +2404,7 @@ index 8d4feca..88617eb 100644
 +  State,
 +} from "~/store"
 +import { api, bus, getFileSize, notify, r } from "~/utils"
++import { setUnfinishedUploads } from "~/utils/module_recovery"
 +import { invalidateDirectories } from "~/utils/directory_snapshot"
 +import { traverseFileTree } from "./util"
 +import { getUploads, getUploader } from "./uploads"
@@ -2065,7 +2442,13 @@ index 8d4feca..88617eb 100644
 +  })
 +  const tasks = () => taskStore.items
 +  const queue = new UploadQueue(
-+    (tasks) => setTaskStore("items", reconcile(tasks, { key: "id" })),
++    (tasks) => {
++      setTaskStore("items", reconcile(tasks, { key: "id" }))
++      setUnfinishedUploads(
++        tasks.filter((task) => !["success", "cancelled"].includes(task.status))
++          .length,
++      )
++    },
 +    (directory) => {
 +      invalidateDirectories()
 +      window.dispatchEvent(
@@ -2225,6 +2608,7 @@ index 8d4feca..88617eb 100644
 +  window.addEventListener("beforeunload", beforeUnload)
 +  window.addEventListener("openlist:identity-change", identityChanged)
 +  onCleanup(() => {
++    setUnfinishedUploads(0)
 +    bus.off("tool", open)
 +    window.removeEventListener("online", networkChanged)
 +    window.removeEventListener("offline", networkChanged)
@@ -3892,3 +4276,36 @@ index f348fa0..c83cd37 100644
 +// Recovery resolves the recorded method, not the currently browsed storage.
 +export const getUploader = (name: string) =>
 +  AllUploads.find((u) => u.name === name)?.upload
+diff --git a/src/utils/module_recovery.ts b/src/utils/module_recovery.ts
+new file mode 100644
+index 0000000..ab2558f
+--- /dev/null
++++ b/src/utils/module_recovery.ts
+@@ -0,0 +1,27 @@
++import { createSignal } from "solid-js"
++
++const [unfinishedUploads, setUnfinishedUploads] = createSignal(0)
++export { unfinishedUploads, setUnfinishedUploads }
++export const isModuleLoadError = (error: unknown) =>
++  /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS|Loading (?:CSS )?chunk [\w-]+ failed/i.test(
++    String(error),
++  )
++
++// Reload at most once per tab within 15 minutes; persistent network/CDN failures
++// need an explicit retry rather than an infinite reload loop. Storage failures
++// also require an explicit retry because we cannot persist the loop guard.
++export function claimModuleReload(
++  storage: Pick<Storage, "getItem" | "setItem">,
++  now: number,
++  blocked = false,
++) {
++  if (blocked) return false
++  try {
++    const previous = Number(storage.getItem("openlist:module-reload"))
++    if (previous > 0 && now - previous < 15 * 60 * 1000) return false
++    storage.setItem("openlist:module-reload", String(now))
++    return true
++  } catch {
++    return false
++  }
++}
