@@ -737,6 +737,52 @@ index 0000000..6387c6b
 +    </Show>
 +  )
 +}
+diff --git a/src/pages/home/Footer.tsx b/src/pages/home/Footer.tsx
+index 28775ab..0492daf 100644
+--- a/src/pages/home/Footer.tsx
++++ b/src/pages/home/Footer.tsx
+@@ -1,26 +1,16 @@
+-import { Anchor, HStack, VStack } from "@hope-ui/solid"
+-import { Link } from "@solidjs/router"
+-import { AnchorWithBase } from "~/components"
+-import { useT } from "~/hooks"
+-import { me } from "~/store"
+-import { UserMethods } from "~/types"
++import { Show } from "solid-js"
++import { countMsg, layout, local, objStore, State } from "~/store"
++import { ObjType } from "~/types"
+
+-export const Footer = () => {
+-  const t = useT()
+-  return (
+-    <VStack class="footer" w="$full" py="$4">
+-      <HStack spacing="$1">
+-        <Anchor href="https://github.com/OpenListTeam/OpenList" external>
+-          {t("home.footer.powered_by")}
+-        </Anchor>
+-        <span>|</span>
+-        <AnchorWithBase
+-          as={Link}
+-          href={UserMethods.is_guest(me()) ? "/@login" : "/@manage"}
+-        >
+-          {t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}
+-        </AnchorWithBase>
+-      </HStack>
+-    </VStack>
+-  )
+-}
++export const Footer = () => (
++  <Show
++    when={
++      local["show_count_msg"] === "visible" &&
++      [State.Folder, State.FetchingMore].includes(objStore.state)
++    }
++  >
++    <footer class="footer drive-directory-count" aria-live="polite">
++      {countMsg(layout() === "image" ? ObjType.IMAGE : undefined)}
++    </footer>
++  </Show>
++)
 diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
 index de14427..1cedec6 100644
 --- a/src/pages/home/Layout.tsx
@@ -1010,10 +1056,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..2e448f1
+index 0000000..1a6082e
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,810 @@
+@@ -0,0 +1,826 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1824,6 +1870,22 @@ index 0000000..2e448f1
 +.drive-shell .drive-file-row-renaming .list-item {
 +  padding-block: 4px;
 +}
++
++/* Directory counts occupy the page footer, below browsing content. */
++.drive-main {
++  display: flex;
++  flex-direction: column;
++  min-height: 100vh;
++}
++.drive-shell .drive-container {
++  flex: 1;
++}
++.drive-shell .drive-directory-count {
++  min-height: 48px;
++  padding: 14px 24px;
++  text-align: center;
++  font-size: 13px;
++}
 diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
 index 83f5780..17b1ac9 100644
 --- a/src/pages/home/file/File.tsx
@@ -1845,6 +1907,64 @@ index 83f5780..17b1ac9 100644
            <Suspense fallback={<FullLoading />}>
              <Dynamic component={cur()?.component} />
            </Suspense>
+diff --git a/src/pages/home/folder/Grid.tsx b/src/pages/home/folder/Grid.tsx
+index 32045d4..58851ad 100644
+--- a/src/pages/home/folder/Grid.tsx
++++ b/src/pages/home/folder/Grid.tsx
+@@ -1,8 +1,8 @@
+-import { Box, Grid, Text } from "@hope-ui/solid"
+-import { For, Show } from "solid-js"
++import { Grid } from "@hope-ui/solid"
++import { For } from "solid-js"
+ import { GridItem } from "./GridItem"
+ import "lightgallery/css/lightgallery-bundle.css"
+-import { smartCountMsg, local, objStore } from "~/store"
++import { local, objStore } from "~/store"
+ import { useSelectWithMouse } from "./helper"
+
+ const GridLayout = () => {
+@@ -11,13 +11,6 @@ const GridLayout = () => {
+   registerSelectContainer()
+   return (
+     <>
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Box w="100%" textAlign="left" pl="$2">
+-          <Text size="sm" color="$neutral11">
+-            {smartCountMsg()}
+-          </Text>
+-        </Box>
+-      </Show>
+       <Grid
+         oncapture:contextmenu={captureContentMenu}
+         class="viselect-container"
+diff --git a/src/pages/home/folder/Images.tsx b/src/pages/home/folder/Images.tsx
+index c19a217..a97bd09 100644
+--- a/src/pages/home/folder/Images.tsx
++++ b/src/pages/home/folder/Images.tsx
+@@ -1,7 +1,7 @@
+-import { Box, Flex, Grid, Heading, Text, VStack } from "@hope-ui/solid"
++import { Flex, Grid, Heading, VStack } from "@hope-ui/solid"
+ import { For, Show, createMemo } from "solid-js"
+ import { ImageItem } from "./ImageItem"
+-import { smartCountMsg, local, objStore } from "~/store"
++import { local, objStore } from "~/store"
+ import { GridItem } from "./GridItem"
+ import { ObjType, StoreObj } from "~/types"
+ import { useT } from "~/hooks"
+@@ -33,13 +33,6 @@ const ImageLayout = (props: { images: StoreObj[] }) => {
+       spacing="$2"
+       w="$full"
+     >
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Box w="100%" textAlign="left" pl="$2">
+-          <Text size="sm" color="$neutral11">
+-            {smartCountMsg(ObjType.IMAGE)}
+-          </Text>
+-        </Box>
+-      </Show>
+       <Show when={local["show_folder_in_image_view"] === "top"}>
+         {folders()}
+       </Show>
 diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
 new file mode 100644
 index 0000000..5f01088
@@ -1960,10 +2080,10 @@ index 0000000..5f01088
 +  )
 +}
 diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
-index 6ee0dd9..7f47cdc 100644
+index 6ee0dd9..0d26504 100644
 --- a/src/pages/home/folder/List.tsx
 +++ b/src/pages/home/folder/List.tsx
-@@ -1,15 +1,14 @@
+@@ -1,15 +1,13 @@
 +import { currentLang } from "~/app/i18n"
  import { HStack, VStack, Text } from "@hope-ui/solid"
  import { batch, createEffect, createSignal, For, Show, onMount } from "solid-js"
@@ -1971,7 +2091,7 @@ index 6ee0dd9..7f47cdc 100644
  import {
    allChecked,
 -  checkboxOpen,
-   countMsg,
+-  countMsg,
    isIndeterminate,
    local,
    objStore,
@@ -1980,7 +2100,7 @@ index 6ee0dd9..7f47cdc 100644
    sortObjs,
  } from "~/store"
  import { OrderBy } from "~/store"
-@@ -91,34 +90,41 @@ export const ListTitle = (props: {
+@@ -91,34 +89,41 @@ export const ListTitle = (props: {
      }
    }
    return (
@@ -2046,6 +2166,18 @@ index 6ee0dd9..7f47cdc 100644
    )
  }
 
+@@ -170,11 +175,6 @@ const ListLayout = () => {
+           return <ListItem obj={obj} index={i()} />
+         }}
+       </For>
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Text size="sm" color="$neutral11">
+-          {countMsg()}
+-        </Text>
+-      </Show>
+     </VStack>
+   )
+ }
 diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
 index 4893a59..631ca53 100644
 --- a/src/pages/home/folder/ListItem.tsx
