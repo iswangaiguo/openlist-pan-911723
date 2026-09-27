@@ -70,3 +70,21 @@ test("usage respects v2 listing and forwards opaque continuation tokens", async 
   })
   assert.deepEqual(await client().usagePage("", "opaque&token", "v2"), { bytes: 5, cursor: "next&token" })
 })
+
+
+test("all-storage usage inventory excludes disabled mounts and credentials and requires admin", async (t) => {
+  const env: any = {}
+  await saveDb({ settings: [{ key: "token", value: "usage-admin" }], users: [], storages: [
+    { id: 731, driver: "s3", mount_path: "/B2", disabled: false, addition: '{"secret_access_key":"private-secret"}' },
+    { id: 732, driver: "s3", mount_path: "/R2", disabled: false, addition: '{}' },
+    { id: 733, driver: "s3", mount_path: "/disabled", disabled: true, addition: '{}' },
+  ], metas: [], shares: [] } as any, env)
+  const app = new Hono(); app.route("/api/fs", fsRouter)
+  t.mock.method(globalThis, "fetch", async () => { throw new Error("Inventory must not scan buckets") })
+  assert.equal((await app.request("/api/fs/usage?scope=all", {}, env)).status, 403)
+  const response = await app.request("/api/fs/usage?scope=all&path=/B2/nested", { headers: { Authorization: "usage-admin" } }, env)
+  assert.deepEqual((await response.json() as any).data, { mounts: [
+    { storage_id: 731, mount_path: "/B2" }, { storage_id: 732, mount_path: "/R2" },
+  ] })
+  assert.equal(response.headers.get("Cache-Control"), "private, no-store")
+})
