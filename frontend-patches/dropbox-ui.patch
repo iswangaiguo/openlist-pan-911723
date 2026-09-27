@@ -1853,15 +1853,15 @@ index 6ee0dd9..7f47cdc 100644
  }
 
 diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
-index 4893a59..94cde0d 100644
+index 4893a59..0a36552 100644
 --- a/src/pages/home/folder/ListItem.tsx
 +++ b/src/pages/home/folder/ListItem.tsx
-@@ -6,13 +6,13 @@ import {
+@@ -6,13 +6,12 @@ import {
    ProgressLabel,
    Text,
  } from "@hope-ui/solid"
+-import { Motion } from "solid-motionone"
 +import { currentLang } from "~/app/i18n"
- import { Motion } from "solid-motionone"
  import { useContextMenu } from "solid-contextmenu"
  import { batch, Show } from "solid-js"
  import { LinkWithPush } from "~/components"
@@ -1871,7 +1871,7 @@ index 4893a59..94cde0d 100644
    getMainColor,
    getSettingBool,
    local,
-@@ -31,6 +31,7 @@ import {
+@@ -31,6 +30,7 @@ import {
    nearlyFull,
  } from "~/utils"
  import { getIconByObj } from "~/utils/icon"
@@ -1879,13 +1879,18 @@ index 4893a59..94cde0d 100644
  import { ItemCheckbox, useSelectWithMouse } from "./helper"
 
  export interface Col {
-@@ -61,10 +62,25 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
-       initial={{ opacity: 0, scale: 0.95 }}
-       animate={{ opacity: 1, scale: 1 }}
-       transition={{ duration: 0.2 }}
+@@ -57,14 +57,26 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+     useSelectWithMouse()
+   const filenameStyle = () => local["list_item_filename_overflow"]
+   return (
+-    <Motion.div
+-      initial={{ opacity: 0, scale: 0.95 }}
+-      animate={{ opacity: 1, scale: 1 }}
+-      transition={{ duration: 0.2 }}
 -      style={{
 -        width: "100%",
 -      }}
++    <div
 +      class="drive-file-row"
 +      classList={{ "drive-file-row-selected": !!props.obj.selected }}
 +      style={{ width: "100%" }}
@@ -1908,7 +1913,7 @@ index 4893a59..94cde0d 100644
        <HStack
          classList={{ selected: !!props.obj.selected }}
          class="list-item viselect-item"
-@@ -111,21 +127,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -111,21 +123,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
          }}
        >
          <HStack class="name-box" spacing="$1" w={cols[0].w}>
@@ -1930,12 +1935,13 @@ index 4893a59..94cde0d 100644
            <Icon
              class="icon"
              boxSize="$6"
-@@ -215,6 +216,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -215,6 +212,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            {formatDate(props.obj.modified)}
          </Text>
        </HStack>
+-    </Motion.div>
 +      <RowActions obj={props.obj} index={props.index} />
-     </Motion.div>
++    </div>
    )
  }
 diff --git a/src/pages/home/folder/RowActions.tsx b/src/pages/home/folder/RowActions.tsx
