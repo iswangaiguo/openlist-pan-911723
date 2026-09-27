@@ -1,3 +1,34 @@
+diff --git a/src/app/App.tsx b/src/app/App.tsx
+index d2442c3..0153815 100644
+--- a/src/app/App.tsx
++++ b/src/app/App.tsx
+@@ -8,6 +8,8 @@ import {
+   Match,
+   onCleanup,
+   Switch,
++  Show,
++  Suspense,
+ } from "solid-js"
+ import { Portal } from "solid-js/web"
+ import { Error, FullScreenLoading } from "~/components"
+@@ -27,6 +29,7 @@ import { MustUser, UserOrGuest } from "./MustUser"
+ import "./index.css"
+ import { globalStyles } from "./theme"
+
++const Upload = lazy(() => import("~/pages/home/uploads/Upload"))
+ const Home = lazy(() => import("~/pages/home/Layout"))
+ const Manage = lazy(() => import("~/pages/manage"))
+ const Login = lazy(() => import("~/pages/login"))
+@@ -121,6 +124,9 @@ const App: Component = () => {
+           <ProgressIndicator />
+         </Progress>
+       </Portal>
++      <Show when={!loading() && err().length === 0 && initialized()}>
++        <Suspense><Upload /></Suspense>
++      </Show>
+       <Switch
+         fallback={
+           <Routes base={base_path}>
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
 index a8d032d..7507f6f 100644
 --- a/src/pages/home/Body.tsx
@@ -9,7 +40,7 @@ index a8d032d..7507f6f 100644
 +import { DriveSelection } from "./DriveSelection"
 +import { DriveHeading } from "./DriveChrome"
  import { Sidebar } from "./Sidebar"
- 
+
  export const Body = () => {
 @@ -19,6 +21,8 @@ export const Body = () => {
        >
@@ -303,7 +334,7 @@ index de14427..1cedec6 100644
  import { Footer } from "./Footer"
  import { Header } from "./header/Header"
  import { Toolbar } from "./toolbar/Toolbar"
- 
+
  const Index = () => {
 +  const mode = useColorModeValue("light", "dark")
    useTitle(getSetting("site_title"))
@@ -329,7 +360,32 @@ index de14427..1cedec6 100644
 +    </div>
    )
  }
- 
+
+diff --git a/src/pages/home/Obj.tsx b/src/pages/home/Obj.tsx
+index fb0f297..a5532d6 100644
+--- a/src/pages/home/Obj.tsx
++++ b/src/pages/home/Obj.tsx
+@@ -40,6 +40,20 @@ export const Obj = () => {
+   const cardBg = useColorModeValue("white", "$neutral3")
+   const { pathname, searchParams, isShare, to } = useRouter()
+   const { handlePathChange, refresh, cancel } = usePath()
++  let uploadRefreshTimer: ReturnType<typeof setTimeout> | undefined
++  const uploadCompleted = (event: Event) => {
++    const directory = (event as CustomEvent<string>).detail
++    if (pathname() !== directory) return
++    clearTimeout(uploadRefreshTimer)
++    uploadRefreshTimer = setTimeout(() => {
++      if (pathname() === directory) refresh(undefined, true)
++    }, 300)
++  }
++  onMount(() => window.addEventListener("openlist:upload-complete", uploadCompleted))
++  onCleanup(() => {
++    clearTimeout(uploadRefreshTimer)
++    window.removeEventListener("openlist:upload-complete", uploadCompleted)
++  })
+   const identityChanged = () => {
+     cancel()
+     ObjStore.setObjs([])
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
 index 0000000..eeba14c
@@ -869,7 +925,7 @@ index 8f552da..ea15483 100644
  import { bus } from "~/utils"
  import { Layout } from "./layout"
  import { isMac } from "~/utils/compatibility"
- 
+
  export const Header = () => {
 -  const logos = getSetting("logo").split("\n")
 -  const logo = useColorModeValue(logos[0], logos.pop())
@@ -986,7 +1042,7 @@ index 8f552da..ea15483 100644
    )
  }
 diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
-index e55e19b..aabb71b 100644
+index e55e19b..d38471c 100644
 --- a/src/pages/home/toolbar/Toolbar.tsx
 +++ b/src/pages/home/toolbar/Toolbar.tsx
 @@ -1,6 +1,4 @@
@@ -996,7 +1052,32 @@ index e55e19b..aabb71b 100644
  import { Copy, Move } from "./CopyMove"
  import { Delete } from "./Delete"
  import { Rename } from "./Rename"
-@@ -47,8 +45,6 @@ export const Modal = () => {
+@@ -11,14 +9,11 @@ import { RemoveEmptyDirectory } from "./RemoveEmptyDirectory"
+ import { BatchRename } from "./BatchRename"
+ import { OfflineDownloadEnhanced } from "./OfflineDownloadEnhanced"
+ import { PackageDownloadModal } from "./Download"
+-import { lazy } from "solid-js"
+-import { ModalWrapper } from "./ModalWrapper"
+ import { LocalSettings } from "./LocalSettings"
+ import { BackTop } from "./BackTop"
+ import { Decompress } from "./Decompress"
+ import { Share } from "./Share"
+
+-const Upload = lazy(() => import("../uploads/Upload"))
+
+ export const Modal = () => {
+   return (
+@@ -36,9 +31,6 @@ export const Modal = () => {
+       <BatchRename />
+       <OfflineDownloadEnhanced />
+       <PackageDownloadModal />
+-      <ModalWrapper name="upload" title="home.toolbar.upload">
+-        <Upload />
+-      </ModalWrapper>
+       <LocalSettings />
+     </>
+   )
+@@ -47,8 +39,6 @@ export const Modal = () => {
  export const Toolbar = () => {
    return (
      <Portal>
@@ -1006,56 +1087,668 @@ index e55e19b..aabb71b 100644
        <BackTop />
      </Portal>
 diff --git a/src/pages/home/uploads/Upload.tsx b/src/pages/home/uploads/Upload.tsx
-index 8d4feca..92c39cc 100644
+index 8d4feca..0c1c541 100644
 --- a/src/pages/home/uploads/Upload.tsx
 +++ b/src/pages/home/uploads/Upload.tsx
-@@ -25,6 +25,7 @@ import { asyncPool } from "~/utils/async_pool"
- import { createStore } from "solid-js/store"
- import { UploadFileProps, StatusBadge } from "./types"
- import { File2Upload, traverseFileTree } from "./util"
-+import { driveText } from "../DriveChrome"
- import { SelectWrapper } from "~/components"
+@@ -1,369 +1,170 @@
+-import {
+-  VStack,
+-  Input,
+-  Heading,
+-  HStack,
+-  IconButton,
+-  Checkbox,
+-  Text,
+-  Badge,
+-  Progress,
+-  ProgressIndicator,
+-  Button,
+-  Box,
+-  Stack,
+-} from "@hope-ui/solid"
+-import { createSignal, For, Show } from "solid-js"
+-import { usePath, useRouter, useT } from "~/hooks"
+-import { getMainColor, uploadConfig, setUploadConfig } from "~/store"
+-import {
+-  RiDocumentFolderUploadFill,
+-  RiDocumentFileUploadFill,
+-} from "solid-icons/ri"
+-import { getFileSize, notify, pathJoin } from "~/utils"
+-import { asyncPool } from "~/utils/async_pool"
+-import { createStore } from "solid-js/store"
+-import { UploadFileProps, StatusBadge } from "./types"
+-import { File2Upload, traverseFileTree } from "./util"
+-import { SelectWrapper } from "~/components"
++import { useColorModeValue } from "@hope-ui/solid"
++import { createMemo, createSignal, For, onCleanup, Show } from "solid-js"
++import { createStore, reconcile } from "solid-js/store"
++import { Portal } from "solid-js/web"
++import { currentLang } from "~/app/i18n"
++import { useRouter, useT } from "~/hooks"
++import { me, password, uploadConfig, setUploadConfig, userCan, objStore, State } from "~/store"
++import { bus, getFileSize, notify } from "~/utils"
++import { invalidateDirectories } from "~/utils/directory_snapshot"
++import { traverseFileTree } from "./util"
  import { getUploads } from "./uploads"
- 
-@@ -32,6 +33,7 @@ const UploadFile = (props: UploadFileProps & { onRetry?: () => void }) => {
-   const t = useT()
-   return (
-     <VStack
-+      class="drive-upload-file"
-       w="$full"
-       spacing="$1"
-       rounded="$lg"
-@@ -54,7 +56,13 @@ const UploadFile = (props: UploadFileProps & { onRetry?: () => void }) => {
-           <Badge colorScheme={StatusBadge[props.status]}>
-             {t(`home.upload.${props.status}`)}
-           </Badge>
+-
+-const UploadFile = (props: UploadFileProps & { onRetry?: () => void }) => {
+-  const t = useT()
+-  return (
+-    <VStack
+-      w="$full"
+-      spacing="$1"
+-      rounded="$lg"
+-      border="1px solid $neutral7"
+-      alignItems="start"
+-      p="$2"
+-      _hover={{
+-        border: `1px solid ${getMainColor()}`,
+-      }}
+-    >
+-      <Text
+-        css={{
+-          wordBreak: "break-all",
+-        }}
+-      >
+-        {props.path}
+-      </Text>
+-      <HStack spacing="$2" w="$full" justifyContent="space-between">
+-        <HStack spacing="$2">
+-          <Badge colorScheme={StatusBadge[props.status]}>
+-            {t(`home.upload.${props.status}`)}
+-          </Badge>
 -          <Text>{getFileSize(props.speed)}/s</Text>
-+          <Text>
-+            {props.speed > 0
-+              ? `${getFileSize(props.speed)}/s`
-+              : props.status === "uploading"
-+                ? driveText("waiting")
-+                : "—"}
-+          </Text>
-         </HStack>
-         <HStack spacing="$2">
-           <Show when={props.status === "error" && props.onRetry}>
-@@ -67,6 +75,9 @@ const UploadFile = (props: UploadFileProps & { onRetry?: () => void }) => {
-               {t("home.upload.retry")}
-             </Button>
-           </Show>
-+          <Text class="drive-upload-percent">
-+            {Math.max(0, Math.min(100, props.progress || 0)).toFixed(1)}%
-+          </Text>
-           <Text color="$neutral11">{getFileSize(props.size)}</Text>
-         </HStack>
-       </HStack>
-@@ -169,7 +180,7 @@ const Upload = () => {
-     }
+-        </HStack>
+-        <HStack spacing="$2">
+-          <Show when={props.status === "error" && props.onRetry}>
+-            <Button
+-              compact
+-              size="xs"
+-              colorScheme="accent"
+-              onClick={() => props.onRetry?.()}
+-            >
+-              {t("home.upload.retry")}
+-            </Button>
+-          </Show>
+-          <Text color="$neutral11">{getFileSize(props.size)}</Text>
+-        </HStack>
+-      </HStack>
+-      <Progress
+-        w="$full"
+-        trackColor="$info3"
+-        rounded="$full"
+-        value={props.progress}
+-        size="sm"
+-      >
+-        <ProgressIndicator color={getMainColor()} rounded="$md" />
+-        {/* <ProgressLabel /> */}
+-      </Progress>
+-      <Text color="$danger10">{props.msg}</Text>
+-    </VStack>
+-  )
+-}
++import { UploadQueue, UploadTarget, UploadTask } from "./queue"
++import "./upload-panel.css"
+
+ const Upload = () => {
+   const t = useT()
+-  const { pathname } = useRouter()
+-  const { refresh } = usePath()
++  const { pathname, isShare } = useRouter()
++  const mode = useColorModeValue("light", "dark")
++  const text = (zh: string, en: string) => String(currentLang()).startsWith("zh") ? zh : en
++  const [opened, setOpened] = createSignal(false)
++  const [expanded, setExpanded] = createSignal(true)
+   const [drag, setDrag] = createSignal(false)
+-  const [uploading, setUploading] = createSignal(false)
+-  const [uploadFiles, setUploadFiles] = createStore<{
+-    uploads: UploadFileProps[]
+-  }>({
+-    uploads: [],
++  const [targetPassword, setTargetPassword] = createSignal("")
++  const [directory, setDirectory] = createSignal("/")
++  const [uploaders, setUploaders] = createSignal(getUploads())
++  const [method, setMethod] = createSignal(uploaders()[0].name)
++  const [taskStore, setTaskStore] = createStore<{ items: UploadTask[] }>({ items: [] })
++  const tasks = () => taskStore.items
++  const queue = new UploadQueue(tasks => setTaskStore("items", reconcile(tasks, { key: "id" })), (directory) => {
++    invalidateDirectories()
++    window.dispatchEvent(new CustomEvent("openlist:upload-complete", { detail: directory }))
+   })
+-  const allDone = () => {
+-    return uploadFiles.uploads.every(({ status }) =>
+-      ["success", "error"].includes(status),
+-    )
++  const active = createMemo(() => tasks().filter(task => !["success", "error", "cancelled"].includes(task.status)))
++  const progress = createMemo(() => {
++    const total = tasks().reduce((n, task) => n + task.size, 0)
++    if (!total) return 0
++    return Math.round(tasks().reduce((n, task) => n + task.size *
++      (task.status === "hashing" ? 0 : Math.max(0, Math.min(100, task.progress))), 0) / total)
++  })
++  const summary = () => active().length
++    ? text(`${active().length} 项正在上传`, `Uploading ${active().length} items`)
++    : tasks().some(task => task.status === "error")
++      ? text("部分文件上传失败", "Some uploads failed")
++      : tasks().length ? text("上传完成", "Uploads complete") : text("添加文件开始上传", "Add files to upload")
++  const open = (name: string) => {
++    if (name !== "upload" || isShare() || objStore.state !== State.Folder || !objStore.write || !(userCan("write_content") || objStore.write_content_bypass)) return
++    setDirectory(pathname())
++    setTargetPassword(password())
++    const available = getUploads()
++    setUploaders(available)
++    if (!available.some(u => u.name === method())) setMethod(available[0].name)
++    setOpened(true)
++    setExpanded(true)
++  }
++  bus.on("tool", open)
++  const identityChanged = () => { queue.reset(); setOpened(false) }
++  const beforeUnload = (event: BeforeUnloadEvent) => {
++    if (active().length) { event.preventDefault(); event.returnValue = "" }
    }
-   return (
++  window.addEventListener("beforeunload", beforeUnload)
++  window.addEventListener("openlist:identity-change", identityChanged)
++  onCleanup(() => {
++    bus.off("tool", open)
++    window.removeEventListener("beforeunload", beforeUnload)
++    window.removeEventListener("openlist:identity-change", identityChanged)
++    queue.reset()
++  })
++  const snapshot = (): UploadTarget => ({
++    directory: directory(), password: targetPassword(),
++    uploader: uploaders().find(u => u.name === method())!.upload,
++    method: method(), asTask: method() === "Multipart" ? false : uploadConfig.asTask,
++    overwrite: uploadConfig.overwrite, rapid: uploadConfig.rapid,
++  })
+   let fileInput!: HTMLInputElement
+   let folderInput!: HTMLInputElement
+-  // keep the File handles around so a failed row can be retried in place
+-  const fileMap = new Map<string, File>()
+-  const handleAddFiles = async (files: File[]) => {
+-    if (files.length === 0) return
+-    setUploading(true)
+-    for (const file of files) {
+-      const upload = File2Upload(file)
+-      fileMap.set(upload.path, file)
+-      setUploadFiles("uploads", (uploads) => [...uploads, upload])
+-    }
+-    for await (const ms of asyncPool(3, files, handleFile)) {
+-      console.log(ms)
+-    }
+-    refresh()
+-    // 再次延迟刷新一次，以便能看到后端异步生成的 BT 文件（如 189/189pc 驱动的 .cas.torrent）
+-    setTimeout(() => refresh(undefined, true), 5000)
+-  }
+-  const setUpload = (path: string, key: keyof UploadFileProps, value: any) => {
+-    setUploadFiles("uploads", (upload) => upload.path === path, key, value)
++  let pickerTarget: UploadTarget | undefined
++  let pickerOwner: number | undefined
++  const pick = (folder: boolean) => {
++    pickerTarget = snapshot()
++    pickerOwner = me().id
++    ;(folder ? folderInput : fileInput).click()
+   }
+-
+-  // All upload methods are available by default
+-  const uploaders = getUploads()
+-  const [curUploader, setCurUploader] = createSignal(uploaders[0])
+-  // multipart sessions are synchronous pipelines with their own progress and
+-  // retry semantics; "add as task" does not apply to them
+-  const asTaskUnsupported = () => curUploader()?.name === "Multipart"
+-  const retryFile = (path: string) => {
+-    const file = fileMap.get(path)
+-    if (!file) return
+-    setUpload(path, "msg", "")
+-    setUpload(path, "progress", 0)
+-    setUpload(path, "speed", 0)
+-    handleFile(file)
++  const add = (files: File[], target: UploadTarget, owner: number | undefined) => {
++    if (owner !== me().id) return
++    queue.add(files, target)
+   }
+-  const handleFile = async (file: File) => {
+-    const path = file.webkitRelativePath ? file.webkitRelativePath : file.name
+-    setUpload(path, "status", "uploading")
+-    const uploadPath = pathJoin(pathname(), path)
+-    try {
+-      const err = await curUploader()
+-        .upload(
+-          uploadPath,
+-          file,
+-          (key, value) => {
+-            setUpload(path, key, value)
+-          },
+-          asTaskUnsupported() ? false : uploadConfig.asTask,
+-          uploadConfig.overwrite,
+-          uploadConfig.rapid,
+-        )
+-        .catch((err) => err)
+-      if (!err) {
+-        setUpload(path, "status", "success")
+-        setUpload(path, "progress", 100)
+-      } else {
+-        setUpload(path, "status", "error")
+-        setUpload(path, "msg", err.message)
+-      }
+-    } catch (e: any) {
+-      console.error(e)
+-      setUpload(path, "status", "error")
+-      setUpload(path, "msg", e.message)
+-    }
++  const picked = (event: Event) => {
++    const input = event.currentTarget as HTMLInputElement
++    if (pickerTarget) add(Array.from(input.files ?? []), pickerTarget, pickerOwner)
++    input.value = ""
+   }
+-  return (
 -    <VStack w="$full" pb="$2" spacing="$2">
-+    <VStack class="drive-upload" w="$full" pb="$2" spacing="$2">
-       <Show
-         when={!uploading()}
-         fallback={
+-      <Show
+-        when={!uploading()}
+-        fallback={
+-          <>
+-            <HStack spacing="$2">
+-              <Button
+-                colorScheme="accent"
+-                onClick={() => {
+-                  setUploadFiles("uploads", (_uploads) =>
+-                    _uploads.filter(
+-                      ({ status }) => !["success", "error"].includes(status),
+-                    ),
+-                  )
+-                  console.log(uploadFiles.uploads)
+-                }}
+-              >
+-                {t("home.upload.clear_done")}
+-              </Button>
+-              <Show when={allDone()}>
+-                <Button
+-                  onClick={() => {
+-                    setUploading(false)
+-                  }}
+-                >
+-                  {t("home.upload.back")}
+-                </Button>
+-              </Show>
+-            </HStack>
+-            <For each={uploadFiles.uploads}>
+-              {(upload) => (
+-                <UploadFile
+-                  {...upload}
+-                  onRetry={() => retryFile(upload.path)}
+-                />
+-              )}
+-            </For>
+-          </>
+-        }
+-      >
+-        <Input
+-          type="file"
+-          multiple
+-          ref={fileInput}
+-          display="none"
+-          onChange={(e) => {
+-            // @ts-ignore
+-            handleAddFiles(Array.from(e.target.files ?? []))
+-          }}
+-        />
+-        <Input
+-          type="file"
+-          multiple
+-          // @ts-ignore
+-          webkitdirectory
+-          ref={folderInput}
+-          display="none"
+-          onChange={(e) => {
+-            // @ts-ignore
+-            handleAddFiles(Array.from(e.target.files ?? []))
+-          }}
+-        />
+-        <VStack
+-          w="$full"
+-          justifyContent="center"
+-          border={`2px dashed ${drag() ? getMainColor() : "$neutral8"}`}
+-          rounded="$lg"
+-          spacing="$4"
+-          p="$6"
+-          minH="$56"
+-          onDragOver={(e: DragEvent) => {
+-            e.preventDefault()
+-            setDrag(true)
+-          }}
+-          onDragLeave={() => {
+-            setDrag(false)
+-          }}
+-          onDrop={async (e: DragEvent) => {
+-            e.preventDefault()
+-            e.stopPropagation()
+-            setDrag(false)
+-            const res: File[] = []
+-            const items = Array.from(e.dataTransfer?.items ?? [])
+-            const files = Array.from(e.dataTransfer?.files ?? [])
+-            let itemLength = items.length
+-            const folderEntries = []
+-            for (let i = 0; i < itemLength; i++) {
+-              const item = items[i]
+-              const entry = item.webkitGetAsEntry()
+-              if (entry?.isFile) {
+-                res.push(files[i])
+-              } else if (entry?.isDirectory) {
+-                folderEntries.push(entry)
+-              }
+-            }
+-            for (const entry of folderEntries) {
+-              const innerFiles = await traverseFileTree(entry)
+-              res.push(...innerFiles)
+-            }
+-            if (res.length === 0) {
+-              notify.warning(t("home.upload.no_files_drag"))
+-            }
+-            handleAddFiles(res)
+-          }}
+-        >
+-          <Show
+-            when={!drag()}
+-            fallback={<Heading>{t("home.upload.release")}</Heading>}
+-          >
+-            <Heading size="lg" textAlign="center">
+-              {t("home.upload.upload-tips")}
+-            </Heading>
+-            <Box w={{ "@initial": "80%", "@md": "30%" }}>
+-              <SelectWrapper
+-                value={curUploader()?.name}
+-                onChange={(name) => {
+-                  setCurUploader(
+-                    uploaders.find((uploader) => uploader.name === name)!,
+-                  )
+-                }}
+-                options={uploaders.map((uploader) => {
+-                  return {
+-                    label: uploader.name,
+-                    value: uploader.name,
++  const status = (task: UploadTask) => task.status === "cancelled"
++    ? text("已取消", "Cancelled") : t(`home.upload.${task.status}`)
++  return <Portal>
++    <input ref={fileInput} type="file" multiple hidden onChange={picked} />
++    <input ref={folderInput} type="file" multiple hidden {...{ webkitdirectory: "" }} onChange={picked} />
++    <Show when={opened()}>
++      <aside class="upload-center" data-mode={mode()} aria-label={text("上传任务", "Upload tasks")}>
++        <Show when={expanded()} fallback={
++          <button class="upload-dock" onClick={() => setExpanded(true)} aria-expanded="false">
++            <span class="upload-mark">↑</span><span>{summary()}</span>
++            <strong>{progress()}%</strong><span>⌃</span>
++          </button>
++        }>
++          <header class="upload-center-header">
++            <span class="upload-mark">↑</span>
++            <div><h2>{text("上传任务", "Uploads")}</h2><p aria-live="polite">{summary()}</p></div>
++            <button class="upload-icon-button" aria-label={text("收起上传面板", "Minimize uploads")} onClick={() => setExpanded(false)}>−</button>
++          </header>
++          <div class="upload-center-body">
++            <section class="upload-picker" data-dragging={drag()}
++              onDragOver={event => { event.preventDefault(); setDrag(true) }}
++              onDragLeave={() => setDrag(false)}
++              onDrop={async event => {
++                event.preventDefault(); setDrag(false)
++                const target = snapshot(), owner = me().id
++                try {
++                  const items = Array.from(event.dataTransfer?.items ?? [])
++                  const files: File[] = []
++                  for (const item of items) {
++                    const entry = item.webkitGetAsEntry?.()
++                    if (entry?.isDirectory) files.push(...await traverseFileTree(entry))
++                    else { const file = item.getAsFile(); if (file) files.push(file) }
+                   }
+-                })}
+-              />
+-            </Box>
+-            <HStack spacing="$4">
+-              <VStack spacing="$2" alignItems="center">
+-                <IconButton
+-                  compact
+-                  size="xl"
+-                  aria-label={t("home.upload.upload_folder")}
+-                  colorScheme="accent"
+-                  icon={<RiDocumentFolderUploadFill size="1.2em" />}
+-                  onClick={() => {
+-                    folderInput.click()
+-                  }}
+-                />
+-                <Text fontSize="$sm" color="$neutral11" textAlign="center">
+-                  {t("home.upload.upload_folder")}
+-                </Text>
+-              </VStack>
+-
+-              <VStack spacing="$2" alignItems="center">
+-                <IconButton
+-                  compact
+-                  size="xl"
+-                  aria-label={t("home.upload.upload_files")}
+-                  icon={<RiDocumentFileUploadFill size="1.2em" />}
+-                  onClick={() => {
+-                    fileInput.click()
+-                  }}
+-                />
+-                <Text fontSize="$sm" color="$neutral11" textAlign="center">
+-                  {t("home.upload.upload_files")}
+-                </Text>
+-              </VStack>
+-            </HStack>
+-            <Stack
+-              spacing={{ "@initial": "$2", "@md": "$4" }}
+-              direction={{ "@initial": "column", "@md": "row" }}
+-            >
+-              <Checkbox
+-                checked={!asTaskUnsupported() && uploadConfig.asTask}
+-                disabled={asTaskUnsupported()}
+-                onChange={() => {
+-                  setUploadConfig({ asTask: !uploadConfig.asTask })
+-                }}
+-              >
+-                {t("home.upload.add_as_task")}
+-              </Checkbox>
+-              <Checkbox
+-                checked={uploadConfig.overwrite}
+-                onChange={() => {
+-                  setUploadConfig({ overwrite: !uploadConfig.overwrite })
+-                }}
+-              >
+-                {t("home.conflict_policy.overwrite_existing")}
+-              </Checkbox>
+-              <Checkbox
+-                checked={uploadConfig.rapid}
+-                onChange={() => {
+-                  setUploadConfig({ rapid: !uploadConfig.rapid })
+-                }}
+-              >
+-                {t("home.upload.try_rapid")}
+-              </Checkbox>
+-            </Stack>
+-          </Show>
+-        </VStack>
+-      </Show>
+-    </VStack>
+-  )
++                  if (!items.length) files.push(...Array.from(event.dataTransfer?.files ?? []))
++                  if (!files.length) notify.warning(t("home.upload.no_files_drag"))
++                  add(files, target, owner)
++                } catch (error) { notify.error(String(error)) }
++              }}>
++              <p>{drag() ? text("松开以添加文件", "Drop to add files") : text("拖拽文件到这里，或选择文件", "Drop files here, or choose files")}</p>
++              <div class="upload-picker-actions">
++                <button class="upload-primary" onClick={() => pick(false)}>{text("选择文件", "Choose files")}</button>
++                <button onClick={() => pick(true)}>{text("选择文件夹", "Choose folder")}</button>
++              </div>
++              <p class="upload-destination" title={directory()}>{text("上传到", "Upload to")} <strong>{directory()}</strong></p>
++            </section>
++            <details class="upload-options"><summary>{text("上传选项", "Upload options")}</summary>
++              <label>{text("方式", "Method")}<select value={method()} onChange={e => setMethod(e.currentTarget.value)}>
++                <For each={uploaders()}>{u => <option value={u.name}>{u.name === "Multipart" ? text("分片上传（推荐）", "Multipart (recommended)") : u.name}</option>}</For>
++              </select></label>
++              <label><input type="checkbox" checked={uploadConfig.overwrite} onChange={e => setUploadConfig({ overwrite: e.currentTarget.checked })} />{t("home.conflict_policy.overwrite_existing")}</label>
++              <label><input type="checkbox" checked={uploadConfig.rapid} onChange={e => setUploadConfig({ rapid: e.currentTarget.checked })} />{t("home.upload.try_rapid")}</label>
++              <label><input type="checkbox" disabled={method() === "Multipart"} checked={method() !== "Multipart" && uploadConfig.asTask} onChange={e => setUploadConfig({ asTask: e.currentTarget.checked })} />{t("home.upload.add_as_task")}</label>
++            </details>
++            <Show when={tasks().length}>
++              <div class="upload-list-heading"><span>{text("文件", "Files")} · {tasks().length}</span>
++                <button disabled={!tasks().some(task => ["success", "cancelled"].includes(task.status))} onClick={() => queue.clearDone()}>{t("home.upload.clear_done")}</button>
++              </div>
++              <ul class="upload-task-list"><For each={tasks()}>{task =>
++                <li class="upload-task" data-status={task.status}>
++                  <div class="upload-task-top"><strong title={task.path}>{task.name}</strong><span>{getFileSize(task.size)}</span></div>
++                  <p class="upload-task-destination" title={task.directory}>{task.directory}</p>
++                  <div class="upload-task-status"><span>{status(task)}</span>
++                    <span>{task.status === "uploading" && task.speed > 0 ? `${getFileSize(task.speed)}/s · ` : ""}{Math.round(task.progress)}%</span>
++                  </div>
++                  <progress max="100" value={Math.max(0, Math.min(100, task.progress))} aria-label={`${task.name} ${status(task)}`} />
++                  <Show when={task.msg}><p class="upload-error">{task.msg}</p></Show>
++                  <Show when={task.status === "error"}><button class="upload-row-action" onClick={() => queue.retry(task.id)}>{t("home.upload.retry")}</button></Show>
++                  <Show when={!["success", "error", "cancelled"].includes(task.status)}><button class="upload-row-action" onClick={() => queue.cancel(task.id)}>{text("取消", "Cancel")}</button></Show>
++                </li>
++              }</For></ul>
++            </Show>
++          </div>
++          <footer class="upload-center-footer">{text("可以收起面板，继续浏览文件。请保持此页面打开。", "Minimize to keep browsing. Keep this page open.")}</footer>
++        </Show>
++      </aside>
++    </Show>
++  </Portal>
+ }
+-
+ export default Upload
+diff --git a/src/pages/home/uploads/queue.ts b/src/pages/home/uploads/queue.ts
+new file mode 100644
+index 0000000..6b37c20
+--- /dev/null
++++ b/src/pages/home/uploads/queue.ts
+@@ -0,0 +1,116 @@
++import type { Upload, UploadFileProps } from "./types"
++
++export interface UploadTarget {
++  directory: string
++  password: string
++  uploader: Upload
++  method: string
++  asTask: boolean
++  overwrite: boolean
++  rapid: boolean
++}
++export interface UploadTask extends UploadFileProps {
++  id: number
++  directory: string
++  method: string
++}
++interface Job {
++  task: UploadTask
++  file?: File
++  target: UploadTarget
++  controller?: AbortController
++  running: boolean
++}
++
++// The queue owns File handles and transports; the panel only observes it.
++export class UploadQueue {
++  private jobs: Job[] = []
++  private serial = 0
++  private running = 0
++  constructor(
++    private changed: (tasks: UploadTask[]) => void,
++    private completed: (directory: string) => void,
++    private concurrency = 3,
++  ) {}
++  private emit() { this.changed(this.jobs.map(({ task }) => ({ ...task }))) }
++  add(files: File[], target: UploadTarget) {
++    for (const file of files) {
++      const relative = file.webkitRelativePath || file.name
++      const path = `${target.directory.replace(/\/$/, "")}/${relative}`
++      this.jobs.push({ file, target: { ...target }, running: false, task: {
++        id: ++this.serial, name: file.name, path, directory: target.directory,
++        method: target.method, size: file.size, progress: 0, speed: 0, status: "pending",
++      } })
++    }
++    this.emit()
++    this.pump()
++  }
++  retry(id: number) {
++    const job = this.jobs.find(j => j.task.id === id)
++    if (!job?.file || job.running || job.task.status !== "error") return
++    Object.assign(job.task, { status: "pending", progress: 0, speed: 0, msg: "" })
++    this.emit()
++    this.pump()
++  }
++  cancel(id: number) {
++    const job = this.jobs.find(j => j.task.id === id)
++    if (!job || ["success", "error", "cancelled"].includes(job.task.status)) return
++    job.task.status = "cancelled"
++    job.task.speed = 0
++    job.controller?.abort()
++    if (!job.running) job.file = undefined
++    this.emit()
++  }
++  clearDone() {
++    this.jobs = this.jobs.filter(j => j.running || !["success", "cancelled"].includes(j.task.status))
++    this.emit()
++  }
++  reset() {
++    for (const job of this.jobs) {
++      job.task.status = "cancelled"
++      job.controller?.abort()
++    }
++    this.jobs = []
++    this.emit()
++  }
++  private pump() {
++    while (this.running < this.concurrency) {
++      const job = this.jobs.find(j => !j.running && j.task.status === "pending")
++      if (!job) break
++      void this.run(job)
++    }
++  }
++  private async run(job: Job) {
++    this.running++
++    job.running = true
++    const controller = job.controller = new AbortController()
++    job.task.status = "uploading"
++    this.emit()
++    const target = job.target
++    try {
++      const error = await target.uploader(job.task.path, job.file!, (key, value) => {
++        if (controller.signal.aborted) return
++        Object.assign(job.task, { [key]: value })
++        this.emit()
++      }, target.asTask, target.overwrite, target.rapid,
++      { password: target.password, signal: controller.signal })
++      if (controller.signal.aborted) return
++      if (error) throw error
++      Object.assign(job.task, { status: "success", progress: 100, speed: 0 })
++      job.file = undefined
++      this.completed(target.directory)
++    } catch (error) {
++      if (!controller.signal.aborted) {
++        Object.assign(job.task, { status: "error", speed: 0,
++          msg: error instanceof Error ? error.message : String(error) })
++      }
++    } finally {
++      job.running = false
++      job.controller = undefined
++      if (controller.signal.aborted) job.file = undefined
++      this.running--
++      this.emit()
++      this.pump()
++    }
++  }
++}
+diff --git a/src/pages/home/uploads/upload-panel.css b/src/pages/home/uploads/upload-panel.css
+new file mode 100644
+index 0000000..509f222
+--- /dev/null
++++ b/src/pages/home/uploads/upload-panel.css
+@@ -0,0 +1,9 @@
++.upload-center{--up-bg:#fff;--up-text:#1e1919;--up-muted:#706d69;--up-border:#e8e5e1;--up-soft:#f7f5f2;position:fixed;z-index:1200;right:24px;bottom:24px;width:420px;max-width:calc(100vw - 24px);color:var(--up-text);background:var(--up-bg);border:1px solid var(--up-border);border-radius:14px;box-shadow:0 12px 48px #1e191929;font-size:14px;overflow:hidden}
++.upload-center[data-mode=dark]{--up-bg:#242424;--up-text:#f3f1ed;--up-muted:#aaa8a3;--up-border:#414141;--up-soft:#303030}
++.upload-center button,.upload-center select{font:inherit;color:inherit;cursor:pointer;background:var(--up-bg);border:1px solid var(--up-border);border-radius:6px;padding:9px 12px}
++.upload-center button:hover{background:var(--up-soft)}.upload-center button:focus-visible,.upload-center select:focus-visible,.upload-center summary:focus-visible{outline:2px solid #0061ff;outline-offset:2px}.upload-center button:disabled{opacity:.45;cursor:default}
++.upload-center-header{display:flex;align-items:center;gap:12px;padding:18px 20px;border-bottom:1px solid var(--up-border)}.upload-center h2{font-size:17px;font-weight:650;margin:0}.upload-center p{margin:0}.upload-center-header p{font-size:12px;color:var(--up-muted);margin-top:3px}.upload-mark{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:#eaf2ff;color:#0061ff;font-size:23px;flex-shrink:0}.upload-center .upload-icon-button{margin-left:auto;border:0;font-size:24px;line-height:1;padding:8px}
++.upload-center-body{max-height:min(62dvh,560px);overflow:auto;overscroll-behavior:contain}.upload-picker{margin:16px 20px 10px;padding:18px 12px;text-align:center;background:var(--up-soft);border:1px dashed var(--up-border);border-radius:8px}.upload-picker[data-dragging=true]{border-color:#0061ff;background:#eaf2ff;color:#1e1919}.upload-picker-actions{display:flex;justify-content:center;gap:8px;margin:14px 0}.upload-center .upload-primary{background:#0061ff;color:white;border-color:#0061ff}.upload-center .upload-primary:hover{background:#0052d9}.upload-destination{font-size:12px;color:var(--up-muted);overflow-wrap:anywhere}.upload-destination strong{font-weight:500}
++.upload-options{margin:0 20px 12px;font-size:12px}.upload-options summary{cursor:pointer;color:var(--up-muted);padding:8px 0}.upload-options label{display:flex;align-items:center;gap:8px;margin:8px 0}.upload-options select{margin-left:auto;max-width:75%;padding:5px}.upload-options input{accent-color:#0061ff}
++.upload-list-heading{display:flex;align-items:center;justify-content:space-between;padding:8px 20px;color:var(--up-muted);font-size:12px}.upload-center .upload-list-heading button{padding:5px 8px;border:0;color:#0061ff}.upload-task-list{list-style:none;margin:0;padding:0}.upload-task{border-top:1px solid var(--up-border);padding:16px 20px}.upload-task-top{display:flex;gap:12px;justify-content:space-between;align-items:baseline}.upload-task-top strong{font-weight:550;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.upload-task-top span{flex-shrink:0;color:var(--up-muted);font-size:12px}.upload-task-destination{color:var(--up-muted);font-size:11px;padding-top:4px;overflow-wrap:anywhere}.upload-task-status{display:flex;justify-content:space-between;color:var(--up-muted);font-size:12px;margin:10px 0 6px}.upload-task[data-status=success] .upload-task-status{color:#168244}.upload-task[data-status=error] .upload-task-status,.upload-error{color:#b72c2c}.upload-center progress{display:block;width:100%;height:4px;border:0;border-radius:4px;overflow:hidden;accent-color:#0061ff;background:var(--up-soft)}.upload-center progress::-webkit-progress-bar{background:var(--up-soft)}.upload-center progress::-webkit-progress-value{background:#0061ff;border-radius:4px}.upload-center progress::-moz-progress-bar{background:#0061ff}.upload-error{font-size:12px;overflow-wrap:anywhere;padding-top:8px}.upload-center .upload-row-action{padding:4px 0;margin-top:8px;border:0;background:transparent;color:#0061ff;font-size:12px}.upload-center-footer{padding:12px 20px;border-top:1px solid var(--up-border);color:var(--up-muted);font-size:11px}.upload-dock{display:flex;align-items:center;gap:10px;width:100%;text-align:left}.upload-center .upload-dock{border:0;border-radius:0;padding:12px 16px}.upload-dock strong{margin-left:auto;font-size:12px}.upload-dock span:nth-child(2){font-weight:550}
++@media(max-width:600px){.upload-center{right:12px;bottom:calc(12px + env(safe-area-inset-bottom));width:calc(100vw - 24px)}.upload-center-body{max-height:55dvh}.upload-center-header{padding:14px 16px}.upload-picker{margin:12px 16px 8px}.upload-task{padding:14px 16px}.upload-center button{min-height:40px}.upload-center .upload-row-action{min-height:36px}.upload-center .upload-list-heading button{min-height:36px}.upload-center-footer{padding:10px 16px}}

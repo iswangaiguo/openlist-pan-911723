@@ -1,5 +1,116 @@
+diff --git a/src/pages/home/uploads/direct.ts b/src/pages/home/uploads/direct.ts
+index 5b54c73..9033dc8 100644
+--- a/src/pages/home/uploads/direct.ts
++++ b/src/pages/home/uploads/direct.ts
+@@ -26,6 +26,7 @@ export const HttpDirectUpload: Upload = async (
+   _asTask: boolean,
+   overwrite: boolean,
+   _rapid: boolean,
++  context?: { password?: string; signal?: AbortSignal },
+ ) => {
+   const path = pathDir(uploadPath)
+
+@@ -39,7 +40,9 @@ export const HttpDirectUpload: Upload = async (
+       tool: "HttpDirect",
+     },
+     {
++      signal: context?.signal,
+       headers: {
++        Password: context?.password ?? "",
+         Overwrite: overwrite,
+       },
+     },
+@@ -67,6 +70,7 @@ export const HttpDirectUpload: Upload = async (
+       method,
+       uploadInfo.headers,
+       setUpload,
++      context?.signal,
+     )
+   } else {
+     // Single upload for drivers that don't support chunking
+@@ -76,6 +80,7 @@ export const HttpDirectUpload: Upload = async (
+       method,
+       uploadInfo.headers,
+       setUpload,
++      context?.signal,
+     )
+   }
+ }
+@@ -86,6 +91,7 @@ async function uploadSingle(
+   method: string,
+   headers?: Record<string, string>,
+   setUpload?: SetUpload,
++  signal?: AbortSignal,
+ ): Promise<undefined> {
+   const xhr = new XMLHttpRequest()
+   const calcSpeed = createSpeedCalculator()
+@@ -120,6 +126,11 @@ async function uploadSingle(
+       })
+     }
+
++    const abort = () => xhr.abort()
++    signal?.throwIfAborted()
++    signal?.addEventListener("abort", abort, { once: true })
++    xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")))
++    xhr.addEventListener("loadend", () => signal?.removeEventListener("abort", abort))
+     xhr.send(file)
+   })
+ }
+@@ -131,6 +142,7 @@ async function uploadChunked(
+   method: string,
+   headers?: Record<string, string>,
+   setUpload?: SetUpload,
++  signal?: AbortSignal,
+ ): Promise<undefined> {
+   const totalChunks = Math.ceil(file.size / chunkSize)
+   const calcSpeed = createSpeedCalculator()
+@@ -183,6 +195,11 @@ async function uploadChunked(
+         })
+       }
+
++      const abort = () => xhr.abort()
++      signal?.throwIfAborted()
++      signal?.addEventListener("abort", abort, { once: true })
++      xhr.addEventListener("abort", () => reject(new Error("Upload cancelled")))
++      xhr.addEventListener("loadend", () => signal?.removeEventListener("abort", abort))
+       xhr.send(chunk)
+     })
+   }
+diff --git a/src/pages/home/uploads/form.ts b/src/pages/home/uploads/form.ts
+index 5b83af5..0ffa6d4 100644
+--- a/src/pages/home/uploads/form.ts
++++ b/src/pages/home/uploads/form.ts
+@@ -10,6 +10,7 @@ export const FormUpload: Upload = async (
+   asTask = false,
+   overwrite = false,
+   rapid = false,
++  context?: { password?: string; signal?: AbortSignal },
+ ): Promise<undefined> => {
+   let oldTimestamp = new Date().valueOf()
+   let oldLoaded = 0
+@@ -20,7 +21,7 @@ export const FormUpload: Upload = async (
+     "As-Task": asTask,
+     "Content-Type": "multipart/form-data",
+     "Last-Modified": file.lastModified,
+-    Password: password(),
++    Password: context?.password ?? password(),
+     Overwrite: overwrite.toString(),
+   }
+   if (rapid) {
+@@ -32,8 +33,11 @@ export const FormUpload: Upload = async (
+     headers["X-File-Sha1"] = sha1
+     headers["X-File-Sha256"] = sha256
+   }
++  context?.signal?.throwIfAborted()
+   setUpload("status", "uploading")
++  setUpload("progress", 0)
+   const resp: EmptyResp = await r.put("/fs/form", form, {
++    signal: context?.signal,
+     headers: headers,
+     onUploadProgress: (progressEvent) => {
+       if (progressEvent.total) {
 diff --git a/src/pages/home/uploads/multipart.ts b/src/pages/home/uploads/multipart.ts
-index 3103e59..d07ce96 100644
+index 3103e59..4129648 100644
 --- a/src/pages/home/uploads/multipart.ts
 +++ b/src/pages/home/uploads/multipart.ts
 @@ -56,6 +56,9 @@ const mpRequest = async <T extends Resp<unknown>>(
@@ -12,15 +123,70 @@ index 3103e59..d07ce96 100644
    if (resp && typeof resp.code === "number" && "data" in resp) {
      return resp as T
    }
-@@ -168,6 +171,7 @@ export const MultipartUpload: Upload = async (
+@@ -72,13 +75,14 @@ export const MultipartUpload: Upload = async (
+   _asTask = false, // sessions are synchronous pipelines; As-Task does not apply
+   overwrite = false,
+   rapid = false,
++  context?: { password?: string; signal?: AbortSignal },
+ ): Promise<Error | undefined> => {
+   // a single-chunk multipart upload costs 3 requests where Stream costs 1,
+   // and small files pass CDN body limits anyway — silently fall back
+   const fallbackThreshold =
+     Math.max(1, getSettingNumber("multipart_chunk_size", 10)) * 1024 * 1024
+   if (file.size <= fallbackThreshold) {
+-    return StreamUpload(uploadPath, file, setUpload, false, overwrite, rapid)
++    return StreamUpload(uploadPath, file, setUpload, false, overwrite, rapid, context)
+   }
+
+   const initHeaders: Record<string, string | number> = {
+@@ -89,7 +93,7 @@ export const MultipartUpload: Upload = async (
+     "X-Chunk-Size": fallbackThreshold,
+     "Content-Type": file.type || "application/octet-stream",
+     "Last-Modified": file.lastModified,
+-    Password: password(),
++    Password: context?.password ?? password(),
+     Overwrite: overwrite.toString(),
+   }
+   if (rapid) {
+@@ -111,8 +115,9 @@ export const MultipartUpload: Upload = async (
+   // failure is safe to retry instead of failing the whole upload.
+   let initResp: InitResp | undefined
+   for (let i = 0; ; i++) {
++    context?.signal?.throwIfAborted()
+     initResp = await mpRequest<InitResp>(
+-      r.post("/fs/multipart/init", undefined, { headers: initHeaders }),
++      r.post("/fs/multipart/init", undefined, { headers: initHeaders, signal: context?.signal }),
+     )
+     if (initResp) break
+     if (i >= 2) throw new Error("multipart init failed: network error")
+@@ -125,7 +130,7 @@ export const MultipartUpload: Upload = async (
+   // 后端不支持分片（存储驱动无会话上传能力）时返回 data:null，
+   // 回退到流式上传，保证任意存储都能上传
+   if (!session) {
+-    return StreamUpload(uploadPath, file, setUpload, false, overwrite, rapid)
++    return StreamUpload(uploadPath, file, setUpload, false, overwrite, rapid, context)
+   }
+   const uploadId = session.upload_id
+   const chunkSize = session.chunk_size
+@@ -168,6 +173,11 @@ export const MultipartUpload: Upload = async (
      }
    }
- 
+
 +  const chunkAbort = new AbortController()
++  const abortChunks = () => chunkAbort.abort()
++  context?.signal?.throwIfAborted()
++  context?.signal?.addEventListener("abort", abortChunks, { once: true })
++  try {
    let completedEarly = false // rapid upload finished the session server-side
    let fatal: Error | undefined
- 
-@@ -180,6 +184,7 @@ export const MultipartUpload: Upload = async (
+
+@@ -175,11 +185,13 @@ export const MultipartUpload: Upload = async (
+     const blob = file.slice(idx * chunkSize, idx * chunkSize + chunkLen(idx))
+     let flowRetries = 0
+     for (;;) {
++      context?.signal?.throwIfAborted()
+       if (completedEarly || fatal) return
+       // a transport failure (network hiccup, CDN-level rejection) yields
        // undefined — the probe below decides between resending and giving up
        const resp = await mpRequest<SnapResp>(
          r.put("/fs/multipart/chunk", blob, {
@@ -28,7 +194,23 @@ index 3103e59..d07ce96 100644
            headers: {
              "X-Upload-Id": uploadId,
              "X-Chunk-Index": idx,
-@@ -248,7 +253,9 @@ export const MultipartUpload: Upload = async (
+@@ -208,7 +220,7 @@ export const MultipartUpload: Upload = async (
+         // mid-flight; the early server response surfaces as a network error —
+         // ask the session before assuming the network actually failed
+         const st = await mpRequest<SnapResp>(
+-          r.get(`/fs/multipart/status?upload_id=${uploadId}`),
++          r.get(`/fs/multipart/status?upload_id=${uploadId}`, { signal: context?.signal }),
+         )
+         if (
+           (st?.code === 200 && st.data.state === "completed") ||
+@@ -242,13 +254,16 @@ export const MultipartUpload: Upload = async (
+   let nextIdx = startFrom
+   const worker = async () => {
+     for (;;) {
++      context?.signal?.throwIfAborted()
+       if (completedEarly || fatal) return
+       const i = nextIdx++
+       if (i >= missing.length) return
        try {
          await sendChunk(missing[i])
        } catch (e: any) {
@@ -39,6 +221,103 @@ index 3103e59..d07ce96 100644
          return
        }
      }
+@@ -268,6 +283,7 @@ export const MultipartUpload: Upload = async (
+   // over; the catch is defensive — mpRequest throws only on cancellation
+   const completePromise: Promise<SnapResp | undefined> = mpRequest<SnapResp>(
+     r.post("/fs/multipart/complete", undefined, {
++      signal: context?.signal,
+       headers: { "X-Upload-Id": uploadId },
+     }),
+   )
+@@ -278,9 +294,10 @@ export const MultipartUpload: Upload = async (
+
+   while (!settled) {
+     await sleep(2000)
++    context?.signal?.throwIfAborted()
+     if (settled) break
+     const st = await mpRequest<SnapResp>(
+-      r.get(`/fs/multipart/status?upload_id=${uploadId}`),
++      r.get(`/fs/multipart/status?upload_id=${uploadId}`, { signal: context?.signal }),
+     )
+     if (st?.code === 200 && st.data.state === "receiving") {
+       setUpload("progress", st.data.storage_progress | 0)
+@@ -297,8 +314,9 @@ export const MultipartUpload: Upload = async (
+   // the complete request never came back — poll the session to its end
+   for (;;) {
+     await sleep(2000)
++    context?.signal?.throwIfAborted()
+     const st = await mpRequest<SnapResp>(
+-      r.get(`/fs/multipart/status?upload_id=${uploadId}`),
++      r.get(`/fs/multipart/status?upload_id=${uploadId}`, { signal: context?.signal }),
+     )
+     if (!st) {
+       continue // transient blip while the driver finishes — keep polling
+@@ -323,4 +341,7 @@ export const MultipartUpload: Upload = async (
+         throw new Error(st.data.error || `upload failed (${st.data.state})`)
+     }
+   }
++  } finally {
++    context?.signal?.removeEventListener("abort", abortChunks)
++  }
+ }
+diff --git a/src/pages/home/uploads/stream.ts b/src/pages/home/uploads/stream.ts
+index 62c3793..0ccaa09 100644
+--- a/src/pages/home/uploads/stream.ts
++++ b/src/pages/home/uploads/stream.ts
+@@ -10,6 +10,7 @@ export const StreamUpload: Upload = async (
+   asTask = false,
+   overwrite = false,
+   rapid = false,
++  context?: { password?: string; signal?: AbortSignal },
+ ): Promise<undefined> => {
+   let oldTimestamp = new Date().valueOf()
+   let oldLoaded = 0
+@@ -18,7 +19,7 @@ export const StreamUpload: Upload = async (
+     "As-Task": asTask,
+     "Content-Type": file.type || "application/octet-stream",
+     "Last-Modified": file.lastModified,
+-    Password: password(),
++    Password: context?.password ?? password(),
+     Overwrite: overwrite.toString(),
+   }
+   if (rapid) {
+@@ -30,8 +31,11 @@ export const StreamUpload: Upload = async (
+     headers["X-File-Sha1"] = sha1
+     headers["X-File-Sha256"] = sha256
+   }
++  context?.signal?.throwIfAborted()
+   setUpload("status", "uploading")
++  setUpload("progress", 0)
+   const resp: EmptyResp = await r.put("/fs/put", file, {
++    signal: context?.signal,
+     headers: headers,
+     onUploadProgress: (progressEvent) => {
+       if (progressEvent.total) {
+diff --git a/src/pages/home/uploads/types.ts b/src/pages/home/uploads/types.ts
+index 5a7f2a7..85c33ea 100644
+--- a/src/pages/home/uploads/types.ts
++++ b/src/pages/home/uploads/types.ts
+@@ -1,5 +1,5 @@
+ type Status =
+-  "pending" | "hashing" | "uploading" | "backending" | "success" | "error"
++  "pending" | "hashing" | "uploading" | "backending" | "success" | "error" | "cancelled"
+ export interface UploadFileProps {
+   name: string
+   path: string
+@@ -10,6 +10,7 @@ export interface UploadFileProps {
+   msg?: string
+ }
+ export const StatusBadge = {
++  cancelled: "neutral",
+   pending: "neutral",
+   hashing: "warning",
+   uploading: "info",
+@@ -25,4 +26,5 @@ export type Upload = (
+   asTask: boolean,
+   overwrite: boolean,
+   rapid: boolean,
++  context?: { password?: string; signal?: AbortSignal },
+ ) => Promise<Error | undefined>
 diff --git a/src/utils/request.ts b/src/utils/request.ts
 index a3f6bd3..c4b11b9 100644
 --- a/src/utils/request.ts

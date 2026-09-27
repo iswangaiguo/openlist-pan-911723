@@ -124,6 +124,29 @@ function patchFrontend(repo) {
       `Frontend patches require ${frontendPin.commit}; got ${revision}`,
     )
   }
+  // Later patches can change the context of earlier patches. Verify the whole
+  // applied series by reversing it in order on a disposable source copy.
+  // Never reverse the user's actual working tree.
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), "openlist-patch-probe-"))
+  let fullyPatched = false
+  try {
+    fs.cpSync(path.join(repo, "src"), path.join(probe, "src"), { recursive: true })
+    for (const patch of [...frontendPin.patches].reverse()) {
+      execFileSync("git", ["apply", "--reverse", path.join(ROOT, "frontend-patches", patch)], {
+        cwd: probe,
+        stdio: "pipe",
+      })
+    }
+    fullyPatched = true
+  } catch {
+    // A clean or partially patched checkout follows the verified apply path.
+  } finally {
+    fs.rmSync(probe, { recursive: true, force: true })
+  }
+  if (fullyPatched) {
+    console.log("  Frontend patch series already applied")
+    return
+  }
   for (const patch of frontendPin.patches) {
     const file = path.join(ROOT, "frontend-patches", patch)
     try {
@@ -174,6 +197,7 @@ function buildLocalRepo(repo) {
       "--test",
       path.join(ROOT, "scripts/tests/frontend-directory.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-multipart.test.mjs"),
+      path.join(ROOT, "scripts/tests/frontend-upload-queue.test.mjs"),
     ],
     {
       cwd: ROOT,

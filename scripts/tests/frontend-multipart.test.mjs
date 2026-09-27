@@ -117,3 +117,29 @@ test("transient 503 still probes and retries the part to completion", async () =
   assert.equal(h.puts, 3)
   assert.equal(h.posts, 2)
 })
+
+test("cancelling a multipart completion stops status polling and preserves the captured password", async () => {
+  const { h, MultipartUpload } = await load("src/pages/home/uploads/multipart.ts", `
+    export const h={gets:0,initPassword:'',completing:false};
+    export const password=()=> 'different-directory',getSettingNumber=()=>10;
+    export const calculateHash=()=>{},StreamUpload=()=>{};
+    const data={upload_id:'session',state:'receiving',chunk_size:10485760,total_chunks:2,received:[],received_bytes:0};
+    export const r={
+      post:async(url,body,options)=>{
+        if(url.endsWith('/init')){h.initPassword=options.headers.Password;return {code:200,data};}
+        h.completing=true;
+        return new Promise(resolve=>options.signal.addEventListener('abort',()=>resolve({code:-1,message:'cancelled'}),{once:true}));
+      },
+      put:async()=>({code:200,data}),
+      get:async()=>{h.gets++;return {code:200,data};}
+    };
+  `)
+  const controller = new AbortController()
+  const result = MultipartUpload('/B2/original/video', {size:20971520,type:'video/mp4',lastModified:1,slice:()=>new Blob(['part'])}, ()=>{}, false,false,false,
+    {password:'original-directory',signal:controller.signal})
+  while(!h.completing) await new Promise(resolve=>setImmediate(resolve))
+  controller.abort()
+  await assert.rejects(result, /abort/i)
+  assert.equal(h.initPassword, 'original-directory')
+  assert.equal(h.gets, 0)
+})
