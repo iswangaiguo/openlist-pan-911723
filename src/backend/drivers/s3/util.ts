@@ -507,9 +507,10 @@ export class S3Client {
   }
 
   // One bounded page per Worker request; no object bodies, HEADs or download signatures.
-  public async usagePage(prefix: string, cursor?: string) {
+  public async usagePage(prefix: string, cursor?: string, version: "v1" | "v2" = "v1") {
     const params: Record<string, string> = { prefix: getKey(prefix, true), "max-keys": "200" }
-    if (cursor) params.marker = cursor
+    if (version === "v2") params["list-type"] = "2"
+    if (cursor) params[version === "v2" ? "continuation-token" : "marker"] = cursor
     const response = await this.fetch("GET", this.getUrl("", params), null, {}, true)
     const xml = await response.text()
     if (!response.ok) throw parseS3Error(xml, response.status)
@@ -523,7 +524,7 @@ export class S3Client {
       bytes += size
     }
     const truncated = parseXmlTag(xml, "IsTruncated") === "true"
-    const next = truncated ? unescapeXml(parseXmlTag(xml, "NextMarker") || lastKey) : undefined
+    const next = truncated ? unescapeXml(version === "v2" ? parseXmlTag(xml, "NextContinuationToken") || "" : parseXmlTag(xml, "NextMarker") || lastKey) : undefined
     if (truncated && (!next || next === cursor)) throw new Error("Storage usage pagination did not advance")
     return { bytes, cursor: next }
   }

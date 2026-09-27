@@ -58,3 +58,15 @@ test("storage usage rejects unauthenticated requests and scopes admin totals to 
   const home = await app.request("/api/fs/usage", { headers: { Authorization: "usage-admin" } }, env)
   assert.equal((await home.json() as any).data.supported, false)
 })
+
+
+test("usage respects v2 listing and forwards opaque continuation tokens", async (t) => {
+  t.mock.method(globalThis, "fetch", async (input: any) => {
+    const url = new URL(input)
+    assert.equal(url.searchParams.get("list-type"), "2")
+    assert.equal(url.searchParams.get("continuation-token"), "opaque&token")
+    assert.equal(url.searchParams.has("marker"), false)
+    return new Response('<ListBucketResult><Contents><Key>x</Key><Size>5</Size></Contents><IsTruncated>true</IsTruncated><NextContinuationToken>next&amp;token</NextContinuationToken></ListBucketResult>')
+  })
+  assert.deepEqual(await client().usagePage("", "opaque&token", "v2"), { bytes: 5, cursor: "next&token" })
+})
