@@ -26,7 +26,7 @@ index d2442c3..e9b147b 100644
  import { MustUser, UserOrGuest } from "./MustUser"
  import "./index.css"
  import { globalStyles } from "./theme"
-
+ 
 +const Upload = lazy(() => import("~/pages/home/uploads/Upload"))
  const Home = lazy(() => import("~/pages/home/Layout"))
  const Manage = lazy(() => import("~/pages/manage"))
@@ -149,7 +149,7 @@ index fa3b363..bd837ee 100644
  import App from "./App"
 +import { ModuleLoadError } from "~/components/ModuleLoadError"
  import { globalStyles, theme } from "./theme"
-
+ 
  const Index = () => {
 @@ -11,7 +12,7 @@ const Index = () => {
        <ErrorBoundary
@@ -250,7 +250,7 @@ index a8d032d..c8f0892 100644
 +import { DriveSelection } from "./DriveSelection"
 +import { DriveHeading, DriveViewToolbar } from "./DriveChrome"
  import { Sidebar } from "./Sidebar"
-
+ 
  export const Body = () => {
 @@ -19,6 +21,11 @@ export const Body = () => {
        >
@@ -288,10 +288,10 @@ index bd2219d..6c92b35 100644
    )
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
 new file mode 100644
-index 0000000..1992286
+index 0000000..c169972
 --- /dev/null
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,174 @@
 +import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import {
@@ -319,10 +319,16 @@ index 0000000..1992286
 +}
 +
 +export const DriveBrand = () => {
++  const { to } = useRouter()
 +  const logos = getSetting("logo").split("\n")
 +  const logo = useColorModeValue(logos[0], logos[1] || logos[0])
 +  return (
-+    <div class="drive-brand">
++    <button
++      type="button"
++      class="drive-brand"
++      aria-label={String(currentLang()).startsWith("zh") ? "返回首页" : "Go home"}
++      onClick={() => to("/")}
++    >
 +      <Show when={logo()} fallback={<span class="drive-brand-mark">O</span>}>
 +        <Image
 +          src={logo()}
@@ -333,7 +339,7 @@ index 0000000..1992286
 +        />
 +      </Show>
 +      <span>{getSetting("site_title") || "OpenList"}</span>
-+    </div>
++    </button>
 +  )
 +}
 +
@@ -751,7 +757,7 @@ index 28775ab..0492daf 100644
 +import { Show } from "solid-js"
 +import { countMsg, layout, local, objStore, State } from "~/store"
 +import { ObjType } from "~/types"
-
+ 
 -export const Footer = () => {
 -  const t = useT()
 -  return (
@@ -799,7 +805,7 @@ index de14427..1cedec6 100644
  import { Footer } from "./Footer"
  import { Header } from "./header/Header"
  import { Toolbar } from "./toolbar/Toolbar"
-
+ 
  const Index = () => {
 +  const mode = useColorModeValue("light", "dark")
    useTitle(getSetting("site_title"))
@@ -825,14 +831,14 @@ index de14427..1cedec6 100644
 +    </div>
    )
  }
-
+ 
 diff --git a/src/pages/home/Nav.tsx b/src/pages/home/Nav.tsx
 index 0d0ed69..e9e28d3 100644
 --- a/src/pages/home/Nav.tsx
 +++ b/src/pages/home/Nav.tsx
 @@ -12,7 +12,7 @@ import { getSetting, local } from "~/store"
  import { encodePath, hoverColor, joinBase } from "~/utils"
-
+ 
  export const Nav = () => {
 -  const { pathname, isShare } = useRouter()
 +  const { pathname, isShare, to } = useRouter()
@@ -1056,10 +1062,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..f139aa5
+index 0000000..b550a7d
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,828 @@
+@@ -0,0 +1,894 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1114,6 +1120,13 @@ index 0000000..f139aa5
 +  font-size: 18px;
 +  font-weight: 700;
 +  letter-spacing: -0.5px;
++  width: 100%;
++  padding: 0;
++  border: 0;
++  background: transparent;
++  color: inherit;
++  text-align: left;
++  cursor: pointer;
 +}
 +.drive-brand > span:last-child {
 +  overflow: hidden;
@@ -1585,6 +1598,65 @@ index 0000000..f139aa5
 +  min-height: 44px;
 +  border: 0;
 +  background: transparent;
++  opacity: 0;
++  pointer-events: none;
++  transition: opacity 120ms ease;
++}
++.drive-file-row:hover .drive-row-menu,
++.drive-file-row:focus-within .drive-row-menu {
++  opacity: 1;
++  pointer-events: auto;
++}
++@media (hover: none) {
++  .drive-row-menu {
++    opacity: 1;
++    pointer-events: auto;
++  }
++}
++.drive-layout-menu {
++  min-width: 190px;
++  border-radius: 14px;
++}
++.drive-layout-label {
++  padding: 10px 14px 4px;
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-layout-choice {
++  display: inline-flex;
++  align-items: center;
++  gap: 10px;
++}
++.drive-layout-choice > span {
++  width: 16px;
++}
++.drive-context-menu {
++  min-width: 250px;
++  max-width: min(320px, calc(100vw - 24px));
++  max-height: min(660px, calc(100vh - 24px));
++  overflow-y: auto;
++  border: 1px solid var(--drive-line);
++  border-radius: 14px;
++  background: var(--drive-bg);
++  box-shadow: 0 16px 40px #0002;
++}
++.drive-context-title {
++  padding: 12px 16px;
++  font-weight: 650;
++  overflow: hidden;
++  white-space: nowrap;
++  text-overflow: ellipsis;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-context-menu .solid-contextmenu__item__content {
++  gap: 10px;
++  padding: 10px 16px;
++  color: var(--drive-text);
++}
++.drive-context-menu .solid-contextmenu__item:hover > .solid-contextmenu__item__content,
++.drive-context-menu .solid-contextmenu__item:focus > .solid-contextmenu__item__content {
++  background: var(--drive-hover);
++  color: var(--drive-text);
 +}
 +.drive-row-menu-space {
 +  flex: 0 0 28px;
@@ -1909,11 +1981,24 @@ index 83f5780..17b1ac9 100644
            <Suspense fallback={<FullLoading />}>
              <Dynamic component={cur()?.component} />
            </Suspense>
+diff --git a/src/pages/home/folder/Folder.tsx b/src/pages/home/folder/Folder.tsx
+index ce15e4c..1d60ab0 100644
+--- a/src/pages/home/folder/Folder.tsx
++++ b/src/pages/home/folder/Folder.tsx
+@@ -74,7 +74,7 @@ const Folder = () => {
+         <Match when={layout() === "list"}>
+           <ListLayout />
+         </Match>
+-        <Match when={layout() === "grid"}>
++        <Match when={layout() === "grid" || layout() === "large_grid"}>
+           <GridLayout />
+         </Match>
+         <Match when={layout() === "image"}>
 diff --git a/src/pages/home/folder/Grid.tsx b/src/pages/home/folder/Grid.tsx
-index 32045d4..58851ad 100644
+index 32045d4..2116692 100644
 --- a/src/pages/home/folder/Grid.tsx
 +++ b/src/pages/home/folder/Grid.tsx
-@@ -1,8 +1,8 @@
+@@ -1,35 +1,30 @@
 -import { Box, Grid, Text } from "@hope-ui/solid"
 -import { For, Show } from "solid-js"
 +import { Grid } from "@hope-ui/solid"
@@ -1921,11 +2006,14 @@ index 32045d4..58851ad 100644
  import { GridItem } from "./GridItem"
  import "lightgallery/css/lightgallery-bundle.css"
 -import { smartCountMsg, local, objStore } from "~/store"
-+import { local, objStore } from "~/store"
++import { layout, local, objStore } from "~/store"
  import { useSelectWithMouse } from "./helper"
-
+ 
  const GridLayout = () => {
-@@ -11,13 +11,6 @@ const GridLayout = () => {
++  const itemSize = () =>
++    parseInt(local["grid_item_size"]) * (layout() === "large_grid" ? 1.7 : 1)
+   const { isMouseSupported, registerSelectContainer, captureContentMenu } =
+     useSelectWithMouse()
    registerSelectContainer()
    return (
      <>
@@ -1939,6 +2027,80 @@ index 32045d4..58851ad 100644
        <Grid
          oncapture:contextmenu={captureContentMenu}
          class="viselect-container"
+         w="$full"
+         gap="$1"
+         templateColumns={`repeat(auto-fill, minmax(${
+-          parseInt(local["grid_item_size"]) + 20
++          itemSize() + 20
+         }px,1fr))`}
+       >
+         <For each={objStore.objs}>
+           {(obj, i) => {
+-            return <GridItem obj={obj} index={i()} />
++            return <GridItem obj={obj} index={i()} size={itemSize()} />
+           }}
+         </For>
+       </Grid>
+diff --git a/src/pages/home/folder/GridItem.tsx b/src/pages/home/folder/GridItem.tsx
+index abaa550..4d7c3d9 100644
+--- a/src/pages/home/folder/GridItem.tsx
++++ b/src/pages/home/folder/GridItem.tsx
+@@ -9,8 +9,9 @@ import { ObjType, StoreObj } from "~/types"
+ import { bus, hoverColor } from "~/utils"
+ import { getIconByObj } from "~/utils/icon"
+ import { ItemCheckbox, useSelectWithMouse } from "./helper"
++import { openItem } from "./open-item"
+ 
+-export const GridItem = (props: { obj: StoreObj; index: number }) => {
++export const GridItem = (props: { obj: StoreObj; index: number; size?: number }) => {
+   const { isHide } = useUtil()
+   if (isHide(props.obj)) {
+     return null
+@@ -19,7 +20,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+   const objIcon = (
+     <Icon
+       color={getMainColor()}
+-      boxSize={`${parseInt(local["grid_item_size"]) - 30}px`}
++      boxSize={`${(props.size ?? parseInt(local["grid_item_size"])) - 30}px`}
+       as={getIconByObj(props.obj)}
+     />
+   )
+@@ -51,6 +52,8 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+         }}
+         as={LinkWithPush}
+         href={props.obj.name}
++        target={props.obj.is_dir ? undefined : "_blank"}
++        rel={props.obj.is_dir ? undefined : "noopener noreferrer"}
+         cursor={
+           openWithDoubleClick() || toggleWithClick() ? "default" : "pointer"
+         }
+@@ -58,7 +61,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+         on:dblclick={() => {
+           if (!openWithDoubleClick()) return
+           selectIndex(props.index, true, true)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         on:click={(e: MouseEvent) => {
+           e.preventDefault()
+@@ -67,7 +70,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+           if (!restoreSelectionCache()) return
+           if (toggleWithClick())
+             return selectIndex(props.index, !props.obj.selected)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         onMouseEnter={() => {
+           setPathAs(props.obj.name, props.obj.is_dir, true)
+@@ -84,7 +87,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+       >
+         <Center
+           class="item-thumbnail"
+-          h={`${parseInt(local["grid_item_size"])}px`}
++          h={`${props.size ?? parseInt(local["grid_item_size"])}px`}
+           w="$full"
+           cursor={props.obj.type !== ObjType.IMAGE ? "inherit" : "pointer"}
+           on:click={(e: MouseEvent) => {
 diff --git a/src/pages/home/folder/Images.tsx b/src/pages/home/folder/Images.tsx
 index c19a217..a97bd09 100644
 --- a/src/pages/home/folder/Images.tsx
@@ -1969,7 +2131,7 @@ index c19a217..a97bd09 100644
        </Show>
 diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
 new file mode 100644
-index 0000000..0cbc8ad
+index 0000000..2fe70d0
 --- /dev/null
 +++ b/src/pages/home/folder/InlineRename.tsx
 @@ -0,0 +1,234 @@
@@ -2293,7 +2455,7 @@ index 6ee0dd9..0d26504 100644
 +    </div>
    )
  }
-
+ 
 @@ -170,11 +175,6 @@ const ListLayout = () => {
            return <ListItem obj={obj} index={i()} />
          }}
@@ -2307,7 +2469,7 @@ index 6ee0dd9..0d26504 100644
    )
  }
 diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
-index 4893a59..631ca53 100644
+index 4893a59..a155607 100644
 --- a/src/pages/home/folder/ListItem.tsx
 +++ b/src/pages/home/folder/ListItem.tsx
 @@ -6,13 +6,13 @@ import {
@@ -2326,17 +2488,18 @@ index 4893a59..631ca53 100644
    getMainColor,
    getSettingBool,
    local,
-@@ -31,6 +31,9 @@ import {
+@@ -31,6 +31,10 @@ import {
    nearlyFull,
  } from "~/utils"
  import { getIconByObj } from "~/utils/icon"
 +import { inlineRename } from "~/store/inline_rename"
 +import { InlineRename } from "./InlineRename"
 +import { RowActions } from "./RowActions"
++import { openItem } from "./open-item"
  import { ItemCheckbox, useSelectWithMouse } from "./helper"
-
+ 
  export interface Col {
-@@ -55,16 +58,36 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -55,16 +59,36 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
    const { pushHref, to } = useRouter()
    const { openWithDoubleClick, toggleWithClick, restoreSelectionCache } =
      useSelectWithMouse()
@@ -2379,13 +2542,15 @@ index 4893a59..631ca53 100644
        <HStack
          classList={{ selected: !!props.obj.selected }}
          class="list-item viselect-item"
-@@ -77,18 +100,20 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -77,25 +101,29 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            transform: "scale(1.01)",
            bgColor: hoverColor(),
          }}
 -        as={LinkWithPush}
 +        as={(editing() ? "div" : LinkWithPush) as typeof LinkWithPush}
          href={props.obj.name}
++        target={props.obj.is_dir ? undefined : "_blank"}
++        rel={props.obj.is_dir ? undefined : "noopener noreferrer"}
          cursor={
            openWithDoubleClick() || toggleWithClick() ? "default" : "pointer"
          }
@@ -2394,14 +2559,23 @@ index 4893a59..631ca53 100644
 +          if (editing()) return
            if (!openWithDoubleClick()) return
            selectIndex(props.index, true, true)
-           to(pushHref(props.obj.name))
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
          }}
          on:click={(e: MouseEvent) => {
 +          if (editing()) return
            e.preventDefault()
            if (openWithDoubleClick()) return
            if (e.ctrlKey || e.metaKey || e.shiftKey) return
-@@ -111,21 +136,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+           if (!restoreSelectionCache()) return
+           if (toggleWithClick())
+             return selectIndex(props.index, !props.obj.selected)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         onMouseEnter={() => {
+           setPathAs(props.obj.name, props.obj.is_dir, true)
+@@ -111,21 +139,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
          }}
        >
          <HStack class="name-box" spacing="$1" w={cols[0].w}>
@@ -2423,7 +2597,7 @@ index 4893a59..631ca53 100644
            <Icon
              class="icon"
              boxSize="$6"
-@@ -142,25 +152,55 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -142,25 +155,55 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
                e.stopPropagation()
              }}
            />
@@ -2497,7 +2671,7 @@ index 4893a59..631ca53 100644
          </HStack>
          <Show
            fallback={
-@@ -215,6 +255,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -215,6 +258,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            {formatDate(props.obj.modified)}
          </Text>
        </HStack>
@@ -2508,98 +2682,243 @@ index 4893a59..631ca53 100644
  }
 diff --git a/src/pages/home/folder/RowActions.tsx b/src/pages/home/folder/RowActions.tsx
 new file mode 100644
-index 0000000..3d9f239
+index 0000000..b6673bf
 --- /dev/null
 +++ b/src/pages/home/folder/RowActions.tsx
-@@ -0,0 +1,89 @@
-+import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
-+import { currentLang } from "~/app/i18n"
-+import { For, Show } from "solid-js"
+@@ -0,0 +1,32 @@
++import { Icon } from "@hope-ui/solid"
++import { useContextMenu } from "solid-contextmenu"
 +import { BsThreeDots } from "solid-icons/bs"
-+import { useCopyLink, useDownload, usePath, useRouter, useT } from "~/hooks"
-+import { getSettingBool, me, objStore, selectIndex, userCan } from "~/store"
-+import { StoreObj, UserMethods } from "~/types"
-+import { bus, notify } from "~/utils"
++import { usePath, useT } from "~/hooks"
++import { selectIndex } from "~/store"
++import type { StoreObj } from "~/types"
 +
-+// Row actions target only this row. Opening the menu preserves bulk selection;
-+// choosing an operation hands the existing dialogs a single selected object.
++// Both entry points use the same context menu and its existing operations.
 +export const RowActions = (props: { obj: StoreObj; index: number }) => {
 +  const t = useT()
-+  const { isShare, pushHref, to } = useRouter()
 +  const { setPathAs } = usePath()
-+  const { batchDownloadSelected } = useDownload()
-+  const { copySelectedPreviewPage, copySelectedRawLink } = useCopyLink()
-+  const choose = (action: () => void) => {
-+    selectIndex(props.index, true, true)
-+    setPathAs(props.obj.name, props.obj.is_dir, true)
-+    action()
-+  }
-+  const canEdit = (name: "rename" | "move" | "copy" | "delete") =>
-+    !isShare() && !(props.obj as any).migration && objStore.write && userCan(name)
++  const { show } = useContextMenu({ id: 1 })
 +  return (
-+    <div class="drive-row-actions" onMouseDown={(e) => e.stopPropagation()}>
-+      <Menu placement="bottom-end">
-+        <MenuTrigger
-+          as="button"
-+          class="drive-icon-button drive-row-menu"
-+          aria-label={`${props.obj.name} · ${t("home.toolbar.more")}`}
-+          title={t("home.toolbar.more")}
-+        >
-+          <Icon as={BsThreeDots} />
-+        </MenuTrigger>
-+        <MenuContent aria-label={props.obj.name}>
-+          <MenuItem onSelect={() => to(pushHref(props.obj.name))}>
-+            {String(currentLang()).startsWith("zh") ? "打开" : "Open"}
-+          </MenuItem>
-+          <MenuItem
-+            onSelect={() =>
-+              choose(() => {
-+                if (props.obj.is_dir) {
-+                  if (
-+                    !UserMethods.is_admin(me()) &&
-+                    !getSettingBool("package_download")
-+                  ) {
-+                    notify.warning(t("home.toolbar.package_download_disabled"))
-+                    return
-+                  }
-+                  bus.emit("tool", "package_download")
-+                } else batchDownloadSelected()
-+              })
-+            }
-+          >
-+            {t("home.toolbar.download")}
-+          </MenuItem>
-+          <MenuItem
-+            onSelect={() =>
-+              choose(() => {
-+                if (props.obj.is_dir) copySelectedPreviewPage()
-+                else copySelectedRawLink(true)
-+              })
-+            }
-+          >
-+            {t("home.toolbar.copy_link")}
-+          </MenuItem>
-+          <For each={["rename", "move", "copy", "delete"] as const}>
-+            {(name) => (
-+              <Show when={canEdit(name)}>
-+                <MenuItem
-+                  colorScheme={name === "delete" ? "danger" : "neutral"}
-+                  onSelect={() => choose(() => bus.emit("tool", name))}
-+                >
-+                  {t(`home.toolbar.${name}`)}
-+                </MenuItem>
-+              </Show>
-+            )}
-+          </For>
-+          <Show when={!isShare() && userCan("share")}>
-+            <MenuItem onSelect={() => choose(() => bus.emit("tool", "share"))}>
-+              {t("home.toolbar.share")}
-+            </MenuItem>
-+          </Show>
-+        </MenuContent>
-+      </Menu>
++    <div class="drive-row-actions" onMouseDown={(event) => event.stopPropagation()}>
++      <button
++        type="button"
++        class="drive-icon-button drive-row-menu"
++        aria-label={`${props.obj.name} · ${t("home.toolbar.more")}`}
++        title={t("home.toolbar.more")}
++        onClick={(event) => {
++          event.preventDefault()
++          event.stopPropagation()
++          selectIndex(props.index, true, true)
++          setPathAs(props.obj.name, props.obj.is_dir, true)
++          show(event, { props: props.obj })
++        }}
++      >
++        <Icon as={BsThreeDots} />
++      </button>
 +    </div>
 +  )
++}
+diff --git a/src/pages/home/folder/Search.tsx b/src/pages/home/folder/Search.tsx
+index b92ff0f..9a56b10 100644
+--- a/src/pages/home/folder/Search.tsx
++++ b/src/pages/home/folder/Search.tsx
+@@ -139,6 +139,8 @@ const SearchResult = (props: { node: SearchNode; keywords: string }) => {
+       px="$2"
+       as={LinkWithBase}
+       href={`${props.node.path}?from=search`}
++      target={props.node.is_dir ? undefined : "_blank"}
++      rel={props.node.is_dir ? undefined : "noopener noreferrer"}
+       // encode
+       onMouseEnter={() => {
+         setPathAs(props.node.path, props.node.is_dir)
+diff --git a/src/pages/home/folder/context-menu.tsx b/src/pages/home/folder/context-menu.tsx
+index ee8049f..f9ba0b3 100644
+--- a/src/pages/home/folder/context-menu.tsx
++++ b/src/pages/home/folder/context-menu.tsx
+@@ -1,10 +1,10 @@
+-import { Menu, Item, Submenu } from "solid-contextmenu"
++import { Menu, Item, Submenu, Separator } from "solid-contextmenu"
+ import { useCopyLink, useDownload, useLink, useRouter, useT } from "~/hooks"
+ import "solid-contextmenu/dist/style.css"
+ import { HStack, Icon, Text, useColorMode, Image } from "@hope-ui/solid"
+ import { operations } from "../toolbar/operations"
+ import { createMemo, For, Show } from "solid-js"
+-import { bus, convertURL, notify, torrentParse } from "~/utils"
++import { bus, convertURL, joinBase, notify, torrentParse } from "~/utils"
+ import { ObjType, UserMethods } from "~/types"
+ import {
+   getSettingBool,
+@@ -20,6 +20,8 @@ import { getPreviews } from "../previews"
+ import { BsPlayCircleFill } from "solid-icons/bs"
+ import { isArchive } from "~/store/archive"
+ import axios from "axios"
++import { currentLang } from "~/app/i18n"
++import { openItem } from "./open-item"
+ 
+ const ItemContent = (props: { name: string }) => {
+   const t = useT()
+@@ -47,6 +49,8 @@ export const ContextMenu = () => {
+   }
+   const { rawLink } = useLink()
+   const { isShare, pushHref, to } = useRouter()
++  const editingBlocked = () =>
++    selectedObjs().some((obj) => !!(obj as any).migration)
+   const openWithPreviews = createMemo(() => {
+     const objs = selectedObjs()
+     if (objs.length !== 1) return []
+@@ -61,14 +65,40 @@ export const ContextMenu = () => {
+       animation="scale"
+       theme={colorMode() !== "dark" ? "light" : "dark"}
+       style="z-index: var(--hope-zIndices-popover)"
++      class="drive-context-menu"
+     >
++      <div class="drive-context-title" title={selectedObjs().map((obj) => obj.name).join(", ")}>
++        {selectedObjs().length === 1
++          ? selectedObjs()[0].name
++          : `${selectedObjs().length} ${String(currentLang()).startsWith("zh") ? "项" : "items"}`}
++      </div>
++      <Show when={oneChecked()}>
++        <Item onClick={({ props }) => openItem(props, pushHref(props.name), to)}>
++          {String(currentLang()).startsWith("zh") ? "打开" : "Open"}
++        </Item>
++        <Item
++          onClick={({ props }) => {
++            if (props.is_dir) {
++              if (!canPackageDownload()) {
++                notify.warning(t("home.toolbar.package_download_disabled"))
++                return
++              }
++              bus.emit("tool", "package_download")
++            } else {
++              batchDownloadSelected()
++            }
++          }}
++        >
++          <ItemContent name="download" />
++        </Item>
++      </Show>
+       <Show when={openWithPreviews().length > 0}>
+         <Submenu label={<ItemContent name="open_with" />}>
+           <For each={openWithPreviews()}>
+             {(preview) => (
+               <Item
+                 onClick={({ props }) => {
+-                  to(`${pushHref(props.name)}?preview=${preview.key}`)
++                  window.open(`${joinBase(pushHref(props.name))}?preview=${preview.key}`, "_blank", "noopener,noreferrer")
+                 }}
+               >
+                 {preview.name}
+@@ -77,10 +107,28 @@ export const ContextMenu = () => {
+           </For>
+         </Submenu>
+       </Show>
++      <Separator />
++      <Show when={oneChecked()}>
++        <Item
++          onClick={({ props }) => {
++            if (props.is_dir) copySelectedPreviewPage()
++            else copySelectedRawLink(true)
++          }}
++        >
++          <ItemContent name="copy_link" />
++        </Item>
++      </Show>
++      <Item
++        hidden={!userCan("share") || isShare()}
++        onClick={() => bus.emit("tool", "share")}
++      >
++        <ItemContent name="share" />
++      </Item>
++      <Separator />
+       <For each={["rename", "move", "copy", "delete"] as const}>
+         {(name) => (
+           <Item
+-            hidden={!userCan(name) || !objStore.write || isShare()}
++            hidden={!userCan(name) || !objStore.write || isShare() || editingBlocked()}
+             onClick={() => {
+               bus.emit("tool", name)
+             }}
+@@ -89,18 +137,11 @@ export const ContextMenu = () => {
+           </Item>
+         )}
+       </For>
+-      <Item
+-        hidden={!userCan("share") || isShare()}
+-        onClick={() => {
+-          bus.emit("tool", "share")
+-        }}
+-      >
+-        <ItemContent name="share" />
+-      </Item>
+       <Item
+         hidden={() => {
+           return (
+             isShare() ||
++            editingBlocked() ||
+             !userCan("decompress") ||
+             !objStore.write ||
+             selectedObjs().some((o) => o.is_dir) ||
+@@ -117,6 +158,7 @@ export const ContextMenu = () => {
+         hidden={() => {
+           return (
+             isShare() ||
++            editingBlocked() ||
+             !userCan("offline_download") ||
+             !objStore.write ||
+             !oneChecked() ||
+@@ -159,32 +201,6 @@ export const ContextMenu = () => {
+         <ItemContent name="offline_download_torrent" />
+       </Item>
+       <Show when={oneChecked()}>
+-        <Item
+-          onClick={({ props }) => {
+-            if (props.is_dir) {
+-              copySelectedPreviewPage()
+-            } else {
+-              copySelectedRawLink(true)
+-            }
+-          }}
+-        >
+-          <ItemContent name="copy_link" />
+-        </Item>
+-        <Item
+-          onClick={({ props }) => {
+-            if (props.is_dir) {
+-              if (!canPackageDownload()) {
+-                notify.warning(t("home.toolbar.package_download_disabled"))
+-                return
+-              }
+-              bus.emit("tool", "package_download")
+-            } else {
+-              batchDownloadSelected()
+-            }
+-          }}
+-        >
+-          <ItemContent name="download" />
+-        </Item>
+         <Submenu
+           hidden={({ props }) => {
+             return props.type !== ObjType.VIDEO
+diff --git a/src/pages/home/folder/open-item.ts b/src/pages/home/folder/open-item.ts
+new file mode 100644
+index 0000000..bf13d9b
+--- /dev/null
++++ b/src/pages/home/folder/open-item.ts
+@@ -0,0 +1,15 @@
++import type { StoreObj } from "~/types"
++import { joinBase } from "~/utils"
++
++// Keep folder navigation in the current tab. A file preview gets its own tab.
++export function openItem(
++  obj: Pick<StoreObj, "is_dir">,
++  href: string,
++  navigate: (path: string) => void,
++) {
++  if (obj.is_dir) {
++    navigate(href)
++  } else {
++    window.open(joinBase(href), "_blank", "noopener,noreferrer")
++  }
 +}
 diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
 index 8f552da..6a35d8e 100644
@@ -2642,7 +2961,7 @@ index 8f552da..6a35d8e 100644
  import { bus } from "~/utils"
 -import { Layout } from "./layout"
  import { isMac } from "~/utils/compatibility"
-
+ 
  export const Header = () => {
 -  const logos = getSetting("logo").split("\n")
 -  const logo = useColorModeValue(logos[0], logos.pop())
@@ -2815,6 +3134,156 @@ index 8f552da..6a35d8e 100644
 +    </header>
    )
  }
+diff --git a/src/pages/home/header/layout.tsx b/src/pages/home/header/layout.tsx
+index 9dc6cdf..75d2a49 100644
+--- a/src/pages/home/header/layout.tsx
++++ b/src/pages/home/header/layout.tsx
+@@ -6,16 +6,18 @@ import {
+   MenuTrigger,
+ } from "@hope-ui/solid"
+ import { changeColor } from "seemly"
+-import { BsGridFill, BsCardImage } from "solid-icons/bs"
++import { BsGrid3x3Gap, BsGridFill, BsCardImage } from "solid-icons/bs"
+ import { FaSolidListUl } from "solid-icons/fa"
+ import { Switch, Match, For } from "solid-js"
+ import { Dynamic } from "solid-js/web"
+ import { useT } from "~/hooks"
++import { currentLang } from "~/app/i18n"
+ import { getMainColor, LayoutType, layout, setLayout } from "~/store"
+ 
+ const layouts = {
++  grid: BsGrid3x3Gap,
++  large_grid: BsGridFill,
+   list: FaSolidListUl,
+-  grid: BsGridFill,
+   image: BsCardImage,
+ } as const
+ 
+@@ -39,6 +41,9 @@ export const Layout = () => {
+               <FaSolidListUl />
+             </Match>
+             <Match when={layout() === "grid"}>
++              <BsGrid3x3Gap />
++            </Match>
++            <Match when={layout() === "large_grid"}>
+               <BsGridFill />
+             </Match>
+             <Match when={layout() === "image"}>
+@@ -47,7 +52,10 @@ export const Layout = () => {
+           </Switch>
+         }
+       ></MenuTrigger>
+-      <MenuContent>
++      <MenuContent class="drive-layout-menu">
++        <div class="drive-layout-label">
++          {String(currentLang()).startsWith("zh") ? "布局" : "Layout"}
++        </div>
+         <For each={Object.entries(layouts)}>
+           {(item) => (
+             <MenuItem
+@@ -56,7 +64,12 @@ export const Layout = () => {
+                 setLayout(item[0] as LayoutType)
+               }}
+             >
+-              {t(`home.layouts.${item[0]}`)}
++              <span class="drive-layout-choice">
++                <span>{layout() === item[0] ? "✓" : ""}</span>
++                {item[0] === "large_grid"
++                  ? String(currentLang()).startsWith("zh") ? "大型网格" : "Large grid"
++                  : t(`home.layouts.${item[0]}`)}
++              </span>
+             </MenuItem>
+           )}
+         </For>
+diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
+index 84dd905..ca2fe67 100644
+--- a/src/pages/home/previews/video.tsx
++++ b/src/pages/home/previews/video.tsx
+@@ -12,10 +12,11 @@ import {
+   getMainColor,
+   getSettingBool,
+   objStore,
++  password,
+   setShouldKeepState,
+ } from "~/store"
+ import { Obj, ObjType } from "~/types"
+-import { ext, pathDir, pathJoin } from "~/utils"
++import { ext, fsGet, notify, pathDir, pathJoin } from "~/utils"
+ import Artplayer from "artplayer"
+ import { type Option } from "artplayer"
+ import { type Setting } from "artplayer"
+@@ -117,6 +118,7 @@ const Preview = () => {
+       // @ts-ignore
+       "webkit-playsinline": true,
+       playsInline: true,
++      preload: "auto",
+       crossOrigin: "anonymous",
+     },
+     customType: {
+@@ -351,6 +353,63 @@ const Preview = () => {
+   onMount(() => {
+     player = new Artplayer(option)
+     createEffect(on(() => objStore.raw_url, switchUrl))
++    let recoveryTimer: ReturnType<typeof setTimeout> | undefined
++    let recoveryAttempts = 0
++    let lastProgress = 0
++    let recovering = false
++    const video = player.video
++    const clearRecovery = () => {
++      if (recoveryTimer) clearTimeout(recoveryTimer)
++      recoveryTimer = undefined
++    }
++    const onTimeUpdate = () => {
++      if (video.currentTime > lastProgress + 3) {
++        recoveryAttempts = 0
++        lastProgress = video.currentTime
++      }
++      clearRecovery()
++    }
++    const onSeeking = () => {
++      lastProgress = video.currentTime
++      recoveryAttempts = 0
++      clearRecovery()
++    }
++    const scheduleRecovery = () => {
++      if (video.paused || video.ended || recoveryTimer || recovering || recoveryAttempts >= 2) return
++      recoveryTimer = setTimeout(async () => {
++        recoveryTimer = undefined
++        if (video.paused || video.ended || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
++        recoveryAttempts++
++        recovering = true
++        const resumeAt = video.currentTime
++        try {
++          const response = await fsGet(pathname(), password())
++          if (response.code !== 200 || !response.data?.raw_url) throw new Error(response.message)
++          await player.switchUrl(response.data.raw_url)
++          player.currentTime = resumeAt
++          await player.play()
++        } catch {
++          if (recoveryAttempts >= 2) {
++            notify.error(String(currentLang()).startsWith("zh")
++              ? "视频加载失败，请检查原文件或重新上传"
++              : "Video stalled. Please check or reupload the source file")
++          }
++        } finally {
++          recovering = false
++        }
++      }, 8000)
++    }
++    video.addEventListener("timeupdate", onTimeUpdate)
++    video.addEventListener("seeking", onSeeking)
++    video.addEventListener("waiting", scheduleRecovery)
++    video.addEventListener("stalled", scheduleRecovery)
++    onCleanup(() => {
++      clearRecovery()
++      video.removeEventListener("timeupdate", onTimeUpdate)
++      video.removeEventListener("seeking", onSeeking)
++      video.removeEventListener("waiting", scheduleRecovery)
++      video.removeEventListener("stalled", scheduleRecovery)
++    })
+     let auto_fullscreen: boolean
+     switch (searchParams["auto_fullscreen"]) {
+       case "true":
 diff --git a/src/pages/home/toolbar/Rename.tsx b/src/pages/home/toolbar/Rename.tsx
 index 57e34a5..4579d74 100644
 --- a/src/pages/home/toolbar/Rename.tsx
@@ -2839,7 +3308,7 @@ index 57e34a5..4579d74 100644
 +} from "~/store"
 +import { setInlineRename } from "~/store/inline_rename"
 +import { bus } from "~/utils"
-
+ 
  export const Rename = () => {
 -  const t = useT()
 -  const { isOpen, onOpen, onClose } = createDisclosure()
@@ -2934,9 +3403,9 @@ index e55e19b..d38471c 100644
  import { BackTop } from "./BackTop"
  import { Decompress } from "./Decompress"
  import { Share } from "./Share"
-
+ 
 -const Upload = lazy(() => import("../uploads/Upload"))
-
+ 
  export const Modal = () => {
    return (
 @@ -36,9 +31,6 @@ export const Modal = () => {
@@ -3077,7 +3546,7 @@ index 8d4feca..2623a75 100644
 +import { UploadQueue, UploadTarget, UploadTask } from "./queue"
 +import { BrowserUploadPersistence } from "./recovery"
 +import "./upload-panel.css"
-
+ 
  const Upload = () => {
    const t = useT()
 -  const { pathname } = useRouter()
@@ -4111,6 +4580,26 @@ index 8d4feca..2623a75 100644
  }
 -
  export default Upload
+diff --git a/src/pages/home/uploads/direct.ts b/src/pages/home/uploads/direct.ts
+index 34597e8..f0b608f 100644
+--- a/src/pages/home/uploads/direct.ts
++++ b/src/pages/home/uploads/direct.ts
+@@ -1,4 +1,5 @@
+ import { Upload, SetUpload, UploadContext } from "./types"
++import { objStore } from "~/store"
+ import { r, pathDir } from "~/utils"
+ 
+ // Create a speed calculator using closure
+@@ -28,6 +29,9 @@ export const HttpDirectUpload: Upload = async (
+   _rapid: boolean,
+   context?: UploadContext,
+ ) => {
++  if (objStore.direct_upload_tools?.includes("s3_presigned") && file.size > 5 * 1024 ** 3) {
++    throw new Error("Direct upload supports files up to 5 GiB; use Multipart for larger files")
++  }
+   const path = pathDir(uploadPath)
+ 
+   // Get direct upload info from backend
 diff --git a/src/pages/home/uploads/queue.ts b/src/pages/home/uploads/queue.ts
 new file mode 100644
 index 0000000..e6a4e98
@@ -5149,10 +5638,21 @@ index 0000000..ec51a56
 +  .upload-summary-text b { font-size: 12px; }
 +}
 diff --git a/src/pages/home/uploads/uploads.ts b/src/pages/home/uploads/uploads.ts
-index f348fa0..c83cd37 100644
+index f348fa0..ba299c4 100644
 --- a/src/pages/home/uploads/uploads.ts
 +++ b/src/pages/home/uploads/uploads.ts
-@@ -44,3 +44,7 @@ const AllUploads: Uploader[] = [
+@@ -26,7 +26,9 @@ const AllUploads: Uploader[] = [
+     name: "HTTP Direct",
+     upload: HttpDirectUpload,
+     available: () => {
+-      return objStore.direct_upload_tools?.includes("HttpDirect") || false
++      return objStore.direct_upload_tools?.some(
++        (tool) => tool === "HttpDirect" || tool === "s3_presigned",
++      ) || false
+     },
+   },
+   {
+@@ -44,3 +46,7 @@ const AllUploads: Uploader[] = [
  export const getUploads = (): Pick<Uploader, "name" | "upload">[] => {
    return AllUploads.filter((u) => u.available())
  }
@@ -5172,6 +5672,19 @@ index 0000000..a8baec7
 +  name: string
 +  owner: number
 +}>()
+diff --git a/src/store/obj.ts b/src/store/obj.ts
+index cfcd500..d74c3e3 100644
+--- a/src/store/obj.ts
++++ b/src/store/obj.ts
+@@ -195,7 +195,7 @@ export const isIndeterminate = () => {
+ 
+ const selectedNum = createMemo(() => selectedObjs().length)
+ 
+-export type LayoutType = "list" | "grid" | "image"
++export type LayoutType = "list" | "grid" | "large_grid" | "image"
+ const [pathname, setPathname] = createSignal<string>(location.pathname)
+ const layoutRecord: Record<string, LayoutType> = (() => {
+   try {
 diff --git a/src/utils/module_recovery.ts b/src/utils/module_recovery.ts
 new file mode 100644
 index 0000000..ab2558f
