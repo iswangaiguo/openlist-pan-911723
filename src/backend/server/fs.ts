@@ -522,9 +522,16 @@ fsRouter.post("/list", async (c) => {
       if (!storage) return []
       const tools: string[] = []
       const driver = storage as any
-      // S3 系列驱动支持 s3_presigned 直传
+      // Only advertise presigned PUT when the driver is configured to issue it.
+      let addition: any = {}
+      try {
+        addition = typeof driver.addition === "string"
+          ? JSON.parse(driver.addition)
+          : driver.addition || {}
+      } catch {}
       if (
-        /^(s3|minio|cos|oss|r2|b2|cloudflare_r2)/i.test(driver.driver || "")
+        /^(s3|minio|cos|oss|r2|b2|cloudflare_r2)/i.test(driver.driver || "") &&
+        addition.enable_direct_upload === true
       ) {
         tools.push("s3_presigned")
       }
