@@ -7,8 +7,136 @@ import { S3Driver, type RenameCopyState } from "../drivers/s3/driver"
 import { hmacSha256 } from "../pkg/crypto"
 import { safeErrorMessage } from "../pkg/errs"
 import { withDirectoryMutation } from "../internal/op/directory-cache"
+import {
+  advanceB2Rename,
+  getB2RenameJob,
+  isB2Storage,
+  resumeB2Rename,
+  startB2Rename,
+} from "./b2_rename"
 
 export const renameStepsRouter = new Hono()
+
+async function ownedB2Job(c: any, user: any, path: string) {
+  const actualPath = getActualPath(user, path)
+  const resolved = await resolvePath(actualPath, c.env)
+  if (!resolved.storage || !isB2Storage(resolved.storage))
+    throw new Error("B2 rename job not found")
+  const job = await getB2RenameJob(c.env, resolved.storage.id)
+  if (!job || job.source_virtual !== actualPath)
+    throw new Error("B2 rename job not found")
+  return { job, storage: resolved.storage }
+}
+
+renameStepsRouter.post("/b2/step", async (c) => {
+  const user = await getUserFromContext(c)
+  if (!user || user.disabled || !canWrite(user))
+    return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  c.header("Cache-Control", "private, no-store")
+  try {
+    const { path } = await c.req.json()
+    const { job, storage } = await ownedB2Job(c, user, path)
+    const result = await withDirectoryMutation([storage], { env: c.env }, () =>
+      advanceB2Rename(c.env, storage, job.id),
+    )
+    return c.json({
+      code: 200,
+      message: "success",
+      data: result
+        ? {
+            jobId: result.id,
+            state: result.state,
+            processed: result.processed,
+            discovered: result.scanned,
+            error: result.error,
+            done: false,
+          }
+        : { done: true },
+    })
+  } catch (error) {
+    if (String(error).includes("B2 rename job not found"))
+      return c.json({ code: 200, message: "success", data: { done: true } })
+    return c.json({ code: 500, message: safeErrorMessage(error), data: null })
+  }
+})
+
+renameStepsRouter.post("/b2/status", async (c) => {
+  const user = await getUserFromContext(c)
+  if (!user || user.disabled || !canWrite(user))
+    return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  c.header("Cache-Control", "private, no-store")
+  try {
+    const { path } = await c.req.json()
+    const { job } = await ownedB2Job(c, user, path)
+    return c.json({
+      code: 200,
+      message: "success",
+      data: {
+        jobId: job.id,
+        state: job.state,
+        processed: job.processed,
+        discovered: job.scanned,
+        error: job.error,
+        done: false,
+      },
+    })
+  } catch (error) {
+    if (String(error).includes("B2 rename job not found"))
+      return c.json({ code: 200, message: "success", data: { done: true } })
+    return c.json({ code: 500, message: safeErrorMessage(error), data: null })
+  }
+})
+
+renameStepsRouter.post("/b2/resume", async (c) => {
+  const user = await getUserFromContext(c)
+  if (!user || user.disabled || !canWrite(user))
+    return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  c.header("Cache-Control", "private, no-store")
+  try {
+    const { path } = await c.req.json()
+    const { job, storage } = await ownedB2Job(c, user, path)
+    await resumeB2Rename(c.env, storage.id, job.id)
+    return c.json({ code: 200, message: "success", data: { jobId: job.id } })
+  } catch (error) {
+    return c.json({ code: 500, message: safeErrorMessage(error), data: null })
+  }
+})
+
+export async function prepareB2Rename(
+  c: any,
+  user: any,
+  path: string,
+  name: string,
+) {
+  const actualPath = getActualPath(user, path)
+  const resolved = await resolvePath(actualPath, c.env)
+  if (!resolved.storage || !isB2Storage(resolved.storage)) return null
+  if (resolved.relative === "/")
+    throw new Error("A storage mount root cannot be renamed")
+  const driver = await getDriver(resolved.storage.driver, resolved.storage)
+  if (!(driver instanceof S3Driver)) return null
+  const item = await driver.get(actualPath, resolved.physical!)
+  if (!item.is_dir) return null
+  const job = await withDirectoryMutation(
+    [resolved.storage],
+    { env: c.env },
+    () =>
+      startB2Rename(
+        c.env,
+        resolved.storage,
+        actualPath,
+        resolved.physical!,
+        name,
+      ),
+  )
+  return {
+    jobId: job.id,
+    state: job.state,
+    processed: 0,
+    discovered: 0,
+    done: false,
+  }
+}
 type Ticket = {
   path: string
   actualPath: string

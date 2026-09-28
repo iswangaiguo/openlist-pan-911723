@@ -10,6 +10,7 @@ import {
   copyItems,
   putItem,
   getDriver,
+  assertB2PathWritable,
 } from "../internal/op/storage"
 import { resolveShare } from "../internal/op/share"
 import { getDb, resolvePath } from "../internal/model/db"
@@ -40,10 +41,15 @@ import {
 } from "../internal/driver/storageopts"
 import { parseZip, extractZipEntry, ZipArchive } from "../internal/archive/zip"
 import { assertSafeUrl, getTrustedHosts } from "../pkg/http"
-import { renameStepsRouter, prepareRenameTicket } from "./rename_steps"
+import {
+  renameStepsRouter,
+  prepareRenameTicket,
+  prepareB2Rename,
+} from "./rename_steps"
 import { seedRouter } from "./seed"
 import { S3Driver } from "../drivers/s3/driver"
 import { withDirectoryMutation } from "../internal/op/directory-cache"
+import { getB2RenameJob, isB2Storage, isB2MigrationLocked } from "./b2_rename"
 
 /**
  * 该路径所属存储是否禁止目录列表（对齐 Go handles.FsList 的 DisableIndex 判断）。
@@ -80,13 +86,17 @@ export const fsRouter = new Hono()
 fsRouter.route("/seed", seedRouter)
 
 const getStorageRequestContext = (c: any) => {
-  const context: import("../internal/op/storage").StorageRequestContext = { env: c.env }
+  const context: import("../internal/op/storage").StorageRequestContext = {
+    env: c.env,
+  }
   try {
     const executionCtx = c.executionCtx
     if (typeof executionCtx?.waitUntil === "function") {
       context.waitUntil = (promise) => executionCtx.waitUntil(promise)
     }
-  } catch { /* Non-Worker runtime. */ }
+  } catch {
+    /* Non-Worker runtime. */
+  }
   return context
 }
 
@@ -98,26 +108,51 @@ fsRouter.get("/usage", async (c) => {
   if (!user || user.disabled || !isAdmin(user))
     return c.json({ code: 403, message: "Forbidden", data: null }, 403)
   const path = c.req.query("path") || "/"
-  if (path.startsWith("/@s")) return c.json({ code: 403, message: "Forbidden", data: null }, 403)
+  if (path.startsWith("/@s"))
+    return c.json({ code: 403, message: "Forbidden", data: null }, 403)
   try {
     if (c.req.query("scope") === "all") {
       const db = await getDb(c.env)
-      const mounts = (db.storages || []).filter(storage => !storage.disabled)
-        .map(storage => ({ storage_id: storage.id, mount_path: storage.mount_path }))
+      const mounts = (db.storages || [])
+        .filter((storage) => !storage.disabled)
+        .map((storage) => ({
+          storage_id: storage.id,
+          mount_path: storage.mount_path,
+        }))
       return c.json({ code: 200, message: "success", data: { mounts } })
     }
     const resolved = await resolvePath(getActualPath(user, path), c.env)
     const storage = resolved.storage
-    if (!storage) return c.json({ code: 200, message: "success", data: { supported: false } })
+    if (!storage)
+      return c.json({
+        code: 200,
+        message: "success",
+        data: { supported: false },
+      })
     const driver = await getDriver(storage.driver, storage)
     const scope = { storage_id: storage.id, mount_path: storage.mount_path }
     if (driver instanceof S3Driver) {
       const page = await driver.usagePage(c.req.query("cursor"))
-      return c.json({ code: 200, message: "success", data: { ...scope, supported: true, ...page } })
+      return c.json({
+        code: 200,
+        message: "success",
+        data: { ...scope, supported: true, ...page },
+      })
     }
-    const details = typeof (driver as any).getDetails === "function" ? await (driver as any).getDetails() : undefined
+    const details =
+      typeof (driver as any).getDetails === "function"
+        ? await (driver as any).getDetails()
+        : undefined
     const bytes = details?.used_space
-    return c.json({ code: 200, message: "success", data: { ...scope, supported: Number.isFinite(bytes) && bytes >= 0, bytes } })
+    return c.json({
+      code: 200,
+      message: "success",
+      data: {
+        ...scope,
+        supported: Number.isFinite(bytes) && bytes >= 0,
+        bytes,
+      },
+    })
   } catch (error) {
     return c.json({ code: 500, message: safeErrorMessage(error), data: null })
   }
@@ -243,7 +278,8 @@ fsRouter.post("/list", async (c) => {
   }
   const requestContext = getStorageRequestContext(c)
   requestContext.refreshDirectory = body.refresh === true
-  requestContext.onDirectoryCache = (status) => c.header("X-Openlist-Directory-Cache", status)
+  requestContext.onDirectoryCache = (status) =>
+    c.header("X-Openlist-Directory-Cache", status)
   c.header("Cache-Control", "private, no-store")
   const reqPath = getActualPath(user, body.path || "/")
   const page = parseInt(body.page, 10) || 1
@@ -365,7 +401,11 @@ fsRouter.post("/list", async (c) => {
     const meta = await getNearestMeta(reqPath, c.env)
     if (!canAccess(user, meta, reqPath, body.password || "")) {
       return c.json(
-        { code: 403, message: "Access denied (wrong password or not in read_users)", data: null },
+        {
+          code: 403,
+          message: "Access denied (wrong password or not in read_users)",
+          data: null,
+        },
         403,
       )
     }
@@ -374,7 +414,11 @@ fsRouter.post("/list", async (c) => {
     // 即使有读权限也不返回内容，避免分享单文件后被逐级浏览整个存储。
     if (await isStorageIndexDisabled(reqPath)) {
       return c.json(
-        { code: 403, message: "Index is disabled for this storage", data: null },
+        {
+          code: 403,
+          message: "Index is disabled for this storage",
+          data: null,
+        },
         403,
       )
     }
@@ -397,9 +441,19 @@ fsRouter.post("/list", async (c) => {
       reqPath,
       requestContext,
     )
+    const migration =
+      storage && isB2Storage(storage)
+        ? await getB2RenameJob(c.env, storage.id)
+        : null
+    const migrationLocked =
+      !!migration &&
+      (reqPath === migration.target_virtual ||
+        reqPath.startsWith(migration.target_virtual + "/"))
     // write：用户写权限 + meta.write_users 白名单（对齐 Go common.CanWrite）
     const writable =
-      (canWrite(user) || canRemove(user)) && canWriteMeta(user, meta, reqPath)
+      !migrationLocked &&
+      (canWrite(user) || canRemove(user)) &&
+      canWriteMeta(user, meta, reqPath)
     const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
     // Normalize each item to the full Obj shape expected by the frontend
     const normalized = await Promise.all(
@@ -413,7 +467,8 @@ fsRouter.post("/list", async (c) => {
               : ""
           // hashinfo / hash_info：从驱动透传哈希信息（Go ObjResp 字段）
           // 驱动不支持时为空字符串/空对象，保持与 Go 响应结构兼容
-          const hashInfoStr: string = (item as any).hashinfo || (item as any).hash_info_str || ""
+          const hashInfoStr: string =
+            (item as any).hashinfo || (item as any).hash_info_str || ""
           const hashInfo: Record<string, string> = (item as any).hash_info || {}
           return {
             name: item.name,
@@ -426,6 +481,7 @@ fsRouter.post("/list", async (c) => {
             type: item.type ?? 0,
             hashinfo: hashInfoStr,
             hash_info: hashInfo,
+            ...(item.migration ? { migration: item.migration } : {}),
           }
         }),
     )
@@ -465,9 +521,11 @@ fsRouter.post("/list", async (c) => {
     const directUploadTools: string[] = (() => {
       if (!storage) return []
       const tools: string[] = []
-      const driver = (storage as any)
+      const driver = storage as any
       // S3 系列驱动支持 s3_presigned 直传
-      if (/^(s3|minio|cos|oss|r2|b2|cloudflare_r2)/i.test(driver.driver || "")) {
+      if (
+        /^(s3|minio|cos|oss|r2|b2|cloudflare_r2)/i.test(driver.driver || "")
+      ) {
         tools.push("s3_presigned")
       }
       // 驱动自声明的 direct_upload_tools 字段（驱动扩展点）
@@ -583,7 +641,11 @@ fsRouter.post("/get", async (c) => {
     const meta = await getNearestMeta(reqPath, c.env)
     if (!canAccess(user, meta, reqPath, body.password || "")) {
       return c.json(
-        { code: 403, message: "Access denied (wrong password or not in read_users)", data: null },
+        {
+          code: 403,
+          message: "Access denied (wrong password or not in read_users)",
+          data: null,
+        },
         403,
       )
     }
@@ -618,8 +680,11 @@ fsRouter.post("/get", async (c) => {
       sign && rawUrl && !/[?&]sign=/.test(rawUrl)
         ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}sign=${sign}`
         : rawUrl
+    const resolvedForWrite = await resolvePath(reqPath, c.env)
     const writable =
-      (canWrite(user) || canRemove(user)) && canWriteMeta(user, meta, reqPath)
+      (canWrite(user) || canRemove(user)) &&
+      canWriteMeta(user, meta, reqPath) &&
+      !(await isB2MigrationLocked(c.env, resolvedForWrite.storage, reqPath))
     const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
 
     // Related：查找同目录中文件名前缀相同的文件（字幕 .srt/.ass/.vtt、NFO 等）
@@ -634,7 +699,10 @@ fsRouter.post("/get", async (c) => {
         const stem = item.name.includes(".")
           ? item.name.slice(0, item.name.lastIndexOf("."))
           : item.name
-        const { content: siblings } = await listItems(parentPath, requestContext)
+        const { content: siblings } = await listItems(
+          parentPath,
+          requestContext,
+        )
         related = siblings
           .filter((s: any) => {
             if (s.name === item.name || s.is_dir) return false
@@ -712,6 +780,12 @@ function validateDirPath(p: any): string {
   return p
 }
 
+async function assertUploadPathWritable(env: any, path: string): Promise<void> {
+  const resolved = await resolvePath(path, env)
+  if (resolved.storage)
+    await assertB2PathWritable(resolved.storage, path, { env })
+}
+
 fsRouter.post("/mkdir", async (c) => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return permissionDenied(c)
@@ -737,7 +811,11 @@ fsRouter.route("/rename", renameStepsRouter)
 fsRouter.post("/rename", async (c) => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return permissionDenied(c)
-  const { path: oldPath, name: newName, staged } = await c.req.json().catch(() => ({}))
+  const {
+    path: oldPath,
+    name: newName,
+    staged,
+  } = await c.req.json().catch(() => ({}))
   let cleanName = ""
   try {
     validateDirPath(oldPath || "/")
@@ -748,8 +826,15 @@ fsRouter.post("/rename", async (c) => {
   const requestContext = getStorageRequestContext(c)
   try {
     if (staged === true) {
+      const b2 = await prepareB2Rename(c, user, oldPath, cleanName)
+      if (b2) return c.json({ code: 200, message: "success", data: b2 })
       const ticket = await prepareRenameTicket(c, user, oldPath, cleanName)
-      if (ticket) return c.json({ code: 200, message: "success", data: { ticket, done: false } })
+      if (ticket)
+        return c.json({
+          code: 200,
+          message: "success",
+          data: { ticket, done: false },
+        })
     }
     const actualOldPath = getActualPath(user, oldPath || "/")
     await renameItem(actualOldPath, cleanName, requestContext)
@@ -972,6 +1057,7 @@ fsRouter.post("/upload/create", async (c) => {
     })
   }
   try {
+    await assertUploadPathWritable(c.env, dirPath)
     const resolved = await resolvePath(dirPath)
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
@@ -1031,6 +1117,7 @@ fsRouter.put("/upload/part", async (c) => {
     )
   }
   try {
+    await assertUploadPathWritable(c.env, dirPath)
     const resolved = await resolvePath(dirPath)
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
@@ -1076,6 +1163,7 @@ fsRouter.post("/upload/complete", async (c) => {
     })
   }
   try {
+    await assertUploadPathWritable(c.env, dirPath)
     const resolved = await resolvePath(dirPath)
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
@@ -1166,7 +1254,8 @@ fsRouter.post("/other", async (c) => {
   // obtain a direct-upload URL and bypass the upload permission check.
   if (!canWrite(user)) return permissionDenied(c)
   try {
-    const resolved = await resolvePath(reqPath)
+    await assertUploadPathWritable(c.env, reqPath)
+    const resolved = await resolvePath(reqPath, c.env)
     if (resolved.isVirtual || !resolved.storage) {
       throw new Error("failed get storage: storage not found")
     }
@@ -1398,6 +1487,7 @@ fsRouter.post("/get_direct_upload_info", async (c) => {
   const { path, file_name, file_size } = await c.req.json().catch(() => ({}))
   const reqPath = getActualPath(user, path || "/")
   try {
+    await assertUploadPathWritable(c.env, reqPath)
     const resolved = await resolvePath(reqPath)
     if (resolved.isVirtual || !resolved.storage) {
       return c.json({ code: 200, message: "success", data: null })
@@ -1450,6 +1540,7 @@ async function ownedMultipartSession(c: any, user: any, uploadId: string) {
   const session = await getSession(uploadId, c.env)
   if (!session) return
   const actualDir = getActualPath(user, splitUploadPath(session.path).dir)
+  await assertUploadPathWritable(c.env, actualDir)
   const resolved = await resolvePath(actualDir)
   if (resolved.isVirtual || !resolved.storage) return
   const scope = await uploadScope(
@@ -1472,7 +1563,10 @@ fsRouter.post("/multipart/init", async (c) => {
   const md5 = c.req.header("X-File-Md5") || ""
   const resumeToken = c.req.header("X-Upload-Token") || ""
   if (resumeToken && !/^[a-zA-Z0-9_-]{16,128}$/.test(resumeToken)) {
-    return c.json({ code: 400, message: "Invalid X-Upload-Token", data: null }, 400)
+    return c.json(
+      { code: 400, message: "Invalid X-Upload-Token", data: null },
+      400,
+    )
   }
 
   if (!rawPath.trim() || !Number.isSafeInteger(size) || size <= 0) {
@@ -1492,6 +1586,7 @@ fsRouter.post("/multipart/init", async (c) => {
 
   try {
     validateDirPath(rawPath)
+    await assertUploadPathWritable(c.env, actualDir)
     const resolved = await resolvePath(actualDir)
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
@@ -1525,7 +1620,13 @@ fsRouter.post("/multipart/init", async (c) => {
         400,
       )
     }
-    const scope = await uploadScope(user, resolved.storage, actualDir, md5, resumeToken)
+    const scope = await uploadScope(
+      user,
+      resolved.storage,
+      actualDir,
+      md5,
+      resumeToken,
+    )
 
     // Resume only within the same owner/storage/file/task scope. Legacy clients
     // without a task token retain the existing path+size behavior.
@@ -1593,7 +1694,11 @@ fsRouter.post("/multipart/init", async (c) => {
     return c.json({
       code: 200,
       message: "success",
-      data: { ...mpSnapshot(session), resumed, resume_token: session.resume_token },
+      data: {
+        ...mpSnapshot(session),
+        resumed,
+        resume_token: session.resume_token,
+      },
     })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null }, 500)
@@ -1655,7 +1760,8 @@ fsRouter.put("/multipart/chunk", async (c) => {
     const resolved = await resolvePath(
       getActualPath(user, splitUploadPath(session.path).dir),
     )
-    if (resolved.isVirtual) throw new Error("failed get storage: storage not found")
+    if (resolved.isVirtual)
+      throw new Error("failed get storage: storage not found")
     const driver = await getDriver(resolved.storage!.driver, resolved.storage)
     if (typeof (driver as any).uploadPart !== "function") {
       throw new Error("storage does not support chunked upload")
@@ -1692,7 +1798,11 @@ fsRouter.put("/multipart/chunk", async (c) => {
         const bytes = await readPartBody(c.req.raw, expected)
         if (!bytes)
           return c.json(
-            { code: 400, message: `Invalid chunk size (expected ${expected} bytes)`, data: null },
+            {
+              code: 400,
+              message: `Invalid chunk size (expected ${expected} bytes)`,
+              data: null,
+            },
             400,
           )
         result = await (driver as any).uploadPart(
@@ -1767,7 +1877,8 @@ fsRouter.post("/multipart/complete", async (c) => {
     const resolved = await resolvePath(
       getActualPath(user, splitUploadPath(session.path).dir),
     )
-    if (resolved.isVirtual) throw new Error("failed get storage: storage not found")
+    if (resolved.isVirtual)
+      throw new Error("failed get storage: storage not found")
     const driver = await getDriver(resolved.storage!.driver, resolved.storage)
     if (typeof (driver as any).completeUploadSession !== "function") {
       throw new Error("storage does not support chunked upload")
@@ -1873,7 +1984,14 @@ fsRouter.post("/multipart/abort", async (c) => {
 // 7z/rar：Worker 运行时无原生解析库，明确返回 501。
 // 归档内容在内存中解析，受 Worker 内存限制，适合中小型归档。
 
-type ArchiveFormat = "zip" | "tar" | "tar.gz" | "tar.bz2" | "tar.xz" | "7z" | "rar"
+type ArchiveFormat =
+  | "zip"
+  | "tar"
+  | "tar.gz"
+  | "tar.bz2"
+  | "tar.xz"
+  | "7z"
+  | "rar"
 
 function detectArchiveFormat(name: string): ArchiveFormat | null {
   const lower = name.toLowerCase()
@@ -1900,7 +2018,8 @@ async function fetchArchiveBytes(
 ): Promise<ArrayBuffer> {
   const actual = getActualPath(user, virtualPath)
   const resolved = await resolvePath(actual)
-  if (resolved.isVirtual) throw new Error("failed get storage: storage not found")
+  if (resolved.isVirtual)
+    throw new Error("failed get storage: storage not found")
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   let item: any
   try {
@@ -1979,7 +2098,18 @@ function calcFileTypeSafe(name: string, isDir: boolean): number {
   const video = ["mp4", "mkv", "webm", "avi", "mov", "flv", "m3u8"]
   const audio = ["mp3", "flac", "wav", "aac", "ogg", "m4a"]
   const image = ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "ico"]
-  const text = ["txt", "md", "json", "js", "ts", "css", "html", "xml", "yml", "log"]
+  const text = [
+    "txt",
+    "md",
+    "json",
+    "js",
+    "ts",
+    "css",
+    "html",
+    "xml",
+    "yml",
+    "log",
+  ]
   if (video.includes(ext)) return 2
   if (audio.includes(ext)) return 3
   if (image.includes(ext)) return 4
@@ -1989,20 +2119,28 @@ function calcFileTypeSafe(name: string, isDir: boolean): number {
 
 fsRouter.post("/archive/meta", async (c) => {
   const user = await getUserFromContext(c)
-  if (!user || user.disabled) return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  if (!user || user.disabled)
+    return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   const body = await c.req.json().catch(() => ({}))
   const path = String(body.path || c.req.query("path") || "").trim()
-  if (!path) return c.json({ code: 400, message: "path is required", data: null }, 400)
+  if (!path)
+    return c.json({ code: 400, message: "path is required", data: null }, 400)
   const fmt = detectArchiveFormat(path)
   if (!fmt) {
-    return c.json({ code: 400, message: "unrecognized archive format", data: null }, 400)
+    return c.json(
+      { code: 400, message: "unrecognized archive format", data: null },
+      400,
+    )
   }
   if (!isNativelySupported(fmt)) {
-    return c.json({
-      code: 501,
-      message: `archive format '${fmt}' is recognized but not supported in this runtime (Worker supports ZIP only); use the Go backend for ${fmt} archives`,
-      data: null,
-    }, 501)
+    return c.json(
+      {
+        code: 501,
+        message: `archive format '${fmt}' is recognized but not supported in this runtime (Worker supports ZIP only); use the Go backend for ${fmt} archives`,
+        data: null,
+      },
+      501,
+    )
   }
   try {
     const bytes = await fetchArchiveBytes(c, user, path)
@@ -2026,21 +2164,31 @@ fsRouter.post("/archive/meta", async (c) => {
 
 fsRouter.post("/archive/list", async (c) => {
   const user = await getUserFromContext(c)
-  if (!user || user.disabled) return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  if (!user || user.disabled)
+    return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   const body = await c.req.json().catch(() => ({}))
   const path = String(body.path || c.req.query("path") || "").trim()
-  const innerPath = String(body.inner_path || "").trim().replace(/\/+/g, "/")
-  if (!path) return c.json({ code: 400, message: "path is required", data: null }, 400)
+  const innerPath = String(body.inner_path || "")
+    .trim()
+    .replace(/\/+/g, "/")
+  if (!path)
+    return c.json({ code: 400, message: "path is required", data: null }, 400)
   const fmtList = detectArchiveFormat(path)
   if (!fmtList) {
-    return c.json({ code: 400, message: "unrecognized archive format", data: null }, 400)
+    return c.json(
+      { code: 400, message: "unrecognized archive format", data: null },
+      400,
+    )
   }
   if (!isNativelySupported(fmtList)) {
-    return c.json({
-      code: 501,
-      message: `archive format '${fmtList}' is recognized but not supported in this runtime; use the Go backend for ${fmtList} archives`,
-      data: null,
-    }, 501)
+    return c.json(
+      {
+        code: 501,
+        message: `archive format '${fmtList}' is recognized but not supported in this runtime; use the Go backend for ${fmtList} archives`,
+        data: null,
+      },
+      501,
+    )
   }
   try {
     const bytes = await fetchArchiveBytes(c, user, path)
@@ -2080,14 +2228,24 @@ fsRouter.post("/archive/list", async (c) => {
 
 fsRouter.post("/archive/decompress", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return c.json({ code: 403, message: "Permission denied", data: null }, 403)
+  if (!canWrite(user))
+    return c.json({ code: 403, message: "Permission denied", data: null }, 403)
   const body = await c.req.json().catch(() => ({}))
   const srcDir = String(body.src_dir || "").trim()
   const dstDir = String(body.dst_dir || "").trim()
-  const names: string[] = Array.isArray(body.name) ? body.name : body.name ? [String(body.name)] : []
-  const innerPath = String(body.inner_path || "").trim().replace(/\/+/g, "/")
+  const names: string[] = Array.isArray(body.name)
+    ? body.name
+    : body.name
+      ? [String(body.name)]
+      : []
+  const innerPath = String(body.inner_path || "")
+    .trim()
+    .replace(/\/+/g, "/")
   if (!names.length || !dstDir) {
-    return c.json({ code: 400, message: "src_dir/dst_dir/name are required", data: null }, 400)
+    return c.json(
+      { code: 400, message: "src_dir/dst_dir/name are required", data: null },
+      400,
+    )
   }
   try {
     let count = 0
@@ -2095,7 +2253,14 @@ fsRouter.post("/archive/decompress", async (c) => {
       const srcPath = srcDir ? `${srcDir}/${name}` : `/${name}`
       const fmtDecomp = detectArchiveFormat(name)
       if (!fmtDecomp || !isNativelySupported(fmtDecomp)) {
-        return c.json({ code: 400, message: `unsupported archive format: ${name} (only ZIP is supported)`, data: null }, 400)
+        return c.json(
+          {
+            code: 400,
+            message: `unsupported archive format: ${name} (only ZIP is supported)`,
+            data: null,
+          },
+          400,
+        )
       }
       const bytes = await fetchArchiveBytes(c, user, srcPath)
       const archive = parseZip(bytes)
@@ -2106,11 +2271,19 @@ fsRouter.post("/archive/decompress", async (c) => {
         if (!rel || rel.endsWith("/")) continue
         const targetPath = `${dstDir.replace(/\/+$/, "")}/${rel}`
         const content = await extractZipEntry(bytes, entry)
-        await putItem(targetPath, Buffer.from(content), getStorageRequestContext(c))
+        await putItem(
+          targetPath,
+          Buffer.from(content),
+          getStorageRequestContext(c),
+        )
         count++
       }
     }
-    return c.json({ code: 200, message: "success", data: { task: null, count } })
+    return c.json({
+      code: 200,
+      message: "success",
+      data: { task: null, count },
+    })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null }, 500)
   }

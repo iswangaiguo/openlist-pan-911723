@@ -7,6 +7,7 @@ import { resolvePath, getDb, getSettings, saveDb } from "../model/db"
 import { encodeDownloadPath } from "../../pkg/path"
 import { canUseProxyEndpoint, normalizeExtList } from "../driver/proxy"
 import { FileItem, StorageDriver, calcFileType } from "../driver/base"
+import { sortFileItems } from "../driver/sort"
 import { Onedrive } from "../../drivers/onedrive/driver"
 import { OnedriveAPP } from "../../drivers/onedrive_app/driver"
 import { AliyundriveOpen } from "../../drivers/aliyundrive_open/driver"
@@ -55,6 +56,14 @@ import { WebdavDriver } from "../../drivers/webdav/driver"
 import { WoPanDriver, normalizeWoPanAddition } from "../../drivers/wopan/driver"
 import { MoPanDriver } from "../../drivers/mopan/driver"
 import { S3Driver, normalizeS3Addition } from "../../drivers/s3/driver"
+import {
+  getB2RenameJob,
+  isB2Storage,
+  b2ReadPaths,
+  b2OverlayNames,
+  assertB2RenameWritable,
+  startB2Rename,
+} from "../../server/b2_rename"
 import {
   WeiyunDriver,
   normalizeWeiyunAddition,
@@ -146,6 +155,17 @@ function setDriverCache(key: string, driver: StorageDriver): void {
 export interface StorageRequestContext extends DirectoryCacheContext {
   waitUntil?: (promise: Promise<unknown>) => void
   env?: any // ESA/Cloudflare env，用于请求级缓存复用
+}
+
+export async function assertB2PathWritable(
+  storage: any,
+  virtualPath: string,
+  requestContext?: StorageRequestContext,
+  includeAncestors = false,
+): Promise<void> {
+  if (!isB2Storage(storage)) return
+  const job = await getB2RenameJob(requestContext?.env, storage.id)
+  assertB2RenameWritable(job, virtualPath, includeAncestors)
 }
 
 export interface GetDriverOptions {
@@ -1160,25 +1180,28 @@ async function createDriver(
     await driver.init?.()
   } else if (normDriver === "guangyapan" || normDriver === "guangya") {
     const addition = parseAddition(storageConfig)
-    driver = new GuangYaPanDriver(addition, async (accessToken, refreshToken) => {
-      try {
-        const db = await getDb()
-        const st = (db.storages || []).find(
-          (s: any) => s.id === storageConfig?.id,
-        )
-        if (!st) return
-        const stAddition =
-          typeof st.addition === "string"
-            ? JSON.parse(st.addition || "{}")
-            : st.addition || {}
-        stAddition.access_token = accessToken
-        if (refreshToken) stAddition.refresh_token = refreshToken
-        st.addition = JSON.stringify(stAddition)
-        await saveDb(db)
-      } catch (e) {
-        console.warn("[GuangYaPan] failed to persist tokens:", e)
-      }
-    })
+    driver = new GuangYaPanDriver(
+      addition,
+      async (accessToken, refreshToken) => {
+        try {
+          const db = await getDb()
+          const st = (db.storages || []).find(
+            (s: any) => s.id === storageConfig?.id,
+          )
+          if (!st) return
+          const stAddition =
+            typeof st.addition === "string"
+              ? JSON.parse(st.addition || "{}")
+              : st.addition || {}
+          stAddition.access_token = accessToken
+          if (refreshToken) stAddition.refresh_token = refreshToken
+          st.addition = JSON.stringify(stAddition)
+          await saveDb(db)
+        } catch (e) {
+          console.warn("[GuangYaPan] failed to persist tokens:", e)
+        }
+      },
+    )
     await driver.init?.()
   } else {
     throw new Error(
@@ -1196,8 +1219,8 @@ export async function getDriver(
 ): Promise<StorageDriver> {
   const deferTokenPersistence = Boolean(
     options.deferTokenPersistence &&
-      storageConfig &&
-      typeof storageConfig === "object",
+    storageConfig &&
+    typeof storageConfig === "object",
   )
   if (deferTokenPersistence) deferredTokenPersistence.add(storageConfig)
 
@@ -1347,18 +1370,50 @@ export async function listItems(
     driverName = resolved.storage.driver
     try {
       const driver = await getDriver(driverName, resolved.storage)
+      const renameJob = isB2Storage(resolved.storage)
+        ? await getB2RenameJob(requestContext?.env, resolved.storage.id)
+        : null
       // Get raw items from driver
       try {
-        items = await cachedDirectory(
-          resolved.storage,
-          resolved.physical!,
-          virtualPath,
-          requestContext,
-          () =>
-            driver instanceof S3Driver
-              ? driver.listMetadata(virtualPath, resolved.physical!)
-              : driver.list(virtualPath, resolved.physical!),
-        )
+        const paths = b2ReadPaths(renameJob, virtualPath, resolved.physical!)
+        const load = async () => {
+          if (!(driver instanceof S3Driver) || paths.length === 1)
+            return driver instanceof S3Driver
+              ? driver.listMetadata(virtualPath, paths[0])
+              : driver.list(virtualPath, paths[0])
+          const [target, source] = await Promise.all(
+            paths.map((path) => driver.listMetadata(virtualPath, path)),
+          )
+          const merged = [
+            ...new Map(
+              [...source, ...target].map((item) => [item.name, item]),
+            ).values(),
+          ]
+          const addition = parseAddition(resolved.storage)
+          return sortFileItems(
+            merged,
+            addition.order_by || "name",
+            addition.order_direction || "asc",
+          )
+        }
+        items = renameJob
+          ? await load()
+          : await cachedDirectory(
+              resolved.storage,
+              resolved.physical!,
+              virtualPath,
+              requestContext,
+              load,
+            )
+        items = b2OverlayNames(renameJob, virtualPath, items)
+        if (renameJob) {
+          const addition = parseAddition(resolved.storage)
+          items = sortFileItems(
+            items,
+            addition.order_by || "name",
+            addition.order_direction || "asc",
+          )
+        }
       } finally {
         await flushPendingDriverState(
           driverName,
@@ -1519,9 +1574,28 @@ export async function getItem(
 
   const driverName = resolved.storage ? resolved.storage.driver : "Local"
   const driver = await getDriver(driverName, resolved.storage)
+  const renameJob = isB2Storage(resolved.storage)
+    ? await getB2RenameJob(requestContext?.env, resolved.storage.id)
+    : null
   let item: FileItem
   try {
-    item = await driver.get(virtualPath, resolved.physical!)
+    const paths = b2ReadPaths(renameJob, virtualPath, resolved.physical!)
+    let found: FileItem | undefined
+    for (const path of paths) {
+      try {
+        found = await driver.get(virtualPath, path)
+        break
+      } catch (error) {
+        if (
+          path === paths[paths.length - 1] ||
+          !String(error).includes("Object not found")
+        )
+          throw error
+      }
+    }
+    item = found!
+    if (renameJob && virtualPath === renameJob.target_virtual)
+      item = { ...item, name: renameJob.target_virtual.split("/").pop()! }
   } finally {
     await flushPendingDriverState(
       driverName,
@@ -1552,6 +1626,7 @@ export async function makeDirectory(
   if (resolved.isVirtual) {
     throw new Error("failed get storage: storage not found")
   }
+  await assertB2PathWritable(resolved.storage, virtualPath, requestContext)
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
     await withDirectoryMutation(
@@ -1580,12 +1655,33 @@ export async function renameItem(
   if (resolved.isVirtual) {
     throw new Error("failed get storage: storage not found")
   }
+  await assertB2PathWritable(resolved.storage, virtualPath, requestContext, true)
+  await assertB2PathWritable(
+    resolved.storage,
+    virtualPath.slice(0, virtualPath.lastIndexOf("/")) + "/" + newName,
+    requestContext,
+  )
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
     await withDirectoryMutation(
       [resolved.storage],
       requestContext,
       async () => {
+        if (driver instanceof S3Driver && isB2Storage(resolved.storage)) {
+          if (resolved.relative === "/")
+            throw new Error("A storage mount root cannot be renamed")
+          const item = await driver.get(virtualPath, resolved.physical!)
+          if (item.is_dir) {
+            await startB2Rename(
+              requestContext?.env,
+              resolved.storage,
+              virtualPath,
+              resolved.physical!,
+              newName,
+            )
+            return
+          }
+        }
         await driver.rename(virtualPath, resolved.physical!, newName)
       },
     )
@@ -1610,6 +1706,7 @@ export async function removeItems(
     if (resolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
     }
+    await assertB2PathWritable(resolved.storage, itemVirtual, requestContext, true)
     const driver = await getDriver(resolved.storage!.driver, resolved.storage)
     try {
       await withDirectoryMutation(
@@ -1648,6 +1745,8 @@ export async function moveItems(
     if (srcResolved.isVirtual || dstResolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
     }
+    await assertB2PathWritable(srcResolved.storage, srcVirtual, requestContext, true)
+    await assertB2PathWritable(dstResolved.storage, dstVirtual, requestContext)
 
     const driver = await getDriver(
       srcResolved.storage!.driver,
@@ -1692,6 +1791,8 @@ export async function copyItems(
     if (srcResolved.isVirtual || dstResolved.isVirtual) {
       throw new Error("failed get storage: storage not found")
     }
+    await assertB2PathWritable(srcResolved.storage, srcVirtual, requestContext, true)
+    await assertB2PathWritable(dstResolved.storage, dstVirtual, requestContext)
 
     const driver = await getDriver(
       srcResolved.storage!.driver,
@@ -1731,6 +1832,7 @@ export async function putItem(
   if (resolved.isVirtual) {
     throw new Error("failed get storage: storage not found")
   }
+  await assertB2PathWritable(resolved.storage, virtualPath, requestContext)
   const driver = await getDriver(resolved.storage!.driver, resolved.storage)
   try {
     await withDirectoryMutation(
