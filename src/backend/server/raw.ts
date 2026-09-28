@@ -21,6 +21,7 @@ import {
   normalizeExtList,
 } from "../internal/driver/proxy"
 import { getProxyRange } from "../internal/driver/storageopts"
+import { b2ReadPaths, getB2RenameJob, isB2Storage } from "./b2_rename"
 import {
   buildUpstreamHeaders,
   shouldRetryWithoutRange,
@@ -522,7 +523,7 @@ rawRouter.get("/*", async (c) => {
       }
     }
 
-    const resolved = await resolvePath(reqPath)
+    const resolved = await resolvePath(reqPath, c.env)
 
     if (resolved.isVirtual || !resolved.physical) {
       return c.text("Cannot download virtual directory path", 400)
@@ -580,7 +581,22 @@ rawRouter.get("/*", async (c) => {
           )
           let fileItem
           try {
-            fileItem = await driver.get(reqPath, resolved.physical)
+            const job = isB2Storage(resolved.storage)
+              ? await getB2RenameJob(c.env, resolved.storage.id)
+              : null
+            const paths = b2ReadPaths(job, reqPath, resolved.physical)
+            for (const path of paths) {
+              try {
+                fileItem = await driver.get(reqPath, path)
+                break
+              } catch (error) {
+                if (
+                  path === paths[paths.length - 1] ||
+                  !String(error).includes("Object not found")
+                )
+                  throw error
+              }
+            }
           } finally {
             await flushPendingDriverState(
               resolved.storage.driver,

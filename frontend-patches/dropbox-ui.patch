@@ -1972,7 +1972,7 @@ new file mode 100644
 index 0000000..0cbc8ad
 --- /dev/null
 +++ b/src/pages/home/folder/InlineRename.tsx
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,234 @@
 +import { currentLang } from "~/app/i18n"
 +import { createSignal, onMount, Show } from "solid-js"
 +import { usePath, useRouter, useT } from "~/hooks"
@@ -2075,6 +2075,31 @@ index 0000000..0cbc8ad
 +          staged: true,
 +        })
 +        if (response.code !== 200) throw new Error(response.message)
++        if (response.data?.jobId) {
++          const sourcePath = pathJoin(session.directory, session.name)
++          close()
++          if (pathname() === session.directory) refresh(undefined, true)
++          notify.success(text(
++            "目录已更名，正在同步 B2 中的文件名",
++            "Folder renamed; B2 names are syncing in the background",
++          ))
++          void (async () => {
++            try {
++              while (true) {
++                const step: any = await r.post("/fs/rename/b2/step", { path: sourcePath })
++                if (step.code !== 200 || !step.data) throw new Error(step.message)
++                if (step.data.done) break
++                if (step.data.state === "paused") throw new Error(step.data.error || "B2 rename paused")
++                await new Promise((resolve) => setTimeout(resolve, 250))
++              }
++              notify.success(text("B2 目录名称同步完成", "B2 folder rename completed"))
++              if (pathname() === session.directory) refresh(undefined, true)
++            } catch (error) {
++              notify.error(String(error))
++            }
++          })()
++          return
++        }
 +        ticket = response.data?.ticket
 +        if (ticket) remember()
 +      }
@@ -2285,12 +2310,13 @@ diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem
 index 4893a59..631ca53 100644
 --- a/src/pages/home/folder/ListItem.tsx
 +++ b/src/pages/home/folder/ListItem.tsx
-@@ -6,13 +6,12 @@ import {
+@@ -6,13 +6,13 @@ import {
    ProgressLabel,
    Text,
  } from "@hope-ui/solid"
 -import { Motion } from "solid-motionone"
 +import { currentLang } from "~/app/i18n"
++import { notify, r } from "~/utils"
  import { useContextMenu } from "solid-contextmenu"
  import { batch, Show } from "solid-js"
  import { LinkWithPush } from "~/components"
@@ -2300,7 +2326,7 @@ index 4893a59..631ca53 100644
    getMainColor,
    getSettingBool,
    local,
-@@ -31,6 +30,9 @@ import {
+@@ -31,6 +31,9 @@ import {
    nearlyFull,
  } from "~/utils"
  import { getIconByObj } from "~/utils/icon"
@@ -2310,11 +2336,12 @@ index 4893a59..631ca53 100644
  import { ItemCheckbox, useSelectWithMouse } from "./helper"
 
  export interface Col {
-@@ -55,16 +57,35 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -55,16 +58,36 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
    const { pushHref, to } = useRouter()
    const { openWithDoubleClick, toggleWithClick, restoreSelectionCache } =
      useSelectWithMouse()
 +  const { pathname } = useRouter()
++  const { refresh } = usePath()
 +  const editing = () =>
 +    inlineRename()?.directory === pathname() &&
 +    inlineRename()?.name === props.obj.name
@@ -2352,7 +2379,7 @@ index 4893a59..631ca53 100644
        <HStack
          classList={{ selected: !!props.obj.selected }}
          class="list-item viselect-item"
-@@ -77,18 +98,20 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -77,18 +100,20 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            transform: "scale(1.01)",
            bgColor: hoverColor(),
          }}
@@ -2374,7 +2401,7 @@ index 4893a59..631ca53 100644
            e.preventDefault()
            if (openWithDoubleClick()) return
            if (e.ctrlKey || e.metaKey || e.shiftKey) return
-@@ -111,21 +134,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -111,21 +136,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
          }}
        >
          <HStack class="name-box" spacing="$1" w={cols[0].w}>
@@ -2396,7 +2423,7 @@ index 4893a59..631ca53 100644
            <Icon
              class="icon"
              boxSize="$6"
-@@ -142,25 +150,33 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -142,25 +152,55 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
                e.stopPropagation()
              }}
            />
@@ -2438,6 +2465,28 @@ index 4893a59..631ca53 100644
 +                title={props.obj.name}
 +              >
 +                {props.obj.name}
++                <Show when={(props.obj as any).migration}>
++                  <span style={{ "font-size": "11px", "margin-left": "8px", opacity: 0.7 }}>
++                    {(props.obj as any).migration.state === "paused"
++                      ? String(currentLang()).startsWith("zh") ? "B2 同步已暂停" : "B2 sync paused"
++                      : `${String(currentLang()).startsWith("zh") ? "B2 同步" : "B2 syncing"} ${(props.obj as any).migration.processed}/${(props.obj as any).migration.discovered}`}
++                  </span>
++                </Show>
++                <Show when={(props.obj as any).migration?.state === "paused"}>
++                  <button type="button" on:click={async (event: MouseEvent) => {
++                    event.preventDefault()
++                    event.stopPropagation()
++                    const result: any = await r.post("/fs/rename/b2/resume", {
++                      path: (props.obj as any).migration.source_path,
++                    })
++                    if (result.code === 200) {
++                      notify.success(String(currentLang()).startsWith("zh") ? "B2 同步已继续" : "B2 sync resumed")
++                      refresh(undefined, true)
++                    } else notify.error(result.message)
++                  }}>
++                    {String(currentLang()).startsWith("zh") ? "继续" : "Resume"}
++                  </button>
++                </Show>
 +              </Text>
 +            }
            >
@@ -2448,7 +2497,7 @@ index 4893a59..631ca53 100644
          </HStack>
          <Show
            fallback={
-@@ -215,6 +231,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+@@ -215,6 +255,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
            {formatDate(props.obj.modified)}
          </Text>
        </HStack>
@@ -2486,7 +2535,7 @@ index 0000000..3d9f239
 +    action()
 +  }
 +  const canEdit = (name: "rename" | "move" | "copy" | "delete") =>
-+    !isShare() && objStore.write && userCan(name)
++    !isShare() && !(props.obj as any).migration && objStore.write && userCan(name)
 +  return (
 +    <div class="drive-row-actions" onMouseDown={(e) => e.stopPropagation()}>
 +      <Menu placement="bottom-end">

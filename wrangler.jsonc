@@ -6,6 +6,7 @@
   "workers_dev": false,
   "keep_vars": true,
   "preview_urls": false,
+  "triggers": { "crons": ["* * * * *"] },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
