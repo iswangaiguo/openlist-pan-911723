@@ -5,6 +5,7 @@
     "directory-navigation.patch",
     "multipart-resources.patch",
     "upload-defaults.patch",
-    "dropbox-ui.patch"
+    "dropbox-ui.patch",
+    "video-buffer.patch"
   ]
 }
