@@ -1,0 +1,103 @@
+diff --git a/src/pages/home/previews/aliyun_video.tsx b/src/pages/home/previews/aliyun_video.tsx
+index fe54b30..7aece62 100644
+--- a/src/pages/home/previews/aliyun_video.tsx
++++ b/src/pages/home/previews/aliyun_video.tsx
+@@ -20,6 +20,7 @@ import artplayerPluginAss from "~/components/artplayer-plugin-ass"
+ import Hls from "hls.js"
+ import { currentLang } from "~/app/i18n"
+ import { AutoHeightPlugin, VideoBox } from "./video_box"
++import { hlsBufferConfig } from "./video_buffer"
+ import { ArtPlayerIconsSubtitle } from "~/components/icons"
+ import { useNavigate } from "@solidjs/router"
+ import { TiWarning } from "solid-icons/ti"
+@@ -81,6 +82,7 @@ const Preview = () => {
+     }
+   }
+   let player: Artplayer
++  let hlsPlayer: Hls
+   let option: Option = {
+     id: pathname(),
+     container: "#video-player",
+@@ -134,13 +136,15 @@ const Preview = () => {
+       "webkit-playsinline": true,
+       playsInline: true,
+       crossOrigin: "anonymous",
++      preload: "auto",
+     },
+     type: "m3u8",
+     customType: {
+       m3u8: function (video: HTMLMediaElement, url: string) {
+-        const hls = new Hls()
+-        hls.loadSource(url)
+-        hls.attachMedia(video)
++        hlsPlayer?.destroy()
++        hlsPlayer = new Hls(hlsBufferConfig)
++        hlsPlayer.loadSource(url)
++        hlsPlayer.attachMedia(video)
+         if (!video.src) {
+           video.src = url
+         }
+@@ -425,6 +429,7 @@ const Preview = () => {
+   }
+   onCleanup(() => {
+     setShouldKeepState(false)
++    hlsPlayer?.destroy()
+     if (player) {
+       player.fullscreenWeb = false
+       player.fullscreen = false
+diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
+index ca2fe67..dc51c85 100644
+--- a/src/pages/home/previews/video.tsx
++++ b/src/pages/home/previews/video.tsx
+@@ -28,6 +28,7 @@ import mpegts from "mpegts.js"
+ import Hls from "hls.js"
+ import { currentLang } from "~/app/i18n"
+ import { AutoHeightPlugin, VideoBox } from "./video_box"
++import { hlsBufferConfig, mpegtsBufferConfig } from "./video_buffer"
+ import { ArtPlayerIconsSubtitle } from "~/components/icons"
+ import { useNavigate } from "@solidjs/router"
+ import "./artplayer.css"
+@@ -129,7 +130,7 @@ const Preview = () => {
+             type: "flv",
+             url: url,
+           },
+-          { referrerPolicy: "same-origin" },
++          mpegtsBufferConfig,
+         )
+         flvPlayer.attachMediaElement(video)
+         flvPlayer.load()
+@@ -141,14 +142,14 @@ const Preview = () => {
+             type: "m2ts",
+             url: url,
+           },
+-          { referrerPolicy: "same-origin" },
++          mpegtsBufferConfig,
+         )
+         flvPlayer.attachMediaElement(video)
+         flvPlayer.load()
+       },
+       m3u8: function (video: HTMLMediaElement, url: string) {
+         hlsPlayer?.destroy()
+-        hlsPlayer = new Hls()
++        hlsPlayer = new Hls(hlsBufferConfig)
+         hlsPlayer.loadSource(url)
+         hlsPlayer.attachMedia(video)
+         if (!video.src) {
+diff --git a/src/pages/home/previews/video_buffer.ts b/src/pages/home/previews/video_buffer.ts
+new file mode 100644
+index 0000000..9cb3441
+--- /dev/null
++++ b/src/pages/home/previews/video_buffer.ts
+@@ -0,0 +1,12 @@
++// Keep more media ready ahead of playback on slower connections. The browser
++// may still evict buffered media when memory is limited.
++export const hlsBufferConfig = {
++  maxBufferLength: 120,
++  maxBufferSize: 120 * 1000 * 1000,
++}
++
++export const mpegtsBufferConfig = {
++  referrerPolicy: "same-origin" as const,
++  lazyLoadMaxDuration: 300,
++  lazyLoadRecoverDuration: 60,
++}
