@@ -1,5 +1,4 @@
 import { Hono } from "hono"
-import { b2RangeCachePolicy, sameEtag } from "./b2_range_cache"
 import { getSettings, resolvePath } from "../internal/model/db"
 import { parseRangeHeader } from "../internal/stream/stream"
 import { flushPendingDriverState, getDriver } from "../internal/op/storage"
@@ -84,7 +83,6 @@ async function safeProxyFetch(
   headers: Record<string, string>,
   allowHosts?: ReadonlySet<string> | string[],
   isVideo = false,
-  cacheContext?: { config: unknown; etag: unknown; size: unknown },
 ): Promise<Response> {
   const MAX_REDIRECTS = 5
   let current = url
@@ -102,44 +100,11 @@ async function safeProxyFetch(
       isVideo &&
       new URL(current).hostname.endsWith(".backblazeb2.com") &&
       new Headers(currentHeaders).has("range")
-    const policy = b2RangeCachePolicy(
-      current,
-      currentHeaders,
-      isVideo,
-      cacheContext,
-    )
-    const started = Date.now()
-    let res = await fetch(current, {
+    const res = await fetch(current, {
       headers: currentHeaders,
       redirect: "manual",
-      ...(policy.enabled
-        ? {
-            cf: {
-              cacheEverything: true,
-              cacheTtlByStatus: { "200-299": 604800, "300-599": -1 },
-            },
-          }
-        : bypassCache || policy.target
-          ? { cache: "no-store" as const }
-          : {}),
+      ...(bypassCache ? { cache: "no-store" as const } : {}),
     })
-
-    // HEAD pins the pilot's version. Reject a stale cached object, or an
-    // overwrite between HEAD and GET, before returning any cached bytes.
-    let versionBypass = false
-    if (
-      policy.enabled &&
-      res.ok &&
-      !sameEtag(res.headers.get("etag"), cacheContext?.etag)
-    ) {
-      await res.body?.cancel()
-      res = await fetch(current, {
-        headers: currentHeaders,
-        redirect: "manual",
-        cache: "no-store",
-      })
-      versionBypass = true
-    }
     const location = res.headers.get("location")
     if (res.status >= 300 && res.status < 400 && location) {
       current = new URL(location, current).toString()
@@ -149,19 +114,6 @@ async function safeProxyFetch(
       }
       currentHeaders = next
       continue
-    }
-    if (policy.target) {
-      const response = new Response(res.body, res)
-      response.headers.set(
-        "x-openlist-range-cache",
-        versionBypass
-          ? "BYPASS-VERSION"
-          : policy.enabled
-            ? res.headers.get("cf-cache-status") || "UNKNOWN"
-            : "BYPASS",
-      )
-      response.headers.set("x-openlist-origin-ms", String(Date.now() - started))
-      return response
     }
     return res
   }
@@ -277,11 +229,6 @@ async function proxyUpstream(
       headers,
       trustedHosts,
       fileItem.type === 2,
-      {
-        config: c.env?.B2_RANGE_CACHE_PILOT,
-        etag: fileItem.sign,
-        size: fileItem.size,
-      },
     )
   } catch (ssrfErr: any) {
     return c.text(ssrfErr.message || "SSRF blocked", 403)
@@ -300,11 +247,6 @@ async function proxyUpstream(
       headers,
       trustedHosts,
       fileItem.type === 2,
-      {
-        config: c.env?.B2_RANGE_CACHE_PILOT,
-        etag: fileItem.sign,
-        size: fileItem.size,
-      },
     )
   }
 
@@ -377,16 +319,6 @@ async function proxyUpstream(
   if (lastModified) c.header("Last-Modified", lastModified)
   const cacheControl = upstreamRes.headers.get("cache-control")
   if (cacheControl) c.header("Cache-Control", cacheControl)
-  const rangeCache = upstreamRes.headers.get("x-openlist-range-cache")
-  if (rangeCache) {
-    c.header("X-OpenList-Range-Cache", rangeCache)
-    c.header(
-      "X-OpenList-Origin-Ms",
-      upstreamRes.headers.get("x-openlist-origin-ms") || "0",
-    )
-    // Each public request must enter the Worker and pass its signature check.
-    c.header("Cache-Control", "private, no-store")
-  }
   // FIX(H-3): 上游响应头已按白名单回显，但对 Content-Disposition 额外
   // 清洗 CR/LF 与控制字符，防止恶意上游注入额外响应头（Set-Cookie/Location）。
   const contentDisposition = upstreamRes.headers.get("content-disposition")

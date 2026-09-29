@@ -10,7 +10,16 @@ test("B2 video proxy bypasses cold cache while preserving ranges and authenticat
   t.after(() => {
     globalThis.fetch = originalFetch
   })
-  const env = { DB_DRIVER: "memory", JWT_SECRET: "range-regression-only" }
+  const env = {
+    DB_DRIVER: "memory",
+    JWT_SECRET: "range-regression-only",
+    // A stale dashboard variable must never re-enable the retired pilot.
+    B2_RANGE_CACHE_PILOT: JSON.stringify({
+      url: "https://s3.us-west-004.backblazeb2.com/test/movie.mp4",
+      etag: "test-version",
+      size: 1000,
+    }),
+  }
   const app = new Hono()
   app.route("/api/p", rawRouter)
   const calls: {
@@ -24,8 +33,11 @@ test("B2 video proxy bypasses cold cache while preserving ranges and authenticat
     const method = init.method || "GET"
     const range = new Headers(init.headers).get("range")
     calls.push({ url, method, cache: init.cache, range })
+    assert.equal((init as any).cf, undefined, "must not force edge caching")
     if (method === "HEAD")
-      return new Response(null, { headers: { "Content-Length": "1000" } })
+      return new Response(null, {
+        headers: { "Content-Length": "1000", ETag: '"test-version"' },
+      })
     assert.ok(
       new URL(url).searchParams.has("X-Amz-Signature"),
       "B2/S3 origin must remain signed",
@@ -81,10 +93,17 @@ test("B2 video proxy bypasses cold cache while preserving ranges and authenticat
     )
     calls.length = 0
     const path = `/test/${filename}`
-    const headers = range ? { Range: range } : {}
+    const headers: Record<string, string> = range ? { Range: range } : {}
     const rejected = await app.request(`/api/p${path}`, { headers }, env)
     assert.equal(rejected.status, 401)
     assert.equal(calls.length, 0, "unsigned requests must not reach B2")
+    const invalid = await app.request(
+      `/api/p${path}?sign=invalid`,
+      { headers },
+      env,
+    )
+    assert.equal(invalid.status, 401)
+    assert.equal(calls.length, 0, "invalid signatures must not reach B2")
     const sign = await signDownloadPath({ env }, path, 60)
     const res = await app.request(
       `/api/p${path}?sign=${sign}`,
@@ -92,6 +111,8 @@ test("B2 video proxy bypasses cold cache while preserving ranges and authenticat
       env,
     )
     assert.equal(res.status, range ? 206 : 200)
+    assert.equal(res.headers.get("X-OpenList-Range-Cache"), null)
+    assert.equal(res.headers.get("X-OpenList-Origin-Ms"), null)
     assert.equal(await res.text(), range ? "abcd" : "full")
     if (range) {
       assert.equal(res.headers.get("Content-Range"), "bytes 100-103/1000")
