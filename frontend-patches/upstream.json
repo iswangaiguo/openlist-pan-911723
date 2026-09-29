@@ -7,6 +7,7 @@
     "upload-defaults.patch",
     "dropbox-ui.patch",
     "video-buffer.patch",
-    "video-recovery.patch"
+    "video-recovery.patch",
+    "video-recovery-on-error.patch"
   ]
 }

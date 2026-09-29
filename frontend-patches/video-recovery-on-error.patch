@@ -1,0 +1,153 @@
+diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
+--- a/src/pages/home/previews/video.tsx
++++ b/src/pages/home/previews/video.tsx
+@@ -64,7 +64,6 @@
+   let player: Artplayer
+   let flvPlayer: mpegts.Player
+   let hlsPlayer: Hls
+-  let sourceUpdatedAt = Date.now()
+   let lastRecoveryAttempt = 0
+   let lastPosition = 0
+   let recovering = false
+@@ -208,7 +207,7 @@
+     player.option.id = pathname()
+     player.option.type = ext(objStore.obj.name)
+     player.switchUrl(url).finally(() => playing && player.play())
+-    sourceUpdatedAt = Date.now()
++
+     lastPosition = 0
+ 
+     const { subtitle, danmu } = subtitleAndDanmu()
+@@ -426,7 +425,7 @@
+         })
+       }
+       if (disposed || pathname() !== path) return
+-      sourceUpdatedAt = Date.now()
++
+       ObjStore.setRawUrl(url)
+       if (position > 0) player.seek = position
+       lastPosition = position
+@@ -523,6 +522,8 @@
+       if (!autoNext()) return
+       next_video()
+     })
++    // Seeking, short buffering and tab focus do not prove URL expiry.
++    // Keep the current source/buffer; recover on playback errors or retry.
+     player.on("video:timeupdate", () => {
+       if (Number.isFinite(player.currentTime) && player.currentTime > 0) {
+         if (player.currentTime > lastPosition) recoveryAttempts = 0
+@@ -531,16 +532,6 @@
+     })
+     player.on("video:seeking", () => {
+       if (Number.isFinite(player.currentTime)) lastPosition = player.currentTime
+-    })
+-    player.on("video:play", () => {
+-      if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
+-        void refreshSource(true)
+-      }
+-    })
+-    player.on("video:waiting", () => {
+-      if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
+-        void refreshSource(true)
+-      }
+     })
+     const onRetryClick = (event: MouseEvent) => {
+       if (
+@@ -555,25 +546,12 @@
+       void refreshSource(true)
+     }
+     player.template.$container.addEventListener("click", onRetryClick, true)
+-    const onWake = () => {
+-      if (
+-        !document.hidden &&
+-        player.playing &&
+-        Date.now() - sourceUpdatedAt > 10 * 60 * 1000
+-      ) {
+-        void refreshSource(true)
+-      }
+-    }
+-    document.addEventListener("visibilitychange", onWake)
+-    window.addEventListener("focus", onWake)
+     onCleanup(() => {
+       player.template.$container.removeEventListener(
+         "click",
+         onRetryClick,
+         true,
+       )
+-      document.removeEventListener("visibilitychange", onWake)
+-      window.removeEventListener("focus", onWake)
+     })
+     player.on("error", () => {
+       void refreshSource(true)
+diff --git a/src/pages/home/previews/aliyun_video.tsx b/src/pages/home/previews/aliyun_video.tsx
+--- a/src/pages/home/previews/aliyun_video.tsx
++++ b/src/pages/home/previews/aliyun_video.tsx
+@@ -83,7 +83,6 @@
+   }
+   let player: Artplayer
+   let hlsPlayer: Hls
+-  let sourceUpdatedAt = Date.now()
+   let lastRefreshAttempt = 0
+   let lastPosition = 0
+   let refreshing = false
+@@ -397,6 +396,8 @@
+         if (!autoNext()) return
+         next_video()
+       })
++      // Seeking, short buffering and tab focus do not prove URL expiry.
++      // Keep the current source/buffer; recover on playback errors or retry.
+       player.on("video:timeupdate", () => {
+         if (Number.isFinite(player.currentTime) && player.currentTime > 0) {
+           if (player.currentTime > lastPosition) refreshAttempts = 0
+@@ -406,16 +407,6 @@
+       player.on("video:seeking", () => {
+         if (Number.isFinite(player.currentTime))
+           lastPosition = player.currentTime
+-      })
+-      player.on("video:play", () => {
+-        if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
+-          void resetPlayUrl(true)
+-        }
+-      })
+-      player.on("video:waiting", () => {
+-        if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
+-          void resetPlayUrl(true)
+-        }
+       })
+       const onRetryClick = (event: MouseEvent) => {
+         if (
+@@ -430,25 +421,12 @@
+         void resetPlayUrl(true)
+       }
+       player.template.$container.addEventListener("click", onRetryClick, true)
+-      const onWake = () => {
+-        if (
+-          !document.hidden &&
+-          player.playing &&
+-          Date.now() - sourceUpdatedAt > 10 * 60 * 1000
+-        ) {
+-          void resetPlayUrl(true)
+-        }
+-      }
+-      document.addEventListener("visibilitychange", onWake)
+-      window.addEventListener("focus", onWake)
+       cleanupPlayerEvents = () => {
+         player.template.$container.removeEventListener(
+           "click",
+           onRetryClick,
+           true,
+         )
+-        document.removeEventListener("visibilitychange", onWake)
+-        window.removeEventListener("focus", onWake)
+       }
+       player.on("error", () => {
+         void resetPlayUrl(true)
+@@ -521,7 +499,7 @@
+       player.option.url = url
+       await player.switchQuality(url)
+       if (disposed || pathname() !== path) return
+-      sourceUpdatedAt = Date.now()
++
+       if (position > 0) player.seek = position
+       lastPosition = position
+       if (shouldPlay && !player.playing) await player.play()
