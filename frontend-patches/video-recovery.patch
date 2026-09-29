@@ -1,17 +1,17 @@
 diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
 --- a/src/pages/home/previews/video.tsx
 +++ b/src/pages/home/previews/video.tsx
-@@ -11,11 +11,13 @@
+@@ -11,12 +11,13 @@
  import {
    getMainColor,
    getSettingBool,
 +  ObjStore,
    objStore,
-+  password,
+   password,
    setShouldKeepState,
  } from "~/store"
  import { Obj, ObjType } from "~/types"
--import { ext, pathDir, pathJoin } from "~/utils"
+-import { ext, fsGet, notify, pathDir, pathJoin } from "~/utils"
 +import { ext, fsGet, handleResp, notify, pathDir, pathJoin } from "~/utils"
  import Artplayer from "artplayer"
  import { type Option } from "artplayer"
