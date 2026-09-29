@@ -1,0 +1,419 @@
+diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
+--- a/src/pages/home/previews/video.tsx
++++ b/src/pages/home/previews/video.tsx
+@@ -11,12 +11,13 @@
+ import {
+   getMainColor,
+   getSettingBool,
++  ObjStore,
+   objStore,
+   password,
+   setShouldKeepState,
+ } from "~/store"
+ import { Obj, ObjType } from "~/types"
+-import { ext, fsGet, notify, pathDir, pathJoin } from "~/utils"
++import { ext, fsGet, handleResp, notify, pathDir, pathJoin } from "~/utils"
+ import Artplayer from "artplayer"
+ import { type Option } from "artplayer"
+ import { type Setting } from "artplayer"
+@@ -62,6 +64,13 @@
+   let player: Artplayer
+   let flvPlayer: mpegts.Player
+   let hlsPlayer: Hls
++  let sourceUpdatedAt = Date.now()
++  let lastRecoveryAttempt = 0
++  let lastPosition = 0
++  let recovering = false
++  let disposed = false
++  let recoveryAttempts = 0
++  let recoveryWindowStart = 0
+   let option: Option = {
+     container: "#video-player",
+     volume: 1.0,
+@@ -132,6 +141,7 @@
+           mpegtsBufferConfig,
+         )
+         flvPlayer.attachMediaElement(video)
++        flvPlayer.on(mpegts.Events.ERROR, () => void refreshSource(true))
+         flvPlayer.load()
+       },
+       m2ts: function (video: HTMLMediaElement, url: string) {
+@@ -144,11 +154,15 @@
+           mpegtsBufferConfig,
+         )
+         flvPlayer.attachMediaElement(video)
++        flvPlayer.on(mpegts.Events.ERROR, () => void refreshSource(true))
+         flvPlayer.load()
+       },
+       m3u8: function (video: HTMLMediaElement, url: string) {
+         hlsPlayer?.destroy()
+         hlsPlayer = new Hls(hlsBufferConfig)
++        hlsPlayer.on(Hls.Events.ERROR, (_, data) => {
++          if (data.fatal) void refreshSource(true)
++        })
+         hlsPlayer.loadSource(url)
+         hlsPlayer.attachMedia(video)
+         if (!video.src) {
+@@ -187,11 +201,15 @@
+   const enableEnhanceAss = true
+
+   const switchUrl = (url: string) => {
++    // A refreshed signed URL was already switched with the position preserved.
++    if (url === player.option.url) return
+     const { playing } = player
+     player.pause()
+     player.option.id = pathname()
+     player.option.type = ext(objStore.obj.name)
+     player.switchUrl(url).finally(() => playing && player.play())
++    sourceUpdatedAt = Date.now()
++    lastPosition = 0
+
+     const { subtitle, danmu } = subtitleAndDanmu()
+     let isEnhanceAssMode = false
+@@ -350,6 +368,81 @@
+     }
+   }
+
++  const refreshSource = async (resume: boolean) => {
++    if (recovering || disposed || Date.now() - lastRecoveryAttempt < 3000)
++      return
++    if (Date.now() - recoveryWindowStart > 60000) {
++      recoveryWindowStart = Date.now()
++      recoveryAttempts = 0
++    }
++    if (recoveryAttempts >= 3) return
++    recoveryAttempts++
++    recovering = true
++    lastRecoveryAttempt = Date.now()
++    const path = pathname()
++    const position = player.currentTime > 0 ? player.currentTime : lastPosition
++    const shouldPlay = resume || player.playing
++    if (shouldPlay) player.pause()
++    try {
++      const resp = await fsGet(path, password())
++      if (disposed || pathname() !== path) return
++      if (resp.code !== 200) {
++        handleResp(resp)
++        return
++      }
++      const url = resp.data.raw_url
++      if (!url) {
++        notify.error("Video URL is unavailable")
++        return
++      }
++      // ArtPlayer's own reconnect uses option.url, so replace its stale URL.
++      player.option.url = url
++      if (url !== player.url) {
++        await player.switchQuality(url)
++      } else {
++        // A stable proxy URL can still need a fresh HTTP request after sleep.
++        await new Promise<void>((resolve, reject) => {
++          const video = player.video
++          const cleanup = () => {
++            window.clearTimeout(timer)
++            video.removeEventListener("canplay", onCanPlay)
++            video.removeEventListener("error", onError)
++          }
++          const onCanPlay = () => {
++            cleanup()
++            resolve()
++          }
++          const onError = () => {
++            cleanup()
++            reject(video.error)
++          }
++          const timer = window.setTimeout(() => {
++            cleanup()
++            reject(new Error("Video reload timed out"))
++          }, 15000)
++          video.addEventListener("canplay", onCanPlay)
++          video.addEventListener("error", onError)
++          player.video.load()
++        })
++      }
++      if (disposed || pathname() !== path) return
++      sourceUpdatedAt = Date.now()
++      ObjStore.setRawUrl(url)
++      if (position > 0) player.seek = position
++      lastPosition = position
++      if (shouldPlay && !player.playing) await player.play()
++    } catch (error) {
++      if (!disposed) {
++        console.error("Could not refresh video source", error)
++        if (recoveryAttempts >= 3) {
++          notify.error("Video could not be resumed. Try reopening the file.")
++        }
++      }
++    } finally {
++      recovering = false
++    }
++  }
++
+   onMount(() => {
+     player = new Artplayer(option)
+     createEffect(on(() => objStore.raw_url, switchUrl))
+@@ -373,7 +466,60 @@
+       if (!autoNext()) return
+       next_video()
+     })
++    player.on("video:timeupdate", () => {
++      if (Number.isFinite(player.currentTime) && player.currentTime > 0) {
++        if (player.currentTime > lastPosition) recoveryAttempts = 0
++        lastPosition = player.currentTime
++      }
++    })
++    player.on("video:seeking", () => {
++      if (Number.isFinite(player.currentTime)) lastPosition = player.currentTime
++    })
++    player.on("video:play", () => {
++      if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
++        void refreshSource(true)
++      }
++    })
++    player.on("video:waiting", () => {
++      if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
++        void refreshSource(true)
++      }
++    })
++    const onRetryClick = (event: MouseEvent) => {
++      if (
++        !player.video.error ||
++        !(event.target as Element).closest(".art-state, .art-controls-left")
++      )
++        return
++      event.preventDefault()
++      event.stopPropagation()
++      recoveryAttempts = 0
++      lastRecoveryAttempt = 0
++      void refreshSource(true)
++    }
++    player.template.$container.addEventListener("click", onRetryClick, true)
++    const onWake = () => {
++      if (
++        !document.hidden &&
++        player.playing &&
++        Date.now() - sourceUpdatedAt > 10 * 60 * 1000
++      ) {
++        void refreshSource(true)
++      }
++    }
++    document.addEventListener("visibilitychange", onWake)
++    window.addEventListener("focus", onWake)
++    onCleanup(() => {
++      player.template.$container.removeEventListener(
++        "click",
++        onRetryClick,
++        true,
++      )
++      document.removeEventListener("visibilitychange", onWake)
++      window.removeEventListener("focus", onWake)
++    })
+     player.on("error", () => {
++      void refreshSource(true)
+       if (player.video.crossOrigin) {
+         console.log(
+           "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
+@@ -383,6 +529,7 @@
+     })
+   })
+   onCleanup(() => {
++    disposed = true
+     setShouldKeepState(false)
+     if (player) {
+       player.fullscreenWeb = false
+diff --git a/src/pages/home/previews/aliyun_video.tsx b/src/pages/home/previews/aliyun_video.tsx
+--- a/src/pages/home/previews/aliyun_video.tsx
++++ b/src/pages/home/previews/aliyun_video.tsx
+@@ -83,6 +83,14 @@
+   }
+   let player: Artplayer
+   let hlsPlayer: Hls
++  let sourceUpdatedAt = Date.now()
++  let lastRefreshAttempt = 0
++  let lastPosition = 0
++  let refreshing = false
++  let disposed = false
++  let refreshAttempts = 0
++  let refreshWindowStart = 0
++  let cleanupPlayerEvents: (() => void) | undefined
+   let option: Option = {
+     id: pathname(),
+     container: "#video-player",
+@@ -143,6 +151,9 @@
+       m3u8: function (video: HTMLMediaElement, url: string) {
+         hlsPlayer?.destroy()
+         hlsPlayer = new Hls(hlsBufferConfig)
++        hlsPlayer.on(Hls.Events.ERROR, (_, data) => {
++          if (data.fatal) void resetPlayUrl(true)
++        })
+         hlsPlayer.loadSource(url)
+         hlsPlayer.attachMedia(video)
+         if (!video.src) {
+@@ -319,6 +330,7 @@
+   )
+   onMount(async () => {
+     const resp = await post()
++    if (disposed) return
+     setWarnVisible(resp.code !== 200)
+     handleResp(resp, (data) => {
+       const list =
+@@ -385,22 +397,108 @@
+         if (!autoNext()) return
+         next_video()
+       })
+-      interval = window.setInterval(resetPlayUrl, 1000 * 60 * 14)
+-    })
+-    player.on("error", () => {
+-      if (player.video.crossOrigin) {
+-        console.log(
+-          "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
++      player.on("video:timeupdate", () => {
++        if (Number.isFinite(player.currentTime) && player.currentTime > 0) {
++          if (player.currentTime > lastPosition) refreshAttempts = 0
++          lastPosition = player.currentTime
++        }
++      })
++      player.on("video:seeking", () => {
++        if (Number.isFinite(player.currentTime))
++          lastPosition = player.currentTime
++      })
++      player.on("video:play", () => {
++        if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
++          void resetPlayUrl(true)
++        }
++      })
++      player.on("video:waiting", () => {
++        if (Date.now() - sourceUpdatedAt > 10 * 60 * 1000) {
++          void resetPlayUrl(true)
++        }
++      })
++      const onRetryClick = (event: MouseEvent) => {
++        if (
++          !player.video.error ||
++          !(event.target as Element).closest(".art-state, .art-controls-left")
+         )
+-        player.video.crossOrigin = null
+-      }
++          return
++        event.preventDefault()
++        event.stopPropagation()
++        refreshAttempts = 0
++        lastRefreshAttempt = 0
++        void resetPlayUrl(true)
++      }
++      player.template.$container.addEventListener("click", onRetryClick, true)
++      const onWake = () => {
++        if (
++          !document.hidden &&
++          player.playing &&
++          Date.now() - sourceUpdatedAt > 10 * 60 * 1000
++        ) {
++          void resetPlayUrl(true)
++        }
++      }
++      document.addEventListener("visibilitychange", onWake)
++      window.addEventListener("focus", onWake)
++      cleanupPlayerEvents = () => {
++        player.template.$container.removeEventListener(
++          "click",
++          onRetryClick,
++          true,
++        )
++        document.removeEventListener("visibilitychange", onWake)
++        window.removeEventListener("focus", onWake)
++      }
++      player.on("error", () => {
++        void resetPlayUrl(true)
++        if (player.video.crossOrigin) {
++          console.log(
++            "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
++          )
++          player.video.crossOrigin = null
++        }
++      })
++      interval = window.setInterval(
++        () => {
++          if (!document.hidden && player.playing) void resetPlayUrl(false)
++        },
++        1000 * 60 * 14,
++      )
+     })
+   })
+   let interval: number
+-  let curSeek: number
+-  async function resetPlayUrl() {
+-    const resp = await post()
+-    handleResp(resp, async (data) => {
++  async function resetPlayUrl(resume: boolean) {
++    if (
++      !player ||
++      refreshing ||
++      disposed ||
++      Date.now() - lastRefreshAttempt < 3000
++    )
++      return
++    if (Date.now() - refreshWindowStart > 60000) {
++      refreshWindowStart = Date.now()
++      refreshAttempts = 0
++    }
++    if (refreshAttempts >= 3) return
++    refreshAttempts++
++    refreshing = true
++    lastRefreshAttempt = Date.now()
++    const path = pathname()
++    const position = player.currentTime > 0 ? player.currentTime : lastPosition
++    const shouldPlay = resume || player.playing
++    const currentQuality = player.quality.findIndex(
++      (item) => item.url === player.option.url,
++    )
++    if (shouldPlay) player.pause()
++    try {
++      const resp = await post()
++      if (disposed || pathname() !== path) return
++      if (resp.code !== 200) {
++        handleResp(resp)
++        return
++      }
++      const data = resp.data
+       const list =
+         data.video_preview_play_info.live_transcoding_task_list.filter(
+           (l) => l.url,
+@@ -418,16 +516,29 @@
+       })
+       option.quality = quality
+       player.quality = quality
+-      curSeek = player.currentTime
+-      let curPlaying = player.playing
+-      await player.switchUrl(quality[quality.length - 1].url)
+-      if (!curPlaying) player.pause()
+-      setTimeout(() => {
+-        player.seek = curSeek
+-      }, 1000)
+-    })
++      const url =
++        quality[currentQuality]?.url || quality[quality.length - 1].url
++      player.option.url = url
++      await player.switchQuality(url)
++      if (disposed || pathname() !== path) return
++      sourceUpdatedAt = Date.now()
++      if (position > 0) player.seek = position
++      lastPosition = position
++      if (shouldPlay && !player.playing) await player.play()
++    } catch (error) {
++      if (!disposed) {
++        console.error("Could not refresh transcoded video", error)
++        if (refreshAttempts >= 3) {
++          notify.error("Video could not be resumed. Try reopening the file.")
++        }
++      }
++    } finally {
++      refreshing = false
++    }
+   }
+   onCleanup(() => {
++    disposed = true
++    cleanupPlayerEvents?.()
+     setShouldKeepState(false)
+     hlsPlayer?.destroy()
+     if (player) {
+
