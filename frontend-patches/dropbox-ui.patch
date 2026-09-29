@@ -239,6 +239,33 @@ index 0000000..aae3eeb
 +    />
 +  )
 +}
+diff --git a/src/lang/en/shares.json b/src/lang/en/shares.json
+index 4849b40..db91ffb 100644
+--- a/src/lang/en/shares.json
++++ b/src/lang/en/shares.json
+@@ -39,5 +39,22 @@
+   "input_password": "Please enter Share Code",
+   "share_gone": "This share has expired or been cancelled",
+   "copy_msg": "Copy link",
++  "create_link": "Create link",
++  "item_count": "{{count}} items",
++  "view_link": "View-only link",
++  "link_settings": "Link settings",
++  "access_label": "Access",
++  "anyone_with_link": "Anyone with the link can view",
++  "expiry_label": "Link expiration",
++  "never_expires": "Never expires",
++  "custom_expiry": "Set a date",
++  "expiry_invalid": "Choose a future expiration date",
++  "password_label": "Password protection",
++  "password_on": "On",
++  "no_password": "No password",
++  "password_placeholder": "Set a password",
++  "password_required": "Enter a password",
++  "link_ready": "Share link created",
++  "link_created_hint": "Anyone with the link can view unless you set a password.",
+   "no_permission_tip": "To create a share, you need \"Share\" permission."
+ }
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
 index a8d032d..c8f0892 100644
 --- a/src/pages/home/Body.tsx
@@ -1053,10 +1080,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..e22d7fe
+index 0000000..d147b56
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,957 @@
+@@ -0,0 +1,1017 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -2014,6 +2041,66 @@ index 0000000..e22d7fe
 +}
 +
 +.drive-rename-progress { position: absolute; top: calc(100% + 2px); left: 0; z-index: 2; background: var(--drive-bg); color: var(--drive-muted); font-size: 12px; padding: 2px 6px; border-radius: 4px; }
++
++/* Share links use the same restrained settings layout as the file browser. */
++.drive-share-dialog {
++  border-radius: 22px;
++  overflow: hidden;
++  max-width: min(520px, calc(100vw - 24px));
++}
++.drive-share-heading {
++  font-size: 22px;
++  font-weight: 650;
++  padding: 28px 30px 12px;
++}
++.drive-share-body { padding: 8px 30px 20px; }
++.drive-share-target {
++  display: flex;
++  align-items: center;
++  gap: 14px;
++  min-width: 0;
++  padding: 14px 0 24px;
++  border-bottom: 1px solid rgba(128, 128, 128, .24);
++}
++.drive-share-target-icon {
++  display: grid;
++  place-items: center;
++  width: 42px;
++  height: 42px;
++  flex: 0 0 42px;
++  border-radius: 9px;
++  color: #0061ff;
++  background: #eaf1ff;
++  font-size: 24px;
++}
++.drive-share-target > div { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
++.drive-share-target strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
++.drive-share-target span:last-child,
++.drive-share-setting span,
++.drive-share-result p { color: #75716e; font-size: 13px; }
++.drive-share-section-title { font-size: 14px; font-weight: 650; margin: 22px 0 4px; }
++.drive-share-setting {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++  min-height: 68px;
++  border-bottom: 1px solid rgba(128, 128, 128, .2);
++}
++.drive-share-setting > div { display: flex; flex-direction: column; gap: 3px; }
++.drive-share-setting strong { font-size: 14px; font-weight: 550; }
++.drive-share-setting input[type="checkbox"] { width: 19px; height: 19px; accent-color: #0061ff; cursor: pointer; flex: none; }
++.drive-share-input { width: 100%; margin: 10px 0; padding: 10px 12px; border: 1px solid rgba(128,128,128,.4); border-radius: 7px; color: inherit; background: transparent; }
++.drive-share-setting + input:not([type="checkbox"]) { margin-top: 10px; }
++.drive-share-result { padding: 24px 0 4px; }
++.drive-share-result label { display: block; margin-bottom: 9px; font-weight: 600; }
++.drive-share-result p { margin: 10px 0 0; }
++.drive-share-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 30px 28px; }
++@media (max-width: 600px) {
++  .drive-share-heading { padding: 22px 20px 10px; }
++  .drive-share-body { padding: 8px 20px 16px; }
++  .drive-share-footer { padding: 12px 20px 22px; }
++}
 diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
 index 83f5780..17b1ac9 100644
 --- a/src/pages/home/file/File.tsx
@@ -3535,6 +3622,532 @@ index 57e34a5..4579d74 100644
 -  )
 +  return null
  }
+diff --git a/src/pages/home/toolbar/Share.tsx b/src/pages/home/toolbar/Share.tsx
+index dc0cf0f..14b0d34 100644
+--- a/src/pages/home/toolbar/Share.tsx
++++ b/src/pages/home/toolbar/Share.tsx
+@@ -1,19 +1,9 @@
+-import { useFetch, useRouter, useT, useUtil } from "~/hooks"
+-import {
+-  bus,
+-  getExpireDate,
+-  handleResp,
+-  makeTemplateData,
+-  matchTemplate,
+-  r,
+-  randomPwd,
+-} from "~/utils"
+-import { batch, createSignal, Match, onCleanup, Switch } from "solid-js"
++import { useRouter, useT, useUtil } from "~/hooks"
++import { bus, handleResp, joinBase, notify, r } from "~/utils"
++import { batch, createSignal, onCleanup, Show } from "solid-js"
+ import {
+   Button,
+   createDisclosure,
+-  HStack,
+-  IconButton,
+   Input,
+   Modal,
+   ModalBody,
+@@ -21,282 +11,244 @@ import {
+   ModalFooter,
+   ModalHeader,
+   ModalOverlay,
+-  Select,
+-  Text,
+-  Textarea,
+-  VStack,
+ } from "@hope-ui/solid"
+-import {
+-  ExtractFolder,
+-  OrderBy,
+-  OrderDirection,
+-  PResp,
+-  Share as ShareType,
+-  ShareInfo,
+-} from "~/types"
+-import { createStore } from "solid-js/store"
+-import { getSetting, me, selectedObjs } from "~/store"
+-import { TbRefresh } from "solid-icons/tb"
+-import { SelectOptions, MultiPathInput } from "~/components"
++import { Resp, ShareInfo } from "~/types"
++import { me, selectedObjs } from "~/store"
++import { currentLang } from "~/app/i18n"
++
++const zhLabels = {
++  view_link: "用于查看的链接",
++  link_settings: "链接设置",
++  access_label: "访问权限",
++  anyone_with_link: "任何获得链接的人都可以查看",
++  expiry_label: "链接到期时间",
++  custom_expiry: "指定时间",
++  never_expires: "长期有效",
++  expiry_invalid: "请选择未来的到期时间",
++  password_label: "密码保护",
++  password_on: "已开启",
++  no_password: "无密码",
++  password_placeholder: "设置访问密码",
++  password_required: "请输入访问密码",
++  link_ready: "分享链接已创建",
++  link_created_hint: "任何获得链接的人都可以查看，除非你设置了密码。",
++  create_link: "创建链接",
++} as const
++
++const shareUrl = (id: string) =>
++  `${location.origin}${joinBase("@s", encodeURIComponent(id))}`
+ 
+ export const Share = () => {
+   const t = useT()
+-  const [link, setLink] = createSignal("")
+   const { pathname } = useRouter()
++  const { copy } = useUtil()
++  const label = (key: keyof typeof zhLabels) =>
++    String(currentLang()).startsWith("zh") ? zhLabels[key] : t(`shares.${key}`)
++  const { isOpen, onOpen, onClose } = createDisclosure()
++  const [names, setNames] = createSignal<string[]>([])
++  const [paths, setPaths] = createSignal<string[]>([])
++  const [link, setLink] = createSignal("")
++  const [passwordEnabled, setPasswordEnabled] = createSignal(false)
++  const [password, setPassword] = createSignal("")
++  const [expiryEnabled, setExpiryEnabled] = createSignal(false)
++  const [expiry, setExpiry] = createSignal("")
++  const [creating, setCreating] = createSignal(false)
++
+   const handler = (name: string) => {
+-    if (name === "share") {
+-      batch(() => {
+-        setLink("")
+-        setExpireString("")
+-        setExpireValid(true)
+-        const paths = selectedObjs().map((obj) => {
++    if (name !== "share") return
++    const objects = selectedObjs()
++    batch(() => {
++      setNames(objects.map((obj) => obj.name))
++      setPaths(
++        objects.map((obj) => {
+           const split =
+             pathname().endsWith("/") || obj.name.startsWith("/") ? "" : "/"
+           return `${me().base_path}${pathname()}${split}${obj.name}`
+-        })
+-        setShare({
+-          files: paths,
+-          expires: null,
+-          pwd: "",
+-          max_accessed: 0,
+-          order_by: OrderBy.None,
+-          order_direction: OrderDirection.None,
+-          extract_folder: ExtractFolder.None,
+-          remark: "",
+-          readme: "",
+-          header: "",
+-        } as ShareType)
++        }),
++      )
++      setLink("")
++      setPasswordEnabled(false)
++      setPassword("")
++      setExpiryEnabled(false)
++      setExpiry("")
++    })
++    onOpen()
++  }
++  bus.on("tool", handler)
++  onCleanup(() => bus.off("tool", handler))
++
++  const createShare = async () => {
++    if (creating()) return
++    if (paths().length === 0) {
++      notify.error(t("home.toolbar.no_selected"))
++      return
++    }
++    let expires: string | null = null
++    if (expiryEnabled()) {
++      const date = new Date(expiry())
++      if (
++        !expiry() ||
++        !Number.isFinite(date.getTime()) ||
++        date.getTime() <= Date.now()
++      ) {
++        notify.error(label("expiry_invalid"))
++        return
++      }
++      expires = date.toISOString()
++    }
++    if (passwordEnabled() && !password().trim()) {
++      notify.error(label("password_required"))
++      return
++    }
++
++    setCreating(true)
++    try {
++      const resp: Resp<ShareInfo> = await r.post("/share/create", {
++        files: paths(),
++        expires,
++        pwd: passwordEnabled() ? password().trim() : "",
++        max_accessed: 0,
++      })
++      handleResp(resp, (data) => {
++        // share_summary_content is empty by default; always show a real URL.
++        setLink(shareUrl(data.id))
+       })
+-      onOpen()
++    } catch (error) {
++      notify.error(error instanceof Error ? error.message : String(error))
++    } finally {
++      setCreating(false)
+     }
+   }
+-  bus.on("tool", handler)
+-  onCleanup(() => {
+-    bus.off("tool", handler)
+-  })
+-  const { isOpen, onOpen, onClose } = createDisclosure()
+-  const { copy } = useUtil()
+-  const [expireString, setExpireString] = createSignal("")
+-  const [expireValid, setExpireValid] = createSignal(true)
+-  const [share, setShare] = createStore<ShareType>({} as ShareType)
+-  const [okLoading, ok] = useFetch((): PResp<ShareInfo> => {
+-    return r.post(`/share/create`, share)
+-  })
++
+   return (
+     <Modal
+       blockScrollOnMount={false}
+       opened={isOpen()}
+       onClose={onClose}
+-      size={{
+-        "@initial": "xs",
+-        "@md": "md",
+-        "@lg": "lg",
+-        "@xl": "xl",
+-        "@2xl": "2xl",
+-      }}
++      size="md"
+     >
+       <ModalOverlay />
+-      <ModalContent>
+-        <ModalHeader>{t("home.toolbar.share")}</ModalHeader>
+-        <Switch
+-          fallback={
+-            <>
+-              <ModalBody>
+-                <Textarea variant="filled" value={link()} readonly />
+-              </ModalBody>
+-              <ModalFooter display="flex" gap="$2">
+-                <Button
+-                  colorScheme="primary"
+-                  onClick={() => {
+-                    copy(link())
+-                  }}
+-                >
+-                  {t("shares.copy_msg")}
+-                </Button>
+-                <Button colorScheme="info" onClick={onClose}>
+-                  {t("global.confirm")}
+-                </Button>
+-              </ModalFooter>
+-            </>
+-          }
+-        >
+-          <Match when={link() === ""}>
+-            <ModalBody>
+-              <VStack spacing="$1" alignItems="flex-start">
+-                <Text size="sm">{t("shares.id")}</Text>
+-                <Input
+-                  size="sm"
+-                  value={share.id ?? ""}
+-                  maxLength={64}
+-                  placeholder={t("shares.id_placeholder")}
+-                  onInput={(e) => {
+-                    setShare("id", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.remark")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.remark}
+-                  onInput={(e) => {
+-                    setShare("remark", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.extract_folder")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.extract_folder}
+-                  onChange={(e) => {
+-                    setShare("extract_folder", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      {
+-                        key: ExtractFolder.Front,
+-                        label: t("shares.extract_folders.front"),
+-                      },
+-                      {
+-                        key: ExtractFolder.Back,
+-                        label: t("shares.extract_folders.back"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.order_by")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.order_by}
+-                  onChange={(e) => {
+-                    setShare("order_by", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      { key: OrderBy.Name, label: t("shares.order_bys.name") },
+-                      { key: OrderBy.Size, label: t("shares.order_bys.size") },
+-                      {
+-                        key: OrderBy.Modified,
+-                        label: t("shares.order_bys.modified"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.order_direction")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.order_direction}
+-                  onChange={(e) => {
+-                    setShare("order_direction", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      {
+-                        key: OrderDirection.Asc,
+-                        label: t("shares.order_directions.asc"),
+-                      },
+-                      {
+-                        key: OrderDirection.Desc,
+-                        label: t("shares.order_directions.desc"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.pwd")}</Text>
+-                <HStack spacing="$1" w="$full">
+-                  <Input
+-                    size="sm"
+-                    value={share.pwd}
+-                    onInput={(e) => {
+-                      setShare("pwd", e.currentTarget.value)
+-                    }}
+-                  />
+-                  <IconButton
+-                    colorScheme="neutral"
+-                    size="sm"
+-                    aria-label="random"
+-                    icon={<TbRefresh />}
+-                    onClick={() => {
+-                      setShare("pwd", randomPwd())
+-                    }}
+-                  />
+-                </HStack>
+-                <Text size="sm">{t("shares.max_accessed")}</Text>
+-                <Input
+-                  type="number"
+-                  size="sm"
+-                  value={share.max_accessed}
+-                  onInput={(e) => {
+-                    setShare("max_accessed", parseInt(e.currentTarget.value))
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.expires")}</Text>
++      <ModalContent class="drive-share-dialog">
++        <ModalHeader class="drive-share-heading">
++          {t("home.toolbar.share")}
++        </ModalHeader>
++        <ModalBody class="drive-share-body">
++          <div class="drive-share-target" title={names().join(", ")}>
++            <span class="drive-share-target-icon" aria-hidden="true">
++              ↗
++            </span>
++            <div>
++              <strong>
++                {names().length === 1
++                  ? names()[0]
++                  : String(currentLang()).startsWith("zh")
++                    ? `${names().length} 个项目`
++                    : t("shares.item_count", { count: names().length })}
++              </strong>
++              <span>{label("view_link")}</span>
++            </div>
++          </div>
++          <Show
++            when={!link()}
++            fallback={
++              <div class="drive-share-result">
++                <label for="drive-share-link">{label("link_ready")}</label>
+                 <Input
+-                  size="sm"
+-                  invalid={!expireValid()}
+-                  value={expireString()}
+-                  placeholder="yyyy-MM-dd HH:mm:ss or +1w1d1H1m1s1ms"
+-                  onInput={(e) => {
+-                    setExpireString(e.currentTarget.value)
+-                    if (e.currentTarget.value === "") {
+-                      setExpireValid(true)
+-                      setShare("expires", null)
+-                      return
+-                    }
+-                    const date = getExpireDate(e.currentTarget.value)
+-                    if (isNaN(date.getTime())) {
+-                      setExpireValid(false)
+-                    } else {
+-                      setExpireValid(true)
+-                      setShare("expires", date.toISOString())
+-                    }
+-                  }}
++                  id="drive-share-link"
++                  value={link()}
++                  readonly
++                  onFocus={(event) => event.currentTarget.select()}
+                 />
+-                <Text size="sm">{t("shares.readme")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.readme}
+-                  onInput={(e) => {
+-                    setShare("readme", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.header")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.header}
+-                  onInput={(e) => {
+-                    setShare("header", e.currentTarget.value)
+-                  }}
+-                />
+-              </VStack>
+-            </ModalBody>
+-            <ModalFooter display="flex" gap="$2">
+-              <Button colorScheme="neutral" onClick={onClose}>
+-                {t("global.cancel")}
+-              </Button>
+-              <Button
+-                colorScheme="info"
+-                disabled={!expireValid()}
+-                loading={okLoading()}
+-                onClick={async () => {
+-                  const resp = await ok()
+-                  handleResp(resp, (data) => {
+-                    const templateData = makeTemplateData(data, {
+-                      site_title: getSetting("site_title"),
+-                    })
+-                    const msg = matchTemplate(
+-                      getSetting("share_summary_content"),
+-                      templateData,
+-                    )
+-                    setLink(msg)
+-                  })
+-                }}
+-              >
+-                {t("global.confirm")}
++                <p>{label("link_created_hint")}</p>
++              </div>
++            }
++          >
++            <div class="drive-share-section-title">
++              {label("link_settings")}
++            </div>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("access_label")}</strong>
++                <span>{label("anyone_with_link")}</span>
++              </div>
++            </div>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("expiry_label")}</strong>
++                <span>
++                  {expiryEnabled()
++                    ? label("custom_expiry")
++                    : label("never_expires")}
++                </span>
++              </div>
++              <input
++                type="checkbox"
++                aria-label={label("expiry_label")}
++                checked={expiryEnabled()}
++                onChange={(event) =>
++                  setExpiryEnabled(event.currentTarget.checked)
++                }
++              />
++            </div>
++            <Show when={expiryEnabled()}>
++              <input
++                class="drive-share-input"
++                type="datetime-local"
++                aria-label={label("expiry_label")}
++                value={expiry()}
++                onInput={(event) => setExpiry(event.currentTarget.value)}
++              />
++            </Show>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("password_label")}</strong>
++                <span>
++                  {passwordEnabled()
++                    ? label("password_on")
++                    : label("no_password")}
++                </span>
++              </div>
++              <input
++                type="checkbox"
++                aria-label={label("password_label")}
++                checked={passwordEnabled()}
++                onChange={(event) =>
++                  setPasswordEnabled(event.currentTarget.checked)
++                }
++              />
++            </div>
++            <Show when={passwordEnabled()}>
++              <Input
++                type="text"
++                aria-label={label("password_label")}
++                placeholder={label("password_placeholder")}
++                value={password()}
++                onInput={(event) => setPassword(event.currentTarget.value)}
++              />
++            </Show>
++          </Show>
++        </ModalBody>
++        <ModalFooter class="drive-share-footer">
++          <Button colorScheme="neutral" onClick={onClose}>
++            {link() ? t("global.confirm") : t("global.cancel")}
++          </Button>
++          <Show
++            when={!link()}
++            fallback={
++              <Button colorScheme="info" onClick={() => copy(link())}>
++                {t("shares.copy_msg")}
+               </Button>
+-            </ModalFooter>
+-          </Match>
+-        </Switch>
++            }
++          >
++            <Button
++              colorScheme="info"
++              loading={creating()}
++              onClick={createShare}
++            >
++              {label("create_link")}
++            </Button>
++          </Show>
++        </ModalFooter>
+       </ModalContent>
+     </Modal>
+   )
 diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
 index e55e19b..d38471c 100644
 --- a/src/pages/home/toolbar/Toolbar.tsx
