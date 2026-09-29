@@ -468,38 +468,50 @@ index 0000000..c169972
 +}
 diff --git a/src/pages/home/DriveSelection.tsx b/src/pages/home/DriveSelection.tsx
 new file mode 100644
-index 0000000..5f69754
+index 0000000..1dd63f0
 --- /dev/null
 +++ b/src/pages/home/DriveSelection.tsx
-@@ -0,0 +1,105 @@
-+import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
-+import { For, Show } from "solid-js"
+@@ -0,0 +1,96 @@
++import { Icon } from "@hope-ui/solid"
++import { Show } from "solid-js"
++import { useContextMenu } from "solid-contextmenu"
 +import { BsCheck2Square, BsDownload, BsThreeDots } from "solid-icons/bs"
-+import { useCopyLink, useDownload, useRouter, useT } from "~/hooks"
++import { useDownload, useT } from "~/hooks"
 +import {
 +  checkboxOpen,
++  getSettingBool,
 +  haveSelected,
++  me,
 +  objStore,
 +  selectedMsg,
++  selectedObjs,
 +  selectAll,
 +  State,
 +  toggleCheckbox,
 +  layout,
-+  userCan,
 +} from "~/store"
 +import { currentLang } from "~/app/i18n"
-+import { bus } from "~/utils"
++import { bus, notify } from "~/utils"
++import { UserMethods } from "~/types"
 +
 +// Keep file operations alongside the list, and use the existing handlers.
 +export const DriveSelection = () => {
 +  const t = useT()
-+  const { isShare } = useRouter()
 +  const { batchDownloadSelected } = useDownload()
-+  const { copySelectedPreviewPage } = useCopyLink()
++  const { show } = useContextMenu({ id: 1 })
 +  const isFolder = () =>
 +    [State.Folder, State.FetchingMore].includes(objStore.state)
-+  const canEdit = (name: "rename" | "move" | "copy" | "delete") =>
-+    !isShare() && objStore.write && userCan(name)
++  const downloadSelected = () => {
++    if (selectedObjs().some((obj) => obj.is_dir)) {
++      if (!UserMethods.is_admin(me()) && !getSettingBool("package_download")) {
++        notify.warning(t("home.toolbar.package_download_disabled"))
++        return
++      }
++      bus.emit("tool", "package_download")
++      return
++    }
++    batchDownloadSelected()
++  }
 +  const closeSelection = () => {
 +    selectAll(false)
 +    if (layout() !== "list" && checkboxOpen()) toggleCheckbox()
@@ -528,46 +540,25 @@ index 0000000..5f69754
 +            </span>
 +            <div class="drive-selection-actions">
 +              <Show when={haveSelected()}>
-+                <button class="drive-button" onClick={batchDownloadSelected}>
++                <button class="drive-button drive-selection-action" onClick={downloadSelected}>
 +                  <Icon as={BsDownload} />
 +                  <span>{t("home.toolbar.download")}</span>
 +                </button>
-+                <Menu placement="bottom-end">
-+                  <MenuTrigger
-+                    as="button"
-+                    class="drive-button"
-+                    aria-label={t("home.toolbar.more")}
-+                  >
-+                    <Icon as={BsThreeDots} />
-+                    <span>{t("home.toolbar.more")}</span>
-+                  </MenuTrigger>
-+                  <MenuContent>
-+                    <For each={["rename", "move", "copy", "delete"] as const}>
-+                      {(name) => (
-+                        <Show when={canEdit(name)}>
-+                          <MenuItem
-+                            colorScheme={
-+                              name === "delete" ? "danger" : "neutral"
-+                            }
-+                            onSelect={() => bus.emit("tool", name)}
-+                          >
-+                            {t(`home.toolbar.${name}`)}
-+                          </MenuItem>
-+                        </Show>
-+                      )}
-+                    </For>
-+                    <Show when={!isShare() && userCan("share")}>
-+                      <MenuItem onSelect={() => bus.emit("tool", "share")}>
-+                        {t("home.toolbar.share")}
-+                      </MenuItem>
-+                    </Show>
-+                    <MenuItem onSelect={copySelectedPreviewPage}>
-+                      {t("home.toolbar.copy_link")}
-+                    </MenuItem>
-+                  </MenuContent>
-+                </Menu>
++                <button
++                  type="button"
++                  class="drive-button drive-selection-action"
++                  aria-label={t("home.toolbar.more")}
++                  onClick={(event) => {
++                    event.preventDefault()
++                    event.stopPropagation()
++                    show(event, { props: selectedObjs()[0] })
++                  }}
++                >
++                  <Icon as={BsThreeDots} />
++                  <span>{t("home.toolbar.more")}</span>
++                </button>
 +              </Show>
-+              <button class="drive-select-button" onClick={closeSelection}>
++              <button class="drive-select-button drive-selection-cancel" onClick={closeSelection}>
 +                {t("home.toolbar.cancel_select")}
 +              </button>
 +            </div>
@@ -1062,10 +1053,10 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..b550a7d
+index 0000000..e22d7fe
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,894 @@
+@@ -0,0 +1,957 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1537,6 +1528,28 @@ index 0000000..b550a7d
 +  flex-wrap: wrap;
 +  gap: 8px;
 +}
++.drive-selection-actions .drive-selection-action {
++  min-height: 38px;
++  padding: 0 14px;
++  border: 1px solid var(--drive-line);
++  border-radius: 8px;
++  background: var(--drive-bg);
++  color: var(--drive-text);
++  box-shadow: 0 1px 1px #00000008;
++  font-weight: 500;
++}
++.drive-selection-actions .drive-selection-action:hover {
++  border-color: #c9c7c4;
++  background: var(--drive-hover);
++}
++.drive-selection-actions .drive-selection-action svg {
++  width: 18px;
++  height: 18px;
++}
++.drive-selection-actions .drive-selection-cancel {
++  padding-inline: 10px;
++  color: var(--drive-muted);
++}
 +@media (max-width: 760px) {
 +  .drive-file-tools {
 +    margin-top: -4px;
@@ -1630,33 +1643,74 @@ index 0000000..b550a7d
 +.drive-layout-choice > span {
 +  width: 16px;
 +}
-+.drive-context-menu {
-+  min-width: 250px;
-+  max-width: min(320px, calc(100vw - 24px));
-+  max-height: min(660px, calc(100vh - 24px));
++.drive-context-menu.solid-contextmenu {
++  --menu-bg: #fff;
++  --menu-text: #1e1919;
++  --menu-muted: #6b6662;
++  --menu-border: #e8e6e3;
++  --menu-hover: #f4f5f7;
++  min-width: 258px;
++  max-width: min(300px, calc(100vw - 24px));
++  max-height: min(680px, calc(100vh - 24px));
 +  overflow-y: auto;
-+  border: 1px solid var(--drive-line);
-+  border-radius: 14px;
-+  background: var(--drive-bg);
-+  box-shadow: 0 16px 40px #0002;
++  border: 1px solid var(--menu-border);
++  border-radius: 12px;
++  padding: 6px 0;
++  background: var(--menu-bg);
++  color: var(--menu-text);
++  box-shadow: 0 12px 32px #00000024;
++  font-size: 14px;
++}
++.drive-context-menu.solid-contextmenu__theme--dark {
++  --menu-bg: #25272b;
++  --menu-text: #f1f1f1;
++  --menu-muted: #adafb5;
++  --menu-border: #3a3d43;
++  --menu-hover: #363940;
 +}
 +.drive-context-title {
-+  padding: 12px 16px;
-+  font-weight: 650;
++  padding: 10px 16px 12px;
++  font-weight: 600;
++  color: var(--menu-text);
 +  overflow: hidden;
 +  white-space: nowrap;
 +  text-overflow: ellipsis;
-+  border-bottom: 1px solid var(--drive-line);
++  border-bottom: 1px solid var(--menu-border);
 +}
-+.drive-context-menu .solid-contextmenu__item__content {
-+  gap: 10px;
-+  padding: 10px 16px;
-+  color: var(--drive-text);
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item__content {
++  min-height: 40px;
++  gap: 12px;
++  padding: 8px 16px;
++  color: var(--menu-text);
++  font-weight: 400;
 +}
-+.drive-context-menu .solid-contextmenu__item:hover > .solid-contextmenu__item__content,
-+.drive-context-menu .solid-contextmenu__item:focus > .solid-contextmenu__item__content {
-+  background: var(--drive-hover);
-+  color: var(--drive-text);
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item:hover > .solid-contextmenu__item__content,
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item:focus > .solid-contextmenu__item__content,
++.drive-context-menu.solid-contextmenu .solid-contextmenu__submenu--is-open > .solid-contextmenu__item__content {
++  background: var(--menu-hover);
++  color: var(--menu-text);
++}
++.drive-context-menu.solid-contextmenu .solid-contextmenu__separator {
++  height: 1px;
++  margin: 6px 0;
++  background: var(--menu-border);
++}
++.drive-context-menu .solid-contextmenu__submenu {
++  border: 1px solid var(--menu-border);
++  border-radius: 10px;
++  background: var(--menu-bg);
++  box-shadow: 0 12px 32px #00000024;
++}
++.drive-context-item {
++  width: 100%;
++  min-width: 0;
++  color: inherit;
++}
++.drive-context-item svg {
++  flex-shrink: 0;
++  width: 20px;
++  height: 20px;
++  color: inherit;
 +}
 +.drive-row-menu-space {
 +  flex: 0 0 28px;
@@ -2732,7 +2786,7 @@ index b92ff0f..9a56b10 100644
        onMouseEnter={() => {
          setPathAs(props.node.path, props.node.is_dir)
 diff --git a/src/pages/home/folder/context-menu.tsx b/src/pages/home/folder/context-menu.tsx
-index ee8049f..f9ba0b3 100644
+index ee8049f..8b2bf13 100644
 --- a/src/pages/home/folder/context-menu.tsx
 +++ b/src/pages/home/folder/context-menu.tsx
 @@ -1,10 +1,10 @@
@@ -2748,8 +2802,12 @@ index ee8049f..f9ba0b3 100644
  import { ObjType, UserMethods } from "~/types"
  import {
    getSettingBool,
-@@ -20,6 +20,8 @@ import { getPreviews } from "../previews"
- import { BsPlayCircleFill } from "solid-icons/bs"
+@@ -17,19 +17,20 @@ import {
+ } from "~/store"
+ import { players } from "../previews/video_box"
+ import { getPreviews } from "../previews"
+-import { BsPlayCircleFill } from "solid-icons/bs"
++import { BsFolder2Open, BsPlayCircleFill } from "solid-icons/bs"
  import { isArchive } from "~/store/archive"
  import axios from "axios"
 +import { currentLang } from "~/app/i18n"
@@ -2757,7 +2815,20 @@ index ee8049f..f9ba0b3 100644
  
  const ItemContent = (props: { name: string }) => {
    const t = useT()
-@@ -47,6 +49,8 @@ export const ContextMenu = () => {
+   return (
+-    <HStack spacing="$2">
++    <HStack class="drive-context-item" spacing="$3">
+       <Icon
+-        p={operations[props.name].p ? "$1" : undefined}
+         as={operations[props.name].icon}
+-        boxSize="$7"
+-        color={operations[props.name].color}
++        boxSize="$5"
++        color="currentColor"
+       />
+       <Text>{t(`home.toolbar.${props.name}`)}</Text>
+     </HStack>
+@@ -47,6 +48,8 @@ export const ContextMenu = () => {
    }
    const { rawLink } = useLink()
    const { isShare, pushHref, to } = useRouter()
@@ -2766,7 +2837,7 @@ index ee8049f..f9ba0b3 100644
    const openWithPreviews = createMemo(() => {
      const objs = selectedObjs()
      if (objs.length !== 1) return []
-@@ -61,14 +65,40 @@ export const ContextMenu = () => {
+@@ -61,14 +64,59 @@ export const ContextMenu = () => {
        animation="scale"
        theme={colorMode() !== "dark" ? "light" : "dark"}
        style="z-index: var(--hope-zIndices-popover)"
@@ -2779,7 +2850,10 @@ index ee8049f..f9ba0b3 100644
 +      </div>
 +      <Show when={oneChecked()}>
 +        <Item onClick={({ props }) => openItem(props, pushHref(props.name), to)}>
-+          {String(currentLang()).startsWith("zh") ? "打开" : "Open"}
++          <HStack class="drive-context-item" spacing="$3">
++            <Icon as={BsFolder2Open} boxSize="$5" color="currentColor" />
++            <Text>{String(currentLang()).startsWith("zh") ? "打开" : "Open"}</Text>
++          </HStack>
 +        </Item>
 +        <Item
 +          onClick={({ props }) => {
@@ -2797,6 +2871,22 @@ index ee8049f..f9ba0b3 100644
 +          <ItemContent name="download" />
 +        </Item>
 +      </Show>
++      <Show when={!oneChecked() && haveSelected()}>
++        <Submenu label={<ItemContent name="download" />}>
++          <Item onClick={batchDownloadSelected}>
++            {t("home.toolbar.batch_download")}
++          </Item>
++          <Show when={canPackageDownload()}>
++            <Item onClick={() => bus.emit("tool", "package_download")}>
++              {t("home.toolbar.package_download")}
++            </Item>
++            <Item onClick={playlistDownloadSelected}>
++              {t("home.toolbar.playlist_download")}
++            </Item>
++          </Show>
++          <Item onClick={sendToAria2}>{t("home.toolbar.send_aria2")}</Item>
++        </Submenu>
++      </Show>
        <Show when={openWithPreviews().length > 0}>
          <Submenu label={<ItemContent name="open_with" />}>
            <For each={openWithPreviews()}>
@@ -2808,7 +2898,7 @@ index ee8049f..f9ba0b3 100644
                  }}
                >
                  {preview.name}
-@@ -77,10 +107,28 @@ export const ContextMenu = () => {
+@@ -77,10 +125,41 @@ export const ContextMenu = () => {
            </For>
          </Submenu>
        </Show>
@@ -2822,6 +2912,19 @@ index ee8049f..f9ba0b3 100644
 +        >
 +          <ItemContent name="copy_link" />
 +        </Item>
++      </Show>
++      <Show when={!oneChecked() && haveSelected()}>
++        <Submenu label={<ItemContent name="copy_link" />}>
++          <Item onClick={copySelectedPreviewPage}>
++            {t("home.toolbar.preview_page")}
++          </Item>
++          <Item onClick={() => copySelectedRawLink()}>
++            {t("home.toolbar.down_link")}
++          </Item>
++          <Item onClick={() => copySelectedRawLink(true)}>
++            {t("home.toolbar.encode_down_link")}
++          </Item>
++        </Submenu>
 +      </Show>
 +      <Item
 +        hidden={!userCan("share") || isShare()}
@@ -2838,7 +2941,7 @@ index ee8049f..f9ba0b3 100644
              onClick={() => {
                bus.emit("tool", name)
              }}
-@@ -89,18 +137,11 @@ export const ContextMenu = () => {
+@@ -89,18 +168,11 @@ export const ContextMenu = () => {
            </Item>
          )}
        </For>
@@ -2858,7 +2961,7 @@ index ee8049f..f9ba0b3 100644
              !userCan("decompress") ||
              !objStore.write ||
              selectedObjs().some((o) => o.is_dir) ||
-@@ -117,6 +158,7 @@ export const ContextMenu = () => {
+@@ -117,6 +189,7 @@ export const ContextMenu = () => {
          hidden={() => {
            return (
              isShare() ||
@@ -2866,7 +2969,7 @@ index ee8049f..f9ba0b3 100644
              !userCan("offline_download") ||
              !objStore.write ||
              !oneChecked() ||
-@@ -159,32 +201,6 @@ export const ContextMenu = () => {
+@@ -159,32 +232,6 @@ export const ContextMenu = () => {
          <ItemContent name="offline_download_torrent" />
        </Item>
        <Show when={oneChecked()}>
@@ -2899,6 +3002,56 @@ index ee8049f..f9ba0b3 100644
          <Submenu
            hidden={({ props }) => {
              return props.type !== ObjType.VIDEO
+@@ -193,9 +240,8 @@ export const ContextMenu = () => {
+             <HStack spacing="$2">
+               <Icon
+                 as={BsPlayCircleFill}
+-                boxSize="$7"
+-                p="$0_5"
+-                color="$info9"
++                boxSize="$5"
++                color="currentColor"
+               />
+               <Text>{t("home.preview.play_with")}</Text>
+             </HStack>
+@@ -226,37 +272,6 @@ export const ContextMenu = () => {
+           </For>
+         </Submenu>
+       </Show>
+-      <Show when={!oneChecked() && haveSelected()}>
+-        <Submenu label={<ItemContent name="copy_link" />}>
+-          <Item onClick={copySelectedPreviewPage}>
+-            {t("home.toolbar.preview_page")}
+-          </Item>
+-          <Item onClick={() => copySelectedRawLink()}>
+-            {t("home.toolbar.down_link")}
+-          </Item>
+-          <Item onClick={() => copySelectedRawLink(true)}>
+-            {t("home.toolbar.encode_down_link")}
+-          </Item>
+-        </Submenu>
+-        <Submenu label={<ItemContent name="download" />}>
+-          <Item onClick={batchDownloadSelected}>
+-            {t("home.toolbar.batch_download")}
+-          </Item>
+-          <Show
+-            when={
+-              UserMethods.is_admin(me()) || getSettingBool("package_download")
+-            }
+-          >
+-            <Item onClick={() => bus.emit("tool", "package_download")}>
+-              {t("home.toolbar.package_download")}
+-            </Item>
+-            <Item onClick={playlistDownloadSelected}>
+-              {t("home.toolbar.playlist_download")}
+-            </Item>
+-          </Show>
+-          <Item onClick={sendToAria2}>{t("home.toolbar.send_aria2")}</Item>
+-        </Submenu>
+-      </Show>
+     </Menu>
+   )
+ }
 diff --git a/src/pages/home/folder/open-item.ts b/src/pages/home/folder/open-item.ts
 new file mode 100644
 index 0000000..bf13d9b
