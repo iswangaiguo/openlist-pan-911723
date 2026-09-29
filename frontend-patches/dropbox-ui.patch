@@ -1080,14 +1080,14 @@ index fb0f297..aa28b74 100644
  }
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..d147b56
+index 0000000..4d0a982
 --- /dev/null
 +++ b/src/pages/home/drive.css
 @@ -0,0 +1,1017 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
-+  --drive-rail: #f7f5f2;
++  --drive-rail: #f9fafd;
 +  --drive-text: #1e1919;
 +  --drive-muted: #706b67;
 +  --drive-line: #e8e6e3;
