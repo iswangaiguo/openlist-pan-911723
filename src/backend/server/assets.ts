@@ -175,6 +175,8 @@ export async function cdnAssetRedirect(
   env: any,
   pathAndSearch: string,
 ): Promise<string> {
+  // The fork's pinned PDF.js assets are deployed locally, never on the official CDN.
+  if (pathAndSearch.startsWith("/static/pdfjs/")) return ""
   const raw = rawAssetUrls(env)
   if (!raw) return ""
   // 必须是「目录/具体文件」，目录本身（/assets、/assets/）不重定向

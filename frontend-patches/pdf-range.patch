@@ -1,0 +1,167 @@
+diff --git a/src/pages/home/previews/pdf.tsx b/src/pages/home/previews/pdf.tsx
+index b67aa93..cb2952b 100644
+--- a/src/pages/home/previews/pdf.tsx
++++ b/src/pages/home/previews/pdf.tsx
+@@ -1,39 +1,136 @@
+-import EmbedPDF from "@embedpdf/snippet"
+-import pdfiumWasmUrl from "@embedpdf/snippet/dist/pdfium.wasm?url"
+-import { Box, useColorMode } from "@hope-ui/solid"
+-import { onMount } from "solid-js"
++import { Box, Button, useColorMode } from "@hope-ui/solid"
++import {
++  createEffect,
++  createMemo,
++  createSignal,
++  onCleanup,
++  onMount,
++  Show,
++} from "solid-js"
+ import { currentLang } from "~/app/i18n"
+ import { BoxWithFullScreen } from "~/components"
+ import { objStore } from "~/store"
+-import { base_path } from "~/utils"
++import { joinBase } from "~/utils"
+ 
+-const PDFViewer = () => {
++const PDFFrame = (props: {
++  url: string
++  locale: string
++  filename: string
++  retry: () => void
++}) => {
+   const { colorMode } = useColorMode()
+-  let ref: HTMLDivElement | undefined
++  const [ready, setReady] = createSignal(false)
++  const [failed, setFailed] = createSignal(false)
++  let frame: HTMLIFrameElement | undefined
++  const viewer = new URL(
++    joinBase("static/pdfjs/6.3.289-openlist1/web/viewer.html"),
++    location.origin,
++  )
++  viewer.searchParams.set("locale", props.locale)
++  viewer.searchParams.set("theme", colorMode())
++  const chinese = () => props.locale.startsWith("zh")
+   onMount(() => {
+-    const src = objStore.raw_url
+-    // wasm url must be absolute
+-    const absolutePdfiumWasmUrl = new URL(
+-      pdfiumWasmUrl,
+-      location.href + base_path,
+-    ).href
+-    if (ref && src) {
+-      EmbedPDF.init({
+-        type: "container",
+-        target: ref,
+-        src,
+-        theme: { preference: colorMode() },
+-        i18n: {
+-          defaultLocale: currentLang(),
+-          fallbackLocale: "en",
+-        },
+-        wasmUrl: absolutePdfiumWasmUrl,
+-      })
++    const timeout = window.setTimeout(() => setFailed(true), 30_000)
++    const receive = (event: MessageEvent) => {
++      if (
++        event.origin !== location.origin ||
++        event.source !== frame?.contentWindow
++      )
++        return
++      if (event.data?.type === "openlist:pdf:ready") {
++        window.clearTimeout(timeout)
++        setReady(true)
++        frame?.contentWindow?.postMessage(
++          {
++            type: "openlist:pdf:open",
++            url: props.url,
++            filename: props.filename,
++          },
++          location.origin,
++        )
++      } else if (event.data?.type === "openlist:pdf:error") {
++        window.clearTimeout(timeout)
++        setFailed(true)
++      }
+     }
++    window.addEventListener("message", receive)
++    onCleanup(() => {
++      window.clearTimeout(timeout)
++      window.removeEventListener("message", receive)
++    })
++  })
++  createEffect(() => {
++    const theme = colorMode()
++    if (ready())
++      frame?.contentWindow?.postMessage(
++        { type: "openlist:pdf:theme", theme },
++        location.origin,
++      )
+   })
++  return (
++    <Box w="$full" h="$full" position="relative">
++      <iframe
++        ref={frame}
++        src={viewer.href}
++        title={props.filename || "PDF"}
++        allow="fullscreen"
++        style={{ width: "100%", height: "100%", border: "0", display: "block" }}
++      />
++      <Show when={failed()}>
++        <Box
++          position="absolute"
++          top="0"
++          right="0"
++          bottom="0"
++          left="0"
++          bg="$background"
++          display="flex"
++          alignItems="center"
++          justifyContent="center"
++          flexDirection="column"
++          gap="$4"
++          p="$4"
++          role="alert"
++        >
++          <span>
++            {chinese() ? "PDF 预览加载失败" : "Unable to load PDF preview"}
++          </span>
++          <Button onClick={props.retry}>{chinese() ? "重试" : "Retry"}</Button>
++          <a href={props.url} target="_blank" rel="noopener noreferrer">
++            {chinese() ? "打开原文件" : "Open original file"}
++          </a>
++        </Box>
++      </Show>
++    </Box>
++  )
++}
++
++const PDFViewer = () => {
++  const [attempt, setAttempt] = createSignal(0)
++  // A new URL/locale/retry replaces the iframe, cancelling its worker and all
++  // outstanding range requests instead of leaving the previous file alive.
++  const document = createMemo(() =>
++    objStore.raw_url
++      ? {
++          url: objStore.raw_url,
++          locale: currentLang(),
++          filename: objStore.obj.name,
++          attempt: attempt(),
++        }
++      : undefined,
++  )
+   return (
+     <BoxWithFullScreen w="$full" h="60vh">
+-      <Box ref={ref} w="$full" h="$full" />
++      <Show keyed when={document()}>
++        {(doc) => (
++          <PDFFrame
++            url={doc.url}
++            locale={doc.locale}
++            filename={doc.filename}
++            retry={() => setAttempt((value) => value + 1)}
++          />
++        )}
++      </Show>
+     </BoxWithFullScreen>
+   )
+ }

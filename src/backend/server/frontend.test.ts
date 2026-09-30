@@ -44,3 +44,34 @@ test("HTML conditional requests cannot retain an older long cache policy", async
   assert.equal(response.status, 304)
   assert.equal(response.headers.get("cache-control"), "no-cache, must-revalidate")
 })
+
+const pdfPath = "/static/pdfjs/6.3.289-openlist1/web/viewer.html"
+const pdfShell = () => new Response('<!doctype html><html data-openlist-pdf-viewer="range"><title>PDF</title></html>', { headers: { "Content-Type": "text/html", "Cache-Control": "public, max-age=3600" } })
+test("the local PDF viewer HTML is served without CDN rewriting", async () => {
+  const response = await serveFrontend(new Request("https://test.example" + pdfPath), { fetch: async () => pdfShell() }, undefined, { ASSET_URLS: "https://cdn.example/dist" })
+  assert.equal(response.status, 200)
+  assert.match(await response.text(), /data-openlist-pdf-viewer/)
+  assert.equal(response.headers.get("cache-control"), "no-cache, must-revalidate")
+  assert.equal(response.headers.get("location"), null)
+})
+test("PDF viewer HEAD and conditional responses verify the actual entry with GET", async () => {
+  for (const method of ["HEAD", "GET"]) {
+    const calls: Request[] = []
+    const response = await serveFrontend(new Request("https://test.example" + pdfPath, { method, headers: { "If-None-Match": "old", "If-Modified-Since": "old" } }), { fetch: async (request) => { calls.push(request); return calls.length === 1 ? new Response(null, { status: method === "HEAD" ? 200 : 304 }) : pdfShell() } })
+    assert.equal(response.status, 200)
+    assert.equal(calls[1].method, "GET")
+    assert.equal(calls[1].headers.get("if-none-match"), null)
+    assert.equal(calls[1].headers.get("if-modified-since"), null)
+    assert.equal(response.headers.get("cache-control"), "no-cache, must-revalidate")
+    assert.equal((await response.text()).length === 0, method === "HEAD")
+  }
+})
+test("a missing PDF viewer cannot become the SPA shell or redirect to the official CDN", async () => {
+  for (const method of ["GET", "HEAD"]) {
+    const response = await serveFrontend(new Request("https://test.example" + pdfPath, { method }), { fetch: async () => shell() }, undefined, { ASSET_URLS: "https://cdn.example/dist" })
+    assert.equal(response.status, 404)
+    assert.equal(response.headers.get("location"), null)
+    assert.equal(response.headers.get("cache-control"), "no-store")
+    assert.equal(await response.text(), "")
+  }
+})

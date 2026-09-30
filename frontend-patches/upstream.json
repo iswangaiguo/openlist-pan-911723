@@ -12,6 +12,7 @@
     "storage-usage.patch",
     "module-recovery.patch",
     "video-buffer.patch",
-    "video-recovery.patch"
+    "video-recovery.patch",
+    "pdf-range.patch"
   ]
 }

@@ -87,6 +87,9 @@ jobs:
         run: |
           set -e
           test -f dist/index.html
+          test -f dist/static/pdfjs/6.3.289-openlist1/web/viewer.html
+          test -f dist/static/pdfjs/6.3.289-openlist1/web/openlist.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist1/build/pdf.worker.mjs
           test -f "dist-server/api/[...route].js"
           test -f "cloud-functions/[[default]].js"
           echo "OK: dist/index.html、dist-server/api/[...route].js、cloud-functions/[[default]].js 均已生成"
