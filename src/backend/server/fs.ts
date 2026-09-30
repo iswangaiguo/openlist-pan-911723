@@ -114,8 +114,8 @@ fsRouter.get("/usage", async (c) => {
     if (c.req.query("scope") === "all") {
       const db = await getDb(c.env)
       const mounts = (db.storages || [])
-        .filter((storage) => !storage.disabled)
-        .map((storage) => ({
+        .filter((storage: { disabled?: boolean }) => !storage.disabled)
+        .map((storage: { id: number; mount_path: string }) => ({
           storage_id: storage.id,
           mount_path: storage.mount_path,
         }))

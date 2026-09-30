@@ -424,20 +424,18 @@ export class S3Driver implements StorageDriver {
     dstPhys: string,
   ): Promise<void> {
     await this.checkDogeToken()
-    const srcBase = this.getRemotePath(srcPhys)
-    const dstBase = this.getRemotePath(dstPhys)
+    // srcPhys/dstPhys 是源/目标项自身的物理路径（参数即目标项路径，不得再拼 name，
+    // 否则指向 <item>/<name> 导致静默失败）。
+    const srcPath = this.getRemotePath(srcPhys)
+    const dstPath = this.getRemotePath(dstPhys)
 
-    for (const name of names) {
-      const srcPath = joinPath(srcBase, name)
-      const dstPath = joinPath(dstBase, name)
-      const head = await this.client.headObject(srcPath)
-      if (head) {
-        await this.client.copyObject(srcPath, dstPath, head.size)
-        await this.client.deleteObject(srcPath)
-      } else {
-        await this.copyDirRecursive(srcPath, dstPath)
-        await this.removeDirRecursive(srcPath)
-      }
+    const head = await this.client.headObject(srcPath)
+    if (head) {
+      await this.client.copyObject(srcPath, dstPath, head.size)
+      await this.client.deleteObject(srcPath)
+    } else {
+      await this.copyDirRecursive(srcPath, dstPath)
+      await this.removeDirRecursive(srcPath)
     }
   }
 
@@ -449,18 +447,15 @@ export class S3Driver implements StorageDriver {
     dstPhys: string,
   ): Promise<void> {
     await this.checkDogeToken()
-    const srcBase = this.getRemotePath(srcPhys)
-    const dstBase = this.getRemotePath(dstPhys)
+    // 同 move：srcPhys/dstPhys 已是目标项自身路径，不得再拼 name。
+    const srcPath = this.getRemotePath(srcPhys)
+    const dstPath = this.getRemotePath(dstPhys)
 
-    for (const name of names) {
-      const srcPath = joinPath(srcBase, name)
-      const dstPath = joinPath(dstBase, name)
-      const head = await this.client.headObject(srcPath)
-      if (head) {
-        await this.client.copyObject(srcPath, dstPath, head.size)
-      } else {
-        await this.copyDirRecursive(srcPath, dstPath)
-      }
+    const head = await this.client.headObject(srcPath)
+    if (head) {
+      await this.client.copyObject(srcPath, dstPath, head.size)
+    } else {
+      await this.copyDirRecursive(srcPath, dstPath)
     }
   }
 
@@ -489,24 +484,18 @@ export class S3Driver implements StorageDriver {
     names: string[],
   ): Promise<void> {
     await this.checkDogeToken()
+    // Upstream resolves a single item's full path; fork batch callers still
+    // pass a directory plus names. removeObject uses [] for an explicit item.
     const basePath = this.getRemotePath(physicalPath)
-
-    if (names && names.length > 0) {
-      for (const name of names) {
-        const targetPath = joinPath(basePath, name)
-        const head = await this.client.headObject(targetPath)
-        if (head) {
-          await this.client.deleteObject(targetPath)
-        } else {
-          await this.removeDirRecursive(targetPath)
-        }
-      }
-    } else {
-      const head = await this.client.headObject(basePath)
+    const itemPath = names.length === 0 ||
+      (names.length === 1 && getBaseName(basePath) === names[0])
+    const targets = itemPath ? [basePath] : names.map((name) => joinPath(basePath, name))
+    for (const targetPath of targets) {
+      const head = await this.client.headObject(targetPath)
       if (head) {
-        await this.client.deleteObject(basePath)
+        await this.client.deleteObject(targetPath)
       } else {
-        await this.removeDirRecursive(basePath)
+        await this.removeDirRecursive(targetPath)
       }
     }
   }
