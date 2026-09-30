@@ -18,6 +18,7 @@
 | `module-recovery.patch` | 模块加载错误识别、页面错误边界与恢复 |
 | `video-buffer.patch` | HLS/mpegts 缓冲配置 |
 | `video-recovery.patch` | 普通与转码视频的最终错误恢复实现 |
+| `pdf-range.patch` | 本地 PDF.js 预览入口、主题、语言和重试 |
 
 用量统计首次加载仍自动计算全部挂载，并在五分钟内复用缓存。上传完成事件合并后，
 只重算上传目录匹配的最具体挂载，其他挂载的已有结果保留；“刷新用量”强制重算全部挂载。
@@ -28,3 +29,10 @@
 
 文件操作弹窗通过 `DriveDialogScope` 共用 Dropbox 风格，并把主题传入页面外层的弹窗。
 目录选择器的嵌套弹窗也继承该作用域；管理页面使用同一组件时保留原来的样式。
+
+PDF 预览改用固定版本的 PDF.js 完整查看器，构建时由 `scripts/fetch-pdf-viewer.mjs`
+下载官方 legacy release 并校验 SHA-256，部署到带版本和集成修订号的本地静态目录。
+`pdf-viewer-bridge.mjs` 在初始化前开启 Range，关闭流式整文件下载和自动补取；
+源站不支持 Range 时由 PDF.js 回退普通下载。跨域直链仍需要允许 CORS 并暴露
+`Accept-Ranges`、`Content-Length`、`Content-Range`。搜索、打印、下载等操作可能继续读取更多数据。
+修改桥接脚本时递增目录中的 `openlist` 修订号，同时更新前端补丁的入口路径。

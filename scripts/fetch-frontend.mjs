@@ -41,6 +41,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import { installPdfViewer } from "./fetch-pdf-viewer.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // 始终以仓库根目录为基准（无论从哪个 cwd 调用）
@@ -133,6 +134,7 @@ function replaceDist(src) {
   console.log(`  Copying frontend dist: ${src} -> ${DEST}`)
   fs.rmSync(DEST, { recursive: true, force: true })
   fs.cpSync(src, DEST, { recursive: true })
+  installPdfViewer(DEST)
   stampFrontendVersion(src)
   console.log(`✓ Frontend dist ready (${DEST})`)
 }
@@ -291,6 +293,7 @@ function buildLocalRepo(repo) {
       path.join(ROOT, "scripts/tests/frontend-module-recovery.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-video-recovery.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-storage-usage.test.mjs"),
+      path.join(ROOT, "scripts/tests/pdf-viewer.test.mjs"),
     ],
     {
       cwd: ROOT,

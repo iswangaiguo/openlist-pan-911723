@@ -31,6 +31,26 @@ export async function serveFrontend(request: Request, assets?: { fetch(request: 
   }
   if (assets) {
     const response = await assets.fetch(request)
+    if (/^\/static\/pdfjs\/\d+\.\d+\.\d+-openlist\d+\/web\/viewer\.html$/.test(url.pathname) && ["GET", "HEAD"].includes(request.method)) {
+      // Verify the real entry: a static binding may return the SPA shell for a
+      // missing file, even with status 200. HEAD/304 need an unconditional GET.
+      let entry = response
+      if (request.method === "HEAD" || response.status === 304) {
+        const headers = new Headers(request.headers)
+        headers.delete("if-none-match")
+        headers.delete("if-modified-since")
+        entry = await assets.fetch(new Request(request, { method: "GET", headers }))
+      }
+      const body = entry.ok && html(entry) ? await entry.text() : ""
+      if (body.includes('data-openlist-pdf-viewer="range"')) {
+        const headers = new Headers(entry.headers)
+        headers.delete("content-encoding")
+        headers.delete("content-length")
+        headers.set("Cache-Control", "no-cache, must-revalidate")
+        return new Response(request.method === "HEAD" ? null : body, { headers })
+      }
+      return new Response(null, { status: entry.status >= 400 ? entry.status : 404, headers: { "Cache-Control": "no-store" } })
+    }
     if (asset) {
       if (!response.ok || html(response)) {
         const redirect = await redirectAsset()
