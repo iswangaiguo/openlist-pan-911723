@@ -82,7 +82,7 @@ async function safeProxyFetch(
   url: string,
   headers: Record<string, string>,
   allowHosts?: ReadonlySet<string> | string[],
-  isVideo = false,
+  isRangePreview = false,
 ): Promise<Response> {
   const MAX_REDIRECTS = 5
   let current = url
@@ -94,10 +94,10 @@ async function safeProxyFetch(
       throw new Error(e?.message || "SSRF blocked: restricted destination")
     }
 
-    // Cold-cache B2 video ranges can trigger whole-file origin reads. Keep
-    // seeking targeted by bypassing fetch's cache only for these subrequests.
+    // Cold-cache B2 video/PDF ranges can trigger whole-file origin reads. Keep
+    // previews targeted by bypassing fetch's cache only for these subrequests.
     const bypassCache =
-      isVideo &&
+      isRangePreview &&
       new URL(current).hostname.endsWith(".backblazeb2.com") &&
       new Headers(currentHeaders).has("range")
     const res = await fetch(current, {
@@ -223,12 +223,13 @@ async function proxyUpstream(
   })
 
   let upstreamRes: Response
+  const isRangePreview = fileItem.type === 2 || /\.pdf$/i.test(reqPath)
   try {
     upstreamRes = await safeProxyFetch(
       fileItem.raw_url,
       headers,
       trustedHosts,
-      fileItem.type === 2,
+      isRangePreview,
     )
   } catch (ssrfErr: any) {
     return c.text(ssrfErr.message || "SSRF blocked", 403)
@@ -246,7 +247,7 @@ async function proxyUpstream(
       fileItem.raw_url,
       headers,
       trustedHosts,
-      fileItem.type === 2,
+      isRangePreview,
     )
   }
 
