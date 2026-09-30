@@ -11,6 +11,8 @@ PDF 预览使用本地部署的 PDF.js 6.3.289 legacy viewer。`disableRange=fal
 每条文件请求在响应头前延迟 2 秒，传输速率限制为 8 MiB/s；测试使用独立浏览器
 上下文，观察第一页 canvas 渲染完成。首屏后的字节量是固定 200 ms 观察窗口的
 服务端发送量，可能含相邻页正在进行的读取，不能当作闲置后的最终下载量。
+这轮分段大小与 worker 对比通过 Playwright 请求拦截注入测试参数，浏览器 HTTP
+缓存因此被关闭；它衡量的是解析与回源等待，不能代替缓存开启的普通浏览状态。
 
 | 目录布局 |    分段 | 首屏时间 | 观察窗口发送量 | Range 请求数 |
 | -------- | ------: | -------: | -------------: | -----------: |
@@ -37,7 +39,14 @@ PDF 预览使用本地部署的 PDF.js 6.3.289 legacy viewer。`disableRange=fal
    同样应用于 PDF Range，避免分段读取落入整文件缓存回源路径。限制仍是 B2
    主机、视频/PDF、实际带 Range 三项同时满足；普通下载、图片、其他存储和
    不支持 Range 时的重试沿用原策略。签名、SSRF 校验和 Range 原样透传。
-3. 静态目录升级为 `6.3.289-openlist2`，使入口与 worker 一起更新。
+3. `patchPdfRangeFetch()` 修正固定版本客户端 `build/pdf.mjs` 的 `fetchUrl()`。
+   仅当实际请求带 Range 时设置 `cache: "no-store"`，使 Chromium 的 HTTP
+   缓存不会把同 URL 的并发分段请求重新排队。保留 PDF.js 内部的已读取分段
+   缓存；初始能力探测与整文件回退沿用默认 HTTP 缓存策略。URL、签名、Range、
+   credentials、CORS、重定向和 AbortSignal 原样传递。构建前仍校验官方发行包
+   SHA-256，预期 helper 必须唯一匹配。
+4. worker 并发修复首先使用 `6.3.289-openlist2`；浏览器缓存修复将入口、API 和
+   worker 一起升级为 `6.3.289-openlist3`，避免旧客户端模块继续被使用。
 
 在最终安装产物上重复比较，仍使用 64 KiB：
 
@@ -48,14 +57,42 @@ PDF 预览使用本地部署的 PDF.js 6.3.289 legacy viewer。`disableRange=fal
 | 嵌套 / 50 ms        |     2.46 s |     1.35 s |
 | 平铺 / 50 ms        |     1.22 s |     1.26 s |
 
+此表是修订 1 与修订 2 在浏览器 HTTP 缓存关闭时的比较。
 2 秒延迟时，两种布局修复前后的发送量与 27 次 Range 请求数完全相同。
 以上是可控延迟环境的本地证据，并非用户实际 B2 文件的线上计时；真实改善取决于
 目录布局、回源延迟和浏览器连接并发。B2 缓存策略通过签名代理的 HTTP 层回归验证，
 实际 Cloudflare 命中情况仍需上线后观察 Network Timing 与响应头。
 
+## 浏览器缓存开启的补测
+
+同样的 PDF、实际 Chromium、完整查看器和 64 KiB 分段；这次不使用任何请求拦截，
+并显式设置 `Network.setCacheDisabled({ cacheDisabled: false })`。HTTP/2 由本地 TLS
+服务器提供，协议通过浏览器 Network 事件确认；每条响应限速约 8 MiB/s。
+比较修订 2 与最终安装的修订 3，每次文件请求在响应头前延迟 2 秒：
+
+| 目录布局 | 协议     | 修订 2 首屏 | 修订 3 首屏 | 观察窗口发送量 | Range 请求数 |
+| -------- | -------- | ----------: | ----------: | -------------: | -----------: |
+| 平铺     | HTTP/1.1 |     55.45 s |     17.31 s |        3.11 MB |           27 |
+| 嵌套     | HTTP/1.1 |     55.47 s |     19.33 s |        3.11 MB |           27 |
+| 平铺     | HTTP/2   |     55.46 s |     11.40 s |        3.11 MB |           27 |
+| 嵌套     | HTTP/2   |     55.48 s |     13.35 s |        3.11 MB |           27 |
+
+发送量和请求数在这个 2 秒延迟观察窗口里保持相同。响应已经声明
+`Cache-Control: no-store`，仍可复现 Chromium 的同 URL Range 排队；必须在
+客户端发起分段请求时绕过 HTTP 缓存。仅使用 HTTP/2 并不能消除这个缓存等待。
+单次延迟 50 ms 时，修订 3 的首屏约 1.3–1.6 秒，修订 2 约 2.4–2.6 秒。
+这些结果仍是本地控制环境，不是实际 B2 文件的线上计时。
+
 ## 回归
 
-`fetch-frontend.mjs` 安装查看器后执行 `pdf-page-tree.test.mjs`，直接从最终 worker
-提取并执行实际方法，验证嵌套目录的并发、首次/任意页的按需读取、缓存复用、
-异常计数、循环引用和错误传播。Build Verify 同时执行 `b2_video_range.test.ts`，
-验证视频/PDF 的签名、206、原始 Range 与缓存策略。
+`fetch-frontend.mjs` 安装查看器后执行 `pdf-page-tree.test.mjs` 与
+`pdf-range-fetch.test.mjs`，直接从最终模块提取并执行实际方法，验证嵌套目录的
+并发、首次/任意页的按需读取、缓存复用、异常计数、循环引用、错误传播、浏览器
+缓存范围和取消。Build Verify 同时执行 `b2_video_range.test.ts`，验证视频/PDF
+的签名、206、原始 Range 与回源缓存策略。
+
+`pdf-browser-cache.test.mjs` 使用真实 Chromium 与完整部署查看器，保持 HTTP
+缓存开启且不拦截请求。自动生成分段分布的 PDF，通过延迟响应验证多条 Range
+同时等待响应头，并覆盖刷新、签名 URL、闲置停止下载、跳页及内部数据缓存复用。
+该测试在修订 2 上因分段并发峰值为 1 而失败，在修订 3 的首次和刷新后均为 6；
+已加入 Build Verify，使用锁定版本的 Playwright。

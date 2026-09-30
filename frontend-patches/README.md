@@ -42,5 +42,11 @@ PDF.js worker 的小范围构建期修正由 `patchPdfPageTree()` 管理：初�
 首次/任意页的嵌套目录读取仍按需执行；原始发行包先校验摘要，预期代码不匹配则
 构建失败。`pdf-page-tree.test.mjs` 直接执行部署 worker 的实际方法，覆盖并发、
 按需读取、缓存复用、错误计数、循环引用和未消费的拒绝。
+客户端模块的 `patchPdfRangeFetch()` 为实际带 Range 的 PDF `fetch` 设置
+`cache: "no-store"`，避免 Chromium 的 HTTP 缓存将同 URL 分段请求重新排队；
+初始请求、整文件回退和 PDF.js 内部数据缓存保持原策略，签名和取消原样传递。
+预期 helper 不唯一或变化时构建失败；`pdf-range-fetch.test.mjs` 测试最终部署方法。
+`pdf-browser-cache.test.mjs` 在 HTTP 缓存开启且没有请求拦截的真实 Chromium 中
+验证分段并发、刷新、跳页和内部缓存复用，由 Build Verify 执行。
 B2 的 PDF Range 与视频一样绕过 `fetch` 的回源缓存；普通下载和其他文件维持原有策略。
 性能对比与适用范围见 `docs/pdf-preview-loading.md`。

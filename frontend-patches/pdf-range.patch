@@ -1,5 +1,5 @@
 diff --git a/src/pages/home/previews/pdf.tsx b/src/pages/home/previews/pdf.tsx
-index b67aa93..8be515d 100644
+index b67aa93..9d138fe 100644
 --- a/src/pages/home/previews/pdf.tsx
 +++ b/src/pages/home/previews/pdf.tsx
 @@ -1,39 +1,136 @@
@@ -35,7 +35,7 @@ index b67aa93..8be515d 100644
 +  const [failed, setFailed] = createSignal(false)
 +  let frame: HTMLIFrameElement | undefined
 +  const viewer = new URL(
-+    joinBase("static/pdfjs/6.3.289-openlist2/web/viewer.html"),
++    joinBase("static/pdfjs/6.3.289-openlist3/web/viewer.html"),
 +    location.origin,
 +  )
 +  viewer.searchParams.set("locale", props.locale)

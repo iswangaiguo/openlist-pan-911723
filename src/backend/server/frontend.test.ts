@@ -45,7 +45,7 @@ test("HTML conditional requests cannot retain an older long cache policy", async
   assert.equal(response.headers.get("cache-control"), "no-cache, must-revalidate")
 })
 
-const pdfPath = "/static/pdfjs/6.3.289-openlist2/web/viewer.html"
+const pdfPath = "/static/pdfjs/6.3.289-openlist3/web/viewer.html"
 const pdfShell = () => new Response('<!doctype html><html data-openlist-pdf-viewer="range"><title>PDF</title></html>', { headers: { "Content-Type": "text/html", "Cache-Control": "public, max-age=3600" } })
 test("the local PDF viewer HTML is served without CDN rewriting", async () => {
   const response = await serveFrontend(new Request("https://test.example" + pdfPath), { fetch: async () => pdfShell() }, undefined, { ASSET_URLS: "https://cdn.example/dist" })
