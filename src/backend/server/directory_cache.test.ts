@@ -95,7 +95,7 @@ test("warm directories still enforce current auth/meta, freshly sign links, and 
     lists++
     return structuredClone(files)
   })
-  t.mock.method(S3Driver.prototype, "removeObject", async () => {
+  t.mock.method(S3Driver.prototype, "remove", async () => {
     files = []
   })
   const first = await request(token)
