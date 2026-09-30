@@ -7,12 +7,38 @@ import { fileURLToPath } from "node:url"
 
 // Keep the frontend URL and integration revision in sync with pdf-range.patch.
 // Bump the revision whenever the viewer/bridge changes, so caches never mix.
-export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist2"
+export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist3"
 const ARCHIVE_URL =
   "https://github.com/mozilla/pdf.js/releases/download/v6.3.289/pdfjs-6.3.289-legacy-dist.zip"
 const ARCHIVE_SHA256 =
   "51683fac4aff7dd31ed91e9ab735a2098a78d50899d1ec529aed6dc8aa19400d"
 const scripts = path.dirname(fileURLToPath(import.meta.url))
+
+export function patchPdfRangeFetch(source) {
+  // Chromium can serialize same-URL Range requests behind its HTTP cache even
+  // when the response is no-store. Bypass that cache on the range fetch itself;
+  // keep the initial full reader and PDF.js's in-memory chunk cache unchanged.
+  const before = `function fetchUrl(url, headers, withCredentials, abortController) {
+  return fetch(url, {
+    method: "GET",
+    headers,
+    signal: abortController.signal,
+    mode: "cors",
+    credentials: withCredentials ? "include" : "same-origin",
+    redirect: "follow"
+  });
+}`
+  if (source.split(before).length !== 2)
+    throw new Error("Unexpected PDF.js range fetch code")
+  const after = before.replace(
+    '    method: "GET",',
+    '    ...(headers.has("Range") ? { cache: "no-store" } : {}),\n    method: "GET",',
+  )
+  return (
+    "/* OpenList customization: bypass browser HTTP cache for PDF ranges. */\n" +
+    source.replace(before, after)
+  )
+}
 
 export function patchPdfPageTree(source) {
   // PDF.js validates the last page before resolving document loading. In a
@@ -54,6 +80,8 @@ export function installPdfViewer(dist, archive) {
     execFileSync("unzip", ["-q", zip, "-d", extracted])
     const worker = path.join(extracted, "build/pdf.worker.mjs")
     fs.writeFileSync(worker, patchPdfPageTree(fs.readFileSync(worker, "utf8")))
+    const api = path.join(extracted, "build/pdf.mjs")
+    fs.writeFileSync(api, patchPdfRangeFetch(fs.readFileSync(api, "utf8")))
     const entry = path.join(extracted, "web/viewer.html")
     const html = fs.readFileSync(entry, "utf8")
     if (!html.includes('<script src="viewer.mjs" type="module"></script>'))

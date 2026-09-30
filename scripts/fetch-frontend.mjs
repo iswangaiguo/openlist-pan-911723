@@ -137,7 +137,11 @@ function replaceDist(src) {
   installPdfViewer(DEST)
   execFileSync(
     process.execPath,
-    ["--test", path.join(ROOT, "scripts/tests/pdf-page-tree.test.mjs")],
+    [
+      "--test",
+      path.join(ROOT, "scripts/tests/pdf-page-tree.test.mjs"),
+      path.join(ROOT, "scripts/tests/pdf-range-fetch.test.mjs"),
+    ],
     {
       stdio: "inherit",
       env: {
