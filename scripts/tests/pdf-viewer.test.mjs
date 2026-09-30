@@ -4,7 +4,11 @@ import os from "node:os"
 import path from "node:path"
 import vm from "node:vm"
 import { test } from "node:test"
-import { installPdfViewer, PDF_VIEWER_PATH } from "../fetch-pdf-viewer.mjs"
+import {
+  installPdfViewer,
+  PDF_VIEWER_PATH,
+  patchPdfPageTree,
+} from "../fetch-pdf-viewer.mjs"
 
 const source = fs.readFileSync(
   new URL("../pdf-viewer-bridge.mjs", import.meta.url),
@@ -203,4 +207,18 @@ test("navigation during boot releases the listener held by the parent", async ()
   const h = await harness({ cancelBoot: true })
   assert.equal(h.documentEvents.size, 0)
   assert.equal(h.opens.length, 0)
+})
+
+test("page-tree optimization rejects changed or duplicated upstream code", () => {
+  assert.throws(
+    () => patchPdfPageTree("unrecognized worker"),
+    /Unexpected PDF.js page-tree/,
+  )
+  const guard = `if (currentNode === this.toplevelPagesDict && lastKid instanceof Ref && !pageDictCache.has(lastKid)) {
+          pageDictCache.put(lastKid, xref.fetchAsync(lastKid));
+        }`
+  assert.throws(
+    () => patchPdfPageTree(guard + guard),
+    /Unexpected PDF.js page-tree/,
+  )
 })

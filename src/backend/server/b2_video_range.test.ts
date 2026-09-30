@@ -5,7 +5,7 @@ import { saveDb } from "../internal/model/db"
 import { signDownloadPath } from "../pkg/sign"
 import { rawRouter } from "./raw"
 
-test("B2 video proxy bypasses cold cache while preserving ranges and authentication", async (t) => {
+test("B2 video/PDF previews bypass cold cache while preserving ranges and authentication", async (t) => {
   const originalFetch = globalThis.fetch
   t.after(() => {
     globalThis.fetch = originalFetch
@@ -62,6 +62,11 @@ test("B2 video proxy bypasses cold cache while preserving ranges and authenticat
       "no-store",
     ],
     ["s3.us-west-004.backblazeb2.com", "image.png", "bytes=100-103", undefined],
+    ["s3.us-west-004.backblazeb2.com", "book.pdf", "bytes=100-103", "no-store"],
+    ["s3.us-west-004.backblazeb2.com", "book.PDF", "bytes=100-103", "no-store"],
+    ["s3.us-west-004.backblazeb2.com", "book.pdf", undefined, undefined],
+    ["s3.example.com", "book.pdf", "bytes=100-103", undefined],
+    ["s3.backblazeb2.com.example.com", "book.pdf", "bytes=100-103", undefined],
     ["s3.us-west-004.backblazeb2.com", "movie.mp4", undefined, undefined],
     ["s3.example.com", "movie.mp4", "bytes=100-103", undefined],
     ["s3.backblazeb2.com.example.com", "movie.mp4", "bytes=100-103", undefined],

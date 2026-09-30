@@ -77,6 +77,7 @@ jobs:
         run: |
           pnpm exec tsx --test src/backend/drivers/s3/s3_remove.test.ts src/backend/server/fs_remove.test.ts src/backend/server/directory_cache.test.ts
           pnpm exec tsx --test src/backend/server/b2_read_cache.test.ts
+          pnpm exec tsx --test src/backend/server/b2_video_range.test.ts
           pnpm exec tsx --test src/backend/drivers/s3/multipart.test.ts src/backend/internal/upload/multipart.test.ts src/backend/server/fs_multipart.test.ts src/backend/server/frontend.test.ts src/backend/server/assets_route.test.ts src/backend/server/index_cdn.test.ts src/backend/server/storage_usage.test.ts src/backend/drivers/s3/head_cache.test.ts src/backend/drivers/s3/rename_steps.test.ts src/backend/server/rename_steps.test.ts src/backend/server/b2_rename.test.ts
           node --test scripts/tests/multipart-worker.test.mjs
 
@@ -87,9 +88,9 @@ jobs:
         run: |
           set -e
           test -f dist/index.html
-          test -f dist/static/pdfjs/6.3.289-openlist1/web/viewer.html
-          test -f dist/static/pdfjs/6.3.289-openlist1/web/openlist.mjs
-          test -f dist/static/pdfjs/6.3.289-openlist1/build/pdf.worker.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist2/web/viewer.html
+          test -f dist/static/pdfjs/6.3.289-openlist2/web/openlist.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist2/build/pdf.worker.mjs
           test -f "dist-server/api/[...route].js"
           test -f "cloud-functions/[[default]].js"
           echo "OK: dist/index.html、dist-server/api/[...route].js、cloud-functions/[[default]].js 均已生成"

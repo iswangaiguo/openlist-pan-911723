@@ -35,4 +35,12 @@ PDF 预览改用固定版本的 PDF.js 完整查看器，构建时由 `scripts/f
 `pdf-viewer-bridge.mjs` 在初始化前开启 Range，关闭流式整文件下载和自动补取；
 源站不支持 Range 时由 PDF.js 回退普通下载。跨域直链仍需要允许 CORS 并暴露
 `Accept-Ranges`、`Content-Length`、`Content-Range`。搜索、打印、下载等操作可能继续读取更多数据。
-修改桥接脚本时递增目录中的 `openlist` 修订号，同时更新前端补丁的入口路径。
+修改查看器或桥接脚本时递增目录中的 `openlist` 修订号，同时更新前端补丁的入口路径。
+
+PDF.js worker 的小范围构建期修正由 `patchPdfPageTree()` 管理：初始化校验嵌套
+目录的最后一页时，将原本必需的页字典读取并发发出，保持原来的校验和数据范围。
+首次/任意页的嵌套目录读取仍按需执行；原始发行包先校验摘要，预期代码不匹配则
+构建失败。`pdf-page-tree.test.mjs` 直接执行部署 worker 的实际方法，覆盖并发、
+按需读取、缓存复用、错误计数、循环引用和未消费的拒绝。
+B2 的 PDF Range 与视频一样绕过 `fetch` 的回源缓存；普通下载和其他文件维持原有策略。
+性能对比与适用范围见 `docs/pdf-preview-loading.md`。

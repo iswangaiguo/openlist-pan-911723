@@ -93,7 +93,7 @@ test("logo / favicon 仍然重定向到官方 logo", async () => {
 test("the fork's local PDF viewer and worker bypass ASSET_URLS", async () => {
   const app = appWithSpaFallback()
   for (const name of ["web/viewer.html", "web/openlist.mjs", "build/pdf.worker.mjs", "wasm/openjpeg.wasm"]) {
-    const response = await app.request(`/static/pdfjs/6.3.289-openlist1/${name}`, { method: "GET" }, { ASSET_URLS: "https://cdn.example.com/dist" })
+    const response = await app.request(`/static/pdfjs/6.3.289-openlist2/${name}`, { method: "GET" }, { ASSET_URLS: "https://cdn.example.com/dist" })
     assert.equal(response.status, 200)
     assert.equal(response.headers.get("location"), null)
   }

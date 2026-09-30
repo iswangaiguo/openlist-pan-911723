@@ -6,13 +6,36 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 // Keep the frontend URL and integration revision in sync with pdf-range.patch.
-// Bump the revision whenever the bridge changes, so cached workers never mix.
-export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist1"
+// Bump the revision whenever the viewer/bridge changes, so caches never mix.
+export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist2"
 const ARCHIVE_URL =
   "https://github.com/mozilla/pdf.js/releases/download/v6.3.289/pdfjs-6.3.289-legacy-dist.zip"
 const ARCHIVE_SHA256 =
   "51683fac4aff7dd31ed91e9ab735a2098a78d50899d1ec529aed6dc8aa19400d"
 const scripts = path.dirname(fileURLToPath(import.meta.url))
+
+export function patchPdfPageTree(source) {
+  // PDF.js validates the last page before resolving document loading. In a
+  // nested /Pages node, the original walk fetches every preceding leaf in
+  // sequence. Prefetch those required dictionaries as it already does at the
+  // root; keep first-page/arbitrary-page reads lazy and preserve validation.
+  const before = `if (currentNode === this.toplevelPagesDict && lastKid instanceof Ref && !pageDictCache.has(lastKid)) {
+          pageDictCache.put(lastKid, xref.fetchAsync(lastKid));
+        }`
+  const after = `if ((currentNode === this.toplevelPagesDict || (Number.isInteger(count) && count > 0 && currentPageIndex + count === pageIndex + 1)) && lastKid instanceof Ref && !pageDictCache.has(lastKid)) {
+          const pagePromise = xref.fetchAsync(lastKid);
+          // Navigation or a malformed sibling can stop the walk before await.
+          // Retain rejection for the actual reader without an unhandled promise.
+          pagePromise.catch(() => {});
+          pageDictCache.put(lastKid, pagePromise);
+        }`
+  if (source.split(before).length !== 2)
+    throw new Error("Unexpected PDF.js page-tree prefetch code")
+  return (
+    "/* OpenList customization: parallelize required nested page-tree reads. */\n" +
+    source.replace(before, after)
+  )
+}
 
 export function installPdfViewer(dist, archive) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openlist-pdfjs-"))
@@ -29,6 +52,8 @@ export function installPdfViewer(dist, archive) {
       throw new Error("PDF.js release checksum mismatch")
     const extracted = path.join(temp, "release")
     execFileSync("unzip", ["-q", zip, "-d", extracted])
+    const worker = path.join(extracted, "build/pdf.worker.mjs")
+    fs.writeFileSync(worker, patchPdfPageTree(fs.readFileSync(worker, "utf8")))
     const entry = path.join(extracted, "web/viewer.html")
     const html = fs.readFileSync(entry, "utf8")
     if (!html.includes('<script src="viewer.mjs" type="module"></script>'))

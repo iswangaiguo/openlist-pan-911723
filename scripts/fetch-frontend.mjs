@@ -41,7 +41,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { installPdfViewer } from "./fetch-pdf-viewer.mjs"
+import { installPdfViewer, PDF_VIEWER_PATH } from "./fetch-pdf-viewer.mjs"
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 // 始终以仓库根目录为基准（无论从哪个 cwd 调用）
@@ -135,6 +135,17 @@ function replaceDist(src) {
   fs.rmSync(DEST, { recursive: true, force: true })
   fs.cpSync(src, DEST, { recursive: true })
   installPdfViewer(DEST)
+  execFileSync(
+    process.execPath,
+    ["--test", path.join(ROOT, "scripts/tests/pdf-page-tree.test.mjs")],
+    {
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        PDF_VIEWER_DIR: path.join(DEST, PDF_VIEWER_PATH),
+      },
+    },
+  )
   stampFrontendVersion(src)
   console.log(`✓ Frontend dist ready (${DEST})`)
 }
