@@ -126,14 +126,12 @@ pnpm run deploy
 pnpm run deploy:worker
 ```
 
-此 fork 的 `wrangler.jsonc` 不声明 `triggers.crons`，常规部署保留 Cloudflare
-已有的定时器，不修改或删除它们，避免账户 Cron 配额已满时阻断代码发布。
-不要改成 `crons: []`，空数组会删除此 Worker 已有的定时器。
-
-B2 文件夹重命名在关闭浏览器后继续推进，需要此 Worker 配置 `* * * * *`
-（每分钟一次）的 Cron Trigger。首次配置时，在 Cloudflare 控制台此 Worker 的
-Settings → Trigger Events 中添加；免费账户全账户最多 5 个，需要先腾出一个配额。
-未配置时仍可由页面推进或恢复任务，但关闭页面后不会通过定时器自动推进。
+此 fork 的 `wrangler.jsonc` 配置了 `* * * * *`（每分钟一次）的 Cron Trigger，
+用于在关闭浏览器后继续推进已持久化的 B2 文件夹重命名任务。
+定时器由 Wrangler 配置管理，无需在控制台重复添加。免费账户全账户最多 5 个
+Cron Trigger，首次部署前需为此 Worker 预留一个配额，否则定时器更新会报 `10072`。
+若需要保留控制台现有定时器并跳过更新，可省略 `triggers.crons`；不要改成
+`crons: []`，空数组会删除此 Worker 已有的定时器。
 
 ---
 
