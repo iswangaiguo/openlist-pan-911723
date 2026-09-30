@@ -1,0 +1,289 @@
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+index 6b496bb..c169972 100644
+--- a/src/pages/home/DriveChrome.tsx
++++ b/src/pages/home/DriveChrome.tsx
+@@ -13,6 +13,7 @@ import { getSetting, me, objStore, State, userCan } from "~/store"
+ import { UserMethods } from "~/types"
+ import { Layout } from "./header/layout"
+ import { bus } from "~/utils"
++import { DriveUsage } from "./DriveUsage"
+ 
+ export const driveText = (key: "files" | "workspace" | "waiting") => {
+   const zh = String(currentLang()).startsWith("zh")
+@@ -73,6 +74,7 @@ export const DriveRail = () => {
+           <span>{t("home.toolbar.local_settings")}</span>
+         </button>
+       </nav>
++      <DriveUsage />
+     </aside>
+   )
+ }
+diff --git a/src/pages/home/DriveUsage.tsx b/src/pages/home/DriveUsage.tsx
+new file mode 100644
+index 0000000..26a4bdc
+--- /dev/null
++++ b/src/pages/home/DriveUsage.tsx
+@@ -0,0 +1,221 @@
++import { createEffect, createSignal, on, onCleanup, Show } from "solid-js"
++import { currentLang } from "~/app/i18n"
++import { useRouter } from "~/hooks"
++import { me } from "~/store"
++import { UserMethods } from "~/types"
++import { r } from "~/utils"
++
++type Usage = { mount: string; bytes: number; at: number }
++type Mount = { storage_id: number; mount_path: string }
++const cache = new Map<string, Usage>()
++
++export const DriveUsage = () => {
++  const { isShare } = useRouter()
++  const media = window.matchMedia("(min-width: 761px)")
++  const [desktop, setDesktop] = createSignal(media.matches)
++  const resized = () => setDesktop(media.matches)
++  media.addEventListener("change", resized)
++  const [usage, setUsage] = createSignal<Usage>()
++  const [status, setStatus] = createSignal("loading")
++  const [unavailable, setUnavailable] = createSignal(0)
++  let generation = 0
++  let controller: AbortController | undefined
++  let timer: ReturnType<typeof setTimeout> | undefined
++  const pendingDirectories = new Set<string>()
++  const zh = () => String(currentLang()).startsWith("zh")
++  const load = async (force = false, directories?: string[]) => {
++    const version = ++generation
++    controller?.abort()
++    setUsage(undefined)
++    setUnavailable(0)
++    if (!desktop() || !UserMethods.is_admin(me()) || isShare()) {
++      pendingDirectories.clear()
++      clearTimeout(timer)
++      return
++    }
++    const key = String(me().id)
++    controller = new AbortController()
++    const signal = controller.signal
++    setStatus("loading")
++    let total = 0
++    let counted = 0
++    let missing = 0
++    try {
++      const inventory = (await r.get("/fs/usage", {
++        params: { scope: "all" },
++        signal,
++      })) as any
++      if (version !== generation) return
++      if (inventory.code !== 200 || !Array.isArray(inventory.data?.mounts))
++        throw new Error("Usage unavailable")
++      // Fetch bounded metadata pages separately to stay within Worker limits.
++      const mounts: Mount[] = inventory.data.mounts
++      const affected = new Set(
++        directories?.map(
++          (directory) =>
++            mounts
++              .filter(
++                (mount) =>
++                  mount.mount_path === "/" ||
++                  directory === mount.mount_path ||
++                  directory.startsWith(mount.mount_path + "/"),
++              )
++              .sort((a, b) => b.mount_path.length - a.mount_path.length)[0]
++              ?.storage_id,
++        ),
++      )
++      for (const mount of mounts) {
++        const cacheKey = key + ":" + mount.storage_id + ":" + mount.mount_path
++        const saved = cache.get(cacheKey)
++        const selected = !directories || affected.has(mount.storage_id)
++        if (
++          saved &&
++          (!selected ||
++            (!force && !directories && Date.now() - saved.at < 300000))
++        ) {
++          total += saved.bytes
++          counted++
++          continue
++        }
++        // Uploads refresh only their most specific mount, even if another
++        // mount's cached total has aged out. Explicit refresh scans all mounts.
++        if (!selected) {
++          missing++
++          continue
++        }
++        cache.delete(cacheKey)
++        let bytes = 0
++        let cursor: string | undefined
++        let supported = true
++        try {
++          do {
++            const response = (await r.get("/fs/usage", {
++              params: { path: mount.mount_path, cursor },
++              signal,
++            })) as any
++            if (version !== generation) return
++            if (response.code !== 200) throw new Error("Usage unavailable")
++            const data = response.data
++            if (!data?.supported || data.storage_id !== mount.storage_id) {
++              supported = false
++              break
++            }
++            if (!Number.isFinite(data.bytes) || data.bytes < 0)
++              throw new Error("Invalid usage")
++            bytes += data.bytes
++            cursor = data.cursor
++          } while (cursor)
++        } catch {
++          if (version !== generation) return
++          supported = false
++        }
++        if (!supported) {
++          missing++
++          continue
++        }
++        cache.set(cacheKey, { mount: mount.mount_path, bytes, at: Date.now() })
++        total += bytes
++        counted++
++      }
++      if (version !== generation) return
++      setUnavailable(missing)
++      if (missing && !counted) {
++        setStatus("error")
++        return
++      }
++      setUsage({ mount: "", bytes: total, at: Date.now() })
++      setStatus("ready")
++    } catch {
++      if (version === generation) setStatus("error")
++    }
++  }
++  createEffect(
++    on([desktop, () => me().id, () => me().role, isShare], () => load()),
++  )
++  const identityChanged = () => {
++    pendingDirectories.clear()
++    clearTimeout(timer)
++    cache.clear()
++    void load()
++  }
++  window.addEventListener("openlist:identity-change", identityChanged)
++  const refreshUploads = () => {
++    // Finish the initial/full scan before refreshing queued uploads.
++    if (status() === "loading") {
++      timer = setTimeout(refreshUploads, 500)
++      return
++    }
++    const directories = [...pendingDirectories]
++    pendingDirectories.clear()
++    void load(false, directories)
++  }
++  const completed = (event: Event) => {
++    const directory = (event as CustomEvent<string>).detail
++    if (
++      typeof directory !== "string" ||
++      !directory.startsWith("/") ||
++      !desktop() ||
++      !UserMethods.is_admin(me()) ||
++      isShare()
++    )
++      return
++    const base = (me().base_path || "/").replace(/\/+$/, "")
++    pendingDirectories.add((base + directory).replace(/\/{2,}/g, "/"))
++    clearTimeout(timer)
++    timer = setTimeout(refreshUploads, 500)
++  }
++  window.addEventListener("openlist:upload-complete", completed)
++  onCleanup(() => {
++    generation++
++    media.removeEventListener("change", resized)
++    controller?.abort()
++    clearTimeout(timer)
++    window.removeEventListener("openlist:upload-complete", completed)
++    window.removeEventListener("openlist:identity-change", identityChanged)
++  })
++  const label = () =>
++    ({
++      loading: zh() ? "正在统计用量…" : "Calculating usage…",
++      error: zh() ? "暂时无法获取用量" : "Unable to load usage",
++    })[status()]
++  return (
++    <Show when={UserMethods.is_admin(me()) && !isShare()}>
++      <div class="drive-usage" aria-live="polite">
++        <span>{zh() ? "总存储用量" : "Total storage usage"}</span>
++        <Show when={usage()} fallback={<p>{label()}</p>}>
++          <strong>
++            {unavailable()
++              ? zh()
++                ? "已统计"
++                : "Counted"
++              : zh()
++                ? "已使用"
++                : "Used"}{" "}
++            {(usage()!.bytes / 1e9).toLocaleString(
++              String(currentLang()).startsWith("zh") ? "zh-CN" : "en-US",
++              { maximumFractionDigits: 2 },
++            )}{" "}
++            GB
++          </strong>
++          <Show when={unavailable()}>
++            <small>
++              {zh()
++                ? `${unavailable()} 个存储暂无法统计`
++                : `Usage unavailable for ${unavailable()} storage(s)`}
++            </small>
++          </Show>
++        </Show>
++        <button
++          disabled={status() === "loading"}
++          onClick={() => {
++            pendingDirectories.clear()
++            clearTimeout(timer)
++            void load(true)
++          }}
++        >
++          {zh() ? "刷新用量" : "Refresh usage"}
++        </button>
++      </div>
++    </Show>
++  )
++}
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index 83edaa5..adbd207 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -842,6 +842,37 @@
+   }
+ }
+ 
++.drive-usage {
++  margin-top: auto;
++  padding: 20px 10px;
++  border-top: 1px solid var(--drive-line);
++}
++.drive-usage > span {
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-usage strong {
++  display: block;
++  margin-top: 10px;
++  font-size: 14px;
++}
++.drive-usage small {
++  display: block;
++  color: var(--drive-muted);
++  margin-top: 6px;
++}
++.drive-usage p {
++  color: var(--drive-muted);
++  font-size: 12px;
++  margin: 10px 0 0;
++}
++.drive-usage button {
++  border: 0;
++  background: transparent;
++  color: var(--drive-blue);
++  padding: 8px 0;
++}
++
+ /* Reserve the same toolbar row before and after selection. */
+ .drive-list-toolbar { display: flex; align-items: center; gap: 12px; width: 100%; height: 56px; flex-shrink: 0; }
+ .drive-list-toolbar .drive-file-tools { margin: 0; min-width: 0; justify-content: flex-start; flex-wrap: nowrap; flex: 1; min-height: 44px; }

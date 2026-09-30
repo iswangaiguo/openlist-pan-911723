@@ -1,0 +1,409 @@
+diff --git a/src/app/App.tsx b/src/app/App.tsx
+index 19cc318..e9b147b 100644
+--- a/src/app/App.tsx
++++ b/src/app/App.tsx
+@@ -2,6 +2,7 @@ import { Progress, ProgressIndicator } from "@hope-ui/solid"
+ import { Route, Routes, useIsRouting } from "@solidjs/router"
+ import {
+   Component,
++  ErrorBoundary,
+   createEffect,
+   createSignal,
+   lazy,
+@@ -25,6 +26,7 @@ import {
+   r,
+ } from "~/utils"
+ import { applyCustomize } from "~/utils/customize"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { MustUser, UserOrGuest } from "./MustUser"
+ import "./index.css"
+ import { globalStyles } from "./theme"
+@@ -129,54 +131,56 @@ const App: Component = () => {
+           <Upload />
+         </Suspense>
+       </Show>
+-      <Switch
+-        fallback={
+-          <Routes base={base_path}>
+-            <Route path="/@test" component={Test} />
+-            <Route path="/@login" component={Login} />
+-            <Route path="/@init" component={Init} />
+-            <Route
+-              path="/@manage/*"
+-              element={
+-                <MustUser>
+-                  <Manage />
+-                </MustUser>
+-              }
+-            />
+-            <Route
+-              path={["/@s/*", "/%40s/*"]}
+-              element={
+-                <UserOrGuest>
+-                  <Home />
+-                </UserOrGuest>
+-              }
+-            />
+-            <Route
+-              path="*"
+-              element={
+-                <MustUser>
+-                  <Home />
+-                </MustUser>
++      <ErrorBoundary fallback={(error) => <ModuleLoadError error={error} />}>
++        <Switch
++          fallback={
++            <Routes base={base_path}>
++              <Route path="/@test" component={Test} />
++              <Route path="/@login" component={Login} />
++              <Route path="/@init" component={Init} />
++              <Route
++                path="/@manage/*"
++                element={
++                  <MustUser>
++                    <Manage />
++                  </MustUser>
++                }
++              />
++              <Route
++                path={["/@s/*", "/%40s/*"]}
++                element={
++                  <UserOrGuest>
++                    <Home />
++                  </UserOrGuest>
++                }
++              />
++              <Route
++                path="*"
++                element={
++                  <MustUser>
++                    <Home />
++                  </MustUser>
++                }
++              />
++            </Routes>
++          }
++        >
++          <Match when={err().length > 0}>
++            <Error
++              h="100vh"
++              msg={
++                t("home.fetching_settings_failed") +
++                err()
++                  .map((e) => t("home." + e))
++                  .join(", ")
+               }
+             />
+-          </Routes>
+-        }
+-      >
+-        <Match when={err().length > 0}>
+-          <Error
+-            h="100vh"
+-            msg={
+-              t("home.fetching_settings_failed") +
+-              err()
+-                .map((e) => t("home." + e))
+-                .join(", ")
+-            }
+-          />
+-        </Match>
+-        <Match when={loading()}>
+-          <FullScreenLoading />
+-        </Match>
+-      </Switch>
++          </Match>
++          <Match when={loading()}>
++            <FullScreenLoading />
++          </Match>
++        </Switch>
++      </ErrorBoundary>
+     </>
+   )
+ }
+diff --git a/src/app/index.tsx b/src/app/index.tsx
+index fa3b363..bd837ee 100644
+--- a/src/app/index.tsx
++++ b/src/app/index.tsx
+@@ -2,6 +2,7 @@ import { HopeProvider, NotificationsProvider } from "@hope-ui/solid"
+ import { ErrorBoundary, Suspense } from "solid-js"
+ import { Error, FullScreenLoading } from "~/components"
+ import App from "./App"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { globalStyles, theme } from "./theme"
+ 
+ const Index = () => {
+@@ -11,7 +12,7 @@ const Index = () => {
+       <ErrorBoundary
+         fallback={(err) => {
+           console.error("error", err)
+-          return <Error msg={`System error: ${err}`} h="100vh" />
++          return <ModuleLoadError error={err} />
+         }}
+       >
+         <NotificationsProvider duration={3000}>
+diff --git a/src/components/ModuleLoadError.tsx b/src/components/ModuleLoadError.tsx
+new file mode 100644
+index 0000000..aae3eeb
+--- /dev/null
++++ b/src/components/ModuleLoadError.tsx
+@@ -0,0 +1,73 @@
++import { Button, Text } from "@hope-ui/solid"
++import { onMount, Show } from "solid-js"
++import { currentLang } from "~/app/i18n"
++import {
++  claimModuleReload,
++  isModuleLoadError,
++  unfinishedUploads,
++} from "~/utils/module_recovery"
++import { Error } from "./Base"
++
++export const ModuleLoadError = (props: { error: unknown }) => {
++  const moduleError = () => isModuleLoadError(props.error)
++  const text = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
++  // Only the initial failure may reload automatically. Finishing an upload later
++  // does not unexpectedly refresh a page the user has continued working in.
++  const blockedInitially = unfinishedUploads() > 0
++  onMount(() => {
++    if (!moduleError() || blockedInitially) return
++    try {
++      if (
++        claimModuleReload(sessionStorage, Date.now(), unfinishedUploads() > 0)
++      )
++        location.reload()
++    } catch {
++      /* Show the explicit recovery button if storage is unavailable. */
++    }
++  })
++  const reload = () => {
++    if (unfinishedUploads() > 0) return
++    try {
++      sessionStorage.setItem("openlist:module-reload", String(Date.now()))
++    } catch {}
++    location.reload()
++  }
++  return (
++    <Error
++      msg={
++        moduleError()
++          ? text(
++              "页面资源未能加载，可能是版本更新或网络问题。",
++              "Page resources could not load. The site may have updated or the network may be unavailable.",
++            )
++          : String(props.error)
++      }
++      disableColor
++      actions={
++        <Show when={moduleError()}>
++          <div
++            style={{
++              display: "flex",
++              "flex-direction": "column",
++              gap: "16px",
++              "align-items": "center",
++            }}
++          >
++            <Show when={unfinishedUploads() > 0}>
++              <Text>
++                {text(
++                  "上传任务仍保留，请先完成或取消任务，再重新加载页面。",
++                  "Uploads are preserved. Finish or cancel them before reloading.",
++                )}
++              </Text>
++            </Show>
++            <Button disabled={unfinishedUploads() > 0} onClick={reload}>
++              {text("重新加载页面", "Reload page")}
++            </Button>
++          </div>
++        </Show>
++      }
++    />
++  )
++}
+diff --git a/src/pages/home/Obj.tsx b/src/pages/home/Obj.tsx
+index 2429f7a..aa28b74 100644
+--- a/src/pages/home/Obj.tsx
++++ b/src/pages/home/Obj.tsx
+@@ -1,6 +1,7 @@
+ import { Text, useColorModeValue, VStack, Button } from "@hope-ui/solid"
+ import {
+   createEffect,
++  ErrorBoundary,
+   createMemo,
+   createSignal,
+   lazy,
+@@ -12,6 +13,7 @@ import {
+   Suspense,
+   Switch,
+ } from "solid-js"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { Error, FullLoading, LinkWithBase } from "~/components"
+ import { useObjTitle, usePath, useRouter, useT } from "~/hooks"
+ import {
+@@ -123,67 +125,72 @@ export const Obj = () => {
+       shadow="$lg"
+       spacing="$2"
+     >
+-      }}
+-    >
+-      <Suspense fallback={<FullLoading />}>
+-        <Switch>
+-          <Match when={objStore.err}>
+-            <Error
+-              msg={objStore.err}
+-              disableColor
+-              show404Face={
+-                isShare() && objStore.err === t("shares.share_gone")
+-              }
+-              actions={
+-                shouldShowStorageButton() ? storageErrorActions() : undefined
+-              }
+-            />
+-          </Match>
+-          <Match
+-            when={[State.FetchingObj, State.FetchingObjs].includes(
+-              objStore.state,
+-            )}
+-          >
+-            <FullLoading />
+-            {/* <Show when={layout() === "list"} fallback={<GridSkeleton />}>
+-            <ListSkeleton />
+-          </Show> */}
+-          </Match>
+-          <Match when={objStore.state === State.NeedPassword}>
+-            <Password
+-              title={
+-                isShare()
+-                  ? t("shares.input_password")
+-                  : t("home.input_password")
+-              }
+-              password={password}
+-              setPassword={setPassword}
+-              enterCallback={() => refresh(true)}
++      <ErrorBoundary
++        fallback={(error, reset) => {
++          createEffect(on(pathname, reset, { defer: true }))
++          return <ModuleLoadError error={error} />
++        }}
++      >
++        <Suspense fallback={<FullLoading />}>
++          <Switch>
++            <Match when={objStore.err}>
++              <Error
++                msg={objStore.err}
++                disableColor
++                show404Face={
++                  isShare() && objStore.err === t("shares.share_gone")
++                }
++                actions={
++                  shouldShowStorageButton() ? storageErrorActions() : undefined
++                }
++              />
++            </Match>
++            <Match
++              when={[State.FetchingObj, State.FetchingObjs].includes(
++                objStore.state,
++              )}
++            >
++              <FullLoading />
++              {/* <Show when={layout() === "list"} fallback={<GridSkeleton />}>
++              <ListSkeleton />
++            </Show> */}
++            </Match>
++            <Match when={objStore.state === State.NeedPassword}>
++              <Password
++                title={
++                  isShare()
++                    ? t("shares.input_password")
++                    : t("home.input_password")
++                }
++                password={password}
++                setPassword={setPassword}
++                enterCallback={() => refresh(true)}
++              >
++                <Show when={!isShare()}>
++                  <Text>{t("global.have_account")}</Text>
++                  <Text
++                    color="$info9"
++                    as={LinkWithBase}
++                    href={`/@login?redirect=${encodeURIComponent(
++                      location.pathname,
++                    )}`}
++                  >
++                    {t("global.go_login")}
++                  </Text>
++                </Show>
++              </Password>
++            </Match>
++            <Match
++              when={[State.Folder, State.FetchingMore].includes(objStore.state)}
+             >
+-              <Show when={!isShare()}>
+-                <Text>{t("global.have_account")}</Text>
+-                <Text
+-                  color="$info9"
+-                  as={LinkWithBase}
+-                  href={`/@login?redirect=${encodeURIComponent(
+-                    location.pathname,
+-                  )}`}
+-                >
+-                  {t("global.go_login")}
+-                </Text>
+-              </Show>
+-            </Password>
+-          </Match>
+-          <Match
+-            when={[State.Folder, State.FetchingMore].includes(objStore.state)}
+-          >
+-            <Folder />
+-          </Match>
+-          <Match when={objStore.state === State.File}>
+-            <File />
+-          </Match>
+-        </Switch>
+-      </Suspense>
++              <Folder />
++            </Match>
++            <Match when={objStore.state === State.File}>
++              <File />
++            </Match>
++          </Switch>
++        </Suspense>
++      </ErrorBoundary>
+     </VStack>
+   )
+ }
+diff --git a/src/utils/module_recovery.ts b/src/utils/module_recovery.ts
+new file mode 100644
+index 0000000..ab2558f
+--- /dev/null
++++ b/src/utils/module_recovery.ts
+@@ -0,0 +1,27 @@
++import { createSignal } from "solid-js"
++
++const [unfinishedUploads, setUnfinishedUploads] = createSignal(0)
++export { unfinishedUploads, setUnfinishedUploads }
++export const isModuleLoadError = (error: unknown) =>
++  /Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module|Unable to preload CSS|Loading (?:CSS )?chunk [\w-]+ failed/i.test(
++    String(error),
++  )
++
++// Reload at most once per tab within 15 minutes; persistent network/CDN failures
++// need an explicit retry rather than an infinite reload loop. Storage failures
++// also require an explicit retry because we cannot persist the loop guard.
++export function claimModuleReload(
++  storage: Pick<Storage, "getItem" | "setItem">,
++  now: number,
++  blocked = false,
++) {
++  if (blocked) return false
++  try {
++    const previous = Number(storage.getItem("openlist:module-reload"))
++    if (previous > 0 && now - previous < 15 * 60 * 1000) return false
++    storage.setItem("openlist:module-reload", String(now))
++    return true
++  } catch {
++    return false
++  }
++}

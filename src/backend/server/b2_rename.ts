@@ -133,13 +133,38 @@ export async function getB2RenameJob(
     .first()) as B2RenameJob | null
 }
 
+export type B2RenameReadContext = {
+  env?: any
+  b2RenameJobs?: Map<number, Promise<B2RenameJob | null>>
+}
+
+// Only read routes opt into this snapshot; mutation guards query D1 directly.
+export async function readB2RenameJob(
+  storage: any,
+  context?: B2RenameReadContext,
+): Promise<B2RenameJob | null> {
+  if (!isB2Storage(storage)) return null
+  const cache = context?.b2RenameJobs
+  if (!cache) return getB2RenameJob(context?.env, storage.id)
+  const existing = cache.get(storage.id)
+  if (existing) return existing
+  const pending = getB2RenameJob(context?.env, storage.id)
+  cache.set(storage.id, pending)
+  try {
+    return await pending
+  } catch (error) {
+    cache.delete(storage.id)
+    throw error
+  }
+}
+
 export async function isB2MigrationLocked(
   env: any,
   storage: any,
   virtualPath: string,
+  readContext?: B2RenameReadContext,
 ): Promise<boolean> {
-  if (!isB2Storage(storage)) return false
-  const job = await getB2RenameJob(env, storage.id)
+  const job = await readB2RenameJob(storage, readContext ?? { env })
   const path = clean(virtualPath)
   return !!job && within(path, job.target_virtual)
 }

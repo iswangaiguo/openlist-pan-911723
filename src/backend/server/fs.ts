@@ -49,7 +49,7 @@ import {
 import { seedRouter } from "./seed"
 import { S3Driver } from "../drivers/s3/driver"
 import { withDirectoryMutation } from "../internal/op/directory-cache"
-import { getB2RenameJob, isB2Storage, isB2MigrationLocked } from "./b2_rename"
+import { readB2RenameJob, isB2MigrationLocked } from "./b2_rename"
 
 /**
  * 该路径所属存储是否禁止目录列表（对齐 Go handles.FsList 的 DisableIndex 判断）。
@@ -85,9 +85,10 @@ import {
 export const fsRouter = new Hono()
 fsRouter.route("/seed", seedRouter)
 
-const getStorageRequestContext = (c: any) => {
+const getStorageRequestContext = (c: any, readOnly = false) => {
   const context: import("../internal/op/storage").StorageRequestContext = {
     env: c.env,
+    b2RenameJobs: readOnly ? new Map() : undefined,
   }
   try {
     const executionCtx = c.executionCtx
@@ -216,7 +217,7 @@ fsRouter.post("/dirs", async (c) => {
   if (!isShare && (!user || user.disabled)) {
     return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   }
-  const requestContext = getStorageRequestContext(c)
+  const requestContext = getStorageRequestContext(c, true)
   let reqPath = rawPath
   if (!body.force_root || !isAdmin(user)) {
     reqPath = getActualPath(user, reqPath)
@@ -276,7 +277,7 @@ fsRouter.post("/list", async (c) => {
   if (!isShare && (!user || user.disabled)) {
     return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   }
-  const requestContext = getStorageRequestContext(c)
+  const requestContext = getStorageRequestContext(c, true)
   requestContext.refreshDirectory = body.refresh === true
   requestContext.onDirectoryCache = (status) =>
     c.header("X-Openlist-Directory-Cache", status)
@@ -441,10 +442,7 @@ fsRouter.post("/list", async (c) => {
       reqPath,
       requestContext,
     )
-    const migration =
-      storage && isB2Storage(storage)
-        ? await getB2RenameJob(c.env, storage.id)
-        : null
+    const migration = await readB2RenameJob(storage, requestContext)
     const migrationLocked =
       !!migration &&
       (reqPath === migration.target_virtual ||
@@ -578,7 +576,7 @@ fsRouter.post("/get", async (c) => {
   if (!isShare && (!user || user.disabled)) {
     return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   }
-  const requestContext = getStorageRequestContext(c)
+  const requestContext = getStorageRequestContext(c, true)
   const reqPath = getActualPath(user, body.path || "/")
   try {
     // Share path: /@s/{shareId}/...
@@ -691,7 +689,12 @@ fsRouter.post("/get", async (c) => {
     const writable =
       (canWrite(user) || canRemove(user)) &&
       canWriteMeta(user, meta, reqPath) &&
-      !(await isB2MigrationLocked(c.env, resolvedForWrite.storage, reqPath))
+      !(await isB2MigrationLocked(
+        c.env,
+        resolvedForWrite.storage,
+        reqPath,
+        requestContext,
+      ))
     const writeContentBypass = canWriteContentBypassUserPerms(meta, reqPath)
 
     // Related：查找同目录中文件名前缀相同的文件（字幕 .srt/.ass/.vtt、NFO 等）

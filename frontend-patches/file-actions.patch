@@ -1,0 +1,1229 @@
+diff --git a/src/lang/en/shares.json b/src/lang/en/shares.json
+index 4849b40..db91ffb 100644
+--- a/src/lang/en/shares.json
++++ b/src/lang/en/shares.json
+@@ -39,5 +39,22 @@
+   "input_password": "Please enter Share Code",
+   "share_gone": "This share has expired or been cancelled",
+   "copy_msg": "Copy link",
++  "create_link": "Create link",
++  "item_count": "{{count}} items",
++  "view_link": "View-only link",
++  "link_settings": "Link settings",
++  "access_label": "Access",
++  "anyone_with_link": "Anyone with the link can view",
++  "expiry_label": "Link expiration",
++  "never_expires": "Never expires",
++  "custom_expiry": "Set a date",
++  "expiry_invalid": "Choose a future expiration date",
++  "password_label": "Password protection",
++  "password_on": "On",
++  "no_password": "No password",
++  "password_placeholder": "Set a password",
++  "password_required": "Enter a password",
++  "link_ready": "Share link created",
++  "link_created_hint": "Anyone with the link can view unless you set a password.",
+   "no_permission_tip": "To create a share, you need \"Share\" permission."
+ }
+diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
+new file mode 100644
+index 0000000..2fe70d0
+--- /dev/null
++++ b/src/pages/home/folder/InlineRename.tsx
+@@ -0,0 +1,234 @@
++import { currentLang } from "~/app/i18n"
++import { createSignal, onMount, Show } from "solid-js"
++import { usePath, useRouter, useT } from "~/hooks"
++import { me, objStore, userCan } from "~/store"
++import { inlineRename, setInlineRename } from "~/store/inline_rename"
++import { notify, pathJoin, validateFilename, r } from "~/utils"
++import { StoreObj } from "~/types"
++
++const activeRenames = new Set<string>()
++
++export const InlineRename = (props: { obj: StoreObj }) => {
++  const session = inlineRename()!
++  const { pathname, isShare } = useRouter()
++  const { refresh } = usePath()
++  const t = useT()
++  const [name, setName] = createSignal(session.name)
++  const [busy, setBusy] = createSignal(false)
++  const [error, setError] = createSignal("")
++  const key = `openlist:rename:${session.owner}:${session.directory}:${session.name}`
++  const [progress, setProgress] = createSignal("")
++  let ticket: string | undefined
++  let processed = 0
++  try {
++    const saved = JSON.parse(sessionStorage.getItem(key) || "null")
++    if (saved?.ticket && saved?.name) {
++      ticket = saved.ticket
++      processed = Number(saved.processed) || 0
++      setName(saved.name)
++    }
++  } catch {}
++  const remember = () => {
++    try {
++      sessionStorage.setItem(
++        key,
++        JSON.stringify({ ticket, name: name(), processed }),
++      )
++    } catch {}
++  }
++  const forget = () => {
++    try {
++      sessionStorage.removeItem(key)
++    } catch {}
++  }
++  const text = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
++  let input!: HTMLInputElement
++  onMount(() =>
++    queueMicrotask(() => {
++      if (!input.isConnected) return
++      input.focus()
++      const dot = session.name.lastIndexOf(".")
++      input.setSelectionRange(
++        0,
++        !props.obj.is_dir && dot > 0 ? dot : session.name.length,
++      )
++    }),
++  )
++  const close = () => {
++    if (inlineRename() === session) setInlineRename(undefined)
++  }
++  const submit = async () => {
++    if (busy() || inlineRename() !== session) return
++    if (
++      pathname() !== session.directory ||
++      me().id !== session.owner ||
++      isShare() ||
++      !objStore.write ||
++      !userCan("rename")
++    ) {
++      close()
++      return
++    }
++    const validation = validateFilename(name())
++    if (!validation.valid) {
++      setError(t(`global.${validation.error}`))
++      input.focus()
++      return
++    }
++    if (name() === session.name) {
++      close()
++      return
++    }
++    if (activeRenames.has(key)) {
++      setError(
++        text("该重命名仍在进行，请等待完成", "This rename is still running"),
++      )
++      return
++    }
++    activeRenames.add(key)
++    setBusy(true)
++    setError("")
++    try {
++      let response: any
++      setProgress(text("正在重命名…", "Renaming…"))
++      if (!ticket) {
++        response = await r.post("/fs/rename", {
++          path: pathJoin(session.directory, session.name),
++          name: name(),
++          overwrite: false,
++          staged: true,
++        })
++        if (response.code !== 200) throw new Error(response.message)
++        if (response.data?.jobId) {
++          const sourcePath = pathJoin(session.directory, session.name)
++          close()
++          if (pathname() === session.directory) refresh(undefined, true)
++          notify.success(text(
++            "目录已更名，正在同步 B2 中的文件名",
++            "Folder renamed; B2 names are syncing in the background",
++          ))
++          void (async () => {
++            try {
++              while (true) {
++                const step: any = await r.post("/fs/rename/b2/step", { path: sourcePath })
++                if (step.code !== 200 || !step.data) throw new Error(step.message)
++                if (step.data.done) break
++                if (step.data.state === "paused") throw new Error(step.data.error || "B2 rename paused")
++                await new Promise((resolve) => setTimeout(resolve, 250))
++              }
++              notify.success(text("B2 目录名称同步完成", "B2 folder rename completed"))
++              if (pathname() === session.directory) refresh(undefined, true)
++            } catch (error) {
++              notify.error(String(error))
++            }
++          })()
++          return
++        }
++        ticket = response.data?.ticket
++        if (ticket) remember()
++      }
++      while (ticket) {
++        if (me().id !== session.owner)
++          throw new Error(
++            text("账号已切换，操作已暂停", "Account changed; rename paused"),
++          )
++        response = await r.post("/fs/rename/step", { ticket })
++        if (response.code !== 200) throw new Error(response.message)
++        if (response.data.processed) processed++
++        ticket = response.data.done ? undefined : response.data.ticket
++        if (!response.data.done && !ticket)
++          throw new Error("Invalid rename continuation")
++        remember()
++        setProgress(
++          response.data.part
++            ? text(
++                `已处理 ${processed} 项，正在复制分段 ${response.data.part}/${response.data.parts}`,
++                `Processed ${processed}; copying part ${response.data.part}/${response.data.parts}`,
++              )
++            : text(
++                `已处理 ${processed} 项…`,
++                `Processed ${processed} item(s)…`,
++              ),
++        )
++      }
++      forget()
++      notify.success(t("global.success"))
++      close()
++      if (pathname() === session.directory && me().id === session.owner)
++        refresh(undefined, true)
++    } catch (error) {
++      setError(
++        String(error) +
++          (ticket
++            ? text(
++                "；已处理内容保留在新目录，剩余内容仍在原目录。按 Enter 继续。",
++                "; completed items remain in the new folder, remaining items in the original. Press Enter to resume.",
++              )
++            : ""),
++      )
++    } finally {
++      activeRenames.delete(key)
++      setBusy(false)
++      setProgress("")
++    }
++  }
++  return (
++    <form
++      class="drive-inline-rename"
++      onSubmit={(event) => {
++        event.preventDefault()
++        void submit()
++      }}
++      onMouseDown={(e) => e.stopPropagation()}
++      onClick={(e) => e.stopPropagation()}
++      onKeyDown={(e) => {
++        e.stopPropagation()
++        // Enter used to depend on implicit form submission, which differs
++        // across browsers. IME confirmation must not submit a partial name.
++        if (e.isComposing || e.keyCode === 229) return
++        if (e.key === "Enter") {
++          e.preventDefault()
++          void submit()
++        } else if (e.key === "Escape" && !busy()) {
++          e.preventDefault()
++          if (ticket)
++            setError(
++              text(
++                "文件夹重命名已开始，按 Enter 继续完成，避免留下未完成目录",
++                "Folder rename started; press Enter to resume",
++              ),
++            )
++          else close()
++        }
++      }}
++    >
++      <input
++        ref={input}
++        aria-label={t("home.toolbar.input_new_name")}
++        value={name()}
++        readOnly={busy() || !!ticket}
++        aria-busy={busy()}
++        enterkeyhint="done"
++        onBlur={() => {
++          if (!error()) void submit()
++        }}
++        aria-invalid={!!error()}
++        onInput={(e) => {
++          setName(e.currentTarget.value)
++          setError("")
++        }}
++      />
++      <Show when={progress()}>
++        <span class="drive-rename-progress" role="status">
++          {progress()}
++        </span>
++      </Show>
++      <Show when={error()}>
++        <span class="drive-rename-error" role="alert">
++          {error()}
++        </span>
++      </Show>
++    </form>
++  )
++}
+diff --git a/src/pages/home/folder/RowActions.tsx b/src/pages/home/folder/RowActions.tsx
+new file mode 100644
+index 0000000..b6673bf
+--- /dev/null
++++ b/src/pages/home/folder/RowActions.tsx
+@@ -0,0 +1,32 @@
++import { Icon } from "@hope-ui/solid"
++import { useContextMenu } from "solid-contextmenu"
++import { BsThreeDots } from "solid-icons/bs"
++import { usePath, useT } from "~/hooks"
++import { selectIndex } from "~/store"
++import type { StoreObj } from "~/types"
++
++// Both entry points use the same context menu and its existing operations.
++export const RowActions = (props: { obj: StoreObj; index: number }) => {
++  const t = useT()
++  const { setPathAs } = usePath()
++  const { show } = useContextMenu({ id: 1 })
++  return (
++    <div class="drive-row-actions" onMouseDown={(event) => event.stopPropagation()}>
++      <button
++        type="button"
++        class="drive-icon-button drive-row-menu"
++        aria-label={`${props.obj.name} · ${t("home.toolbar.more")}`}
++        title={t("home.toolbar.more")}
++        onClick={(event) => {
++          event.preventDefault()
++          event.stopPropagation()
++          selectIndex(props.index, true, true)
++          setPathAs(props.obj.name, props.obj.is_dir, true)
++          show(event, { props: props.obj })
++        }}
++      >
++        <Icon as={BsThreeDots} />
++      </button>
++    </div>
++  )
++}
+diff --git a/src/pages/home/folder/context-menu.tsx b/src/pages/home/folder/context-menu.tsx
+index ee8049f..8b2bf13 100644
+--- a/src/pages/home/folder/context-menu.tsx
++++ b/src/pages/home/folder/context-menu.tsx
+@@ -1,10 +1,10 @@
+-import { Menu, Item, Submenu } from "solid-contextmenu"
++import { Menu, Item, Submenu, Separator } from "solid-contextmenu"
+ import { useCopyLink, useDownload, useLink, useRouter, useT } from "~/hooks"
+ import "solid-contextmenu/dist/style.css"
+ import { HStack, Icon, Text, useColorMode, Image } from "@hope-ui/solid"
+ import { operations } from "../toolbar/operations"
+ import { createMemo, For, Show } from "solid-js"
+-import { bus, convertURL, notify, torrentParse } from "~/utils"
++import { bus, convertURL, joinBase, notify, torrentParse } from "~/utils"
+ import { ObjType, UserMethods } from "~/types"
+ import {
+   getSettingBool,
+@@ -17,19 +17,20 @@ import {
+ } from "~/store"
+ import { players } from "../previews/video_box"
+ import { getPreviews } from "../previews"
+-import { BsPlayCircleFill } from "solid-icons/bs"
++import { BsFolder2Open, BsPlayCircleFill } from "solid-icons/bs"
+ import { isArchive } from "~/store/archive"
+ import axios from "axios"
++import { currentLang } from "~/app/i18n"
++import { openItem } from "./open-item"
+ 
+ const ItemContent = (props: { name: string }) => {
+   const t = useT()
+   return (
+-    <HStack spacing="$2">
++    <HStack class="drive-context-item" spacing="$3">
+       <Icon
+-        p={operations[props.name].p ? "$1" : undefined}
+         as={operations[props.name].icon}
+-        boxSize="$7"
+-        color={operations[props.name].color}
++        boxSize="$5"
++        color="currentColor"
+       />
+       <Text>{t(`home.toolbar.${props.name}`)}</Text>
+     </HStack>
+@@ -47,6 +48,8 @@ export const ContextMenu = () => {
+   }
+   const { rawLink } = useLink()
+   const { isShare, pushHref, to } = useRouter()
++  const editingBlocked = () =>
++    selectedObjs().some((obj) => !!(obj as any).migration)
+   const openWithPreviews = createMemo(() => {
+     const objs = selectedObjs()
+     if (objs.length !== 1) return []
+@@ -61,14 +64,59 @@ export const ContextMenu = () => {
+       animation="scale"
+       theme={colorMode() !== "dark" ? "light" : "dark"}
+       style="z-index: var(--hope-zIndices-popover)"
++      class="drive-context-menu"
+     >
++      <div class="drive-context-title" title={selectedObjs().map((obj) => obj.name).join(", ")}>
++        {selectedObjs().length === 1
++          ? selectedObjs()[0].name
++          : `${selectedObjs().length} ${String(currentLang()).startsWith("zh") ? "项" : "items"}`}
++      </div>
++      <Show when={oneChecked()}>
++        <Item onClick={({ props }) => openItem(props, pushHref(props.name), to)}>
++          <HStack class="drive-context-item" spacing="$3">
++            <Icon as={BsFolder2Open} boxSize="$5" color="currentColor" />
++            <Text>{String(currentLang()).startsWith("zh") ? "打开" : "Open"}</Text>
++          </HStack>
++        </Item>
++        <Item
++          onClick={({ props }) => {
++            if (props.is_dir) {
++              if (!canPackageDownload()) {
++                notify.warning(t("home.toolbar.package_download_disabled"))
++                return
++              }
++              bus.emit("tool", "package_download")
++            } else {
++              batchDownloadSelected()
++            }
++          }}
++        >
++          <ItemContent name="download" />
++        </Item>
++      </Show>
++      <Show when={!oneChecked() && haveSelected()}>
++        <Submenu label={<ItemContent name="download" />}>
++          <Item onClick={batchDownloadSelected}>
++            {t("home.toolbar.batch_download")}
++          </Item>
++          <Show when={canPackageDownload()}>
++            <Item onClick={() => bus.emit("tool", "package_download")}>
++              {t("home.toolbar.package_download")}
++            </Item>
++            <Item onClick={playlistDownloadSelected}>
++              {t("home.toolbar.playlist_download")}
++            </Item>
++          </Show>
++          <Item onClick={sendToAria2}>{t("home.toolbar.send_aria2")}</Item>
++        </Submenu>
++      </Show>
+       <Show when={openWithPreviews().length > 0}>
+         <Submenu label={<ItemContent name="open_with" />}>
+           <For each={openWithPreviews()}>
+             {(preview) => (
+               <Item
+                 onClick={({ props }) => {
+-                  to(`${pushHref(props.name)}?preview=${preview.key}`)
++                  window.open(`${joinBase(pushHref(props.name))}?preview=${preview.key}`, "_blank", "noopener,noreferrer")
+                 }}
+               >
+                 {preview.name}
+@@ -77,10 +125,41 @@ export const ContextMenu = () => {
+           </For>
+         </Submenu>
+       </Show>
++      <Separator />
++      <Show when={oneChecked()}>
++        <Item
++          onClick={({ props }) => {
++            if (props.is_dir) copySelectedPreviewPage()
++            else copySelectedRawLink(true)
++          }}
++        >
++          <ItemContent name="copy_link" />
++        </Item>
++      </Show>
++      <Show when={!oneChecked() && haveSelected()}>
++        <Submenu label={<ItemContent name="copy_link" />}>
++          <Item onClick={copySelectedPreviewPage}>
++            {t("home.toolbar.preview_page")}
++          </Item>
++          <Item onClick={() => copySelectedRawLink()}>
++            {t("home.toolbar.down_link")}
++          </Item>
++          <Item onClick={() => copySelectedRawLink(true)}>
++            {t("home.toolbar.encode_down_link")}
++          </Item>
++        </Submenu>
++      </Show>
++      <Item
++        hidden={!userCan("share") || isShare()}
++        onClick={() => bus.emit("tool", "share")}
++      >
++        <ItemContent name="share" />
++      </Item>
++      <Separator />
+       <For each={["rename", "move", "copy", "delete"] as const}>
+         {(name) => (
+           <Item
+-            hidden={!userCan(name) || !objStore.write || isShare()}
++            hidden={!userCan(name) || !objStore.write || isShare() || editingBlocked()}
+             onClick={() => {
+               bus.emit("tool", name)
+             }}
+@@ -89,18 +168,11 @@ export const ContextMenu = () => {
+           </Item>
+         )}
+       </For>
+-      <Item
+-        hidden={!userCan("share") || isShare()}
+-        onClick={() => {
+-          bus.emit("tool", "share")
+-        }}
+-      >
+-        <ItemContent name="share" />
+-      </Item>
+       <Item
+         hidden={() => {
+           return (
+             isShare() ||
++            editingBlocked() ||
+             !userCan("decompress") ||
+             !objStore.write ||
+             selectedObjs().some((o) => o.is_dir) ||
+@@ -117,6 +189,7 @@ export const ContextMenu = () => {
+         hidden={() => {
+           return (
+             isShare() ||
++            editingBlocked() ||
+             !userCan("offline_download") ||
+             !objStore.write ||
+             !oneChecked() ||
+@@ -159,32 +232,6 @@ export const ContextMenu = () => {
+         <ItemContent name="offline_download_torrent" />
+       </Item>
+       <Show when={oneChecked()}>
+-        <Item
+-          onClick={({ props }) => {
+-            if (props.is_dir) {
+-              copySelectedPreviewPage()
+-            } else {
+-              copySelectedRawLink(true)
+-            }
+-          }}
+-        >
+-          <ItemContent name="copy_link" />
+-        </Item>
+-        <Item
+-          onClick={({ props }) => {
+-            if (props.is_dir) {
+-              if (!canPackageDownload()) {
+-                notify.warning(t("home.toolbar.package_download_disabled"))
+-                return
+-              }
+-              bus.emit("tool", "package_download")
+-            } else {
+-              batchDownloadSelected()
+-            }
+-          }}
+-        >
+-          <ItemContent name="download" />
+-        </Item>
+         <Submenu
+           hidden={({ props }) => {
+             return props.type !== ObjType.VIDEO
+@@ -193,9 +240,8 @@ export const ContextMenu = () => {
+             <HStack spacing="$2">
+               <Icon
+                 as={BsPlayCircleFill}
+-                boxSize="$7"
+-                p="$0_5"
+-                color="$info9"
++                boxSize="$5"
++                color="currentColor"
+               />
+               <Text>{t("home.preview.play_with")}</Text>
+             </HStack>
+@@ -226,37 +272,6 @@ export const ContextMenu = () => {
+           </For>
+         </Submenu>
+       </Show>
+-      <Show when={!oneChecked() && haveSelected()}>
+-        <Submenu label={<ItemContent name="copy_link" />}>
+-          <Item onClick={copySelectedPreviewPage}>
+-            {t("home.toolbar.preview_page")}
+-          </Item>
+-          <Item onClick={() => copySelectedRawLink()}>
+-            {t("home.toolbar.down_link")}
+-          </Item>
+-          <Item onClick={() => copySelectedRawLink(true)}>
+-            {t("home.toolbar.encode_down_link")}
+-          </Item>
+-        </Submenu>
+-        <Submenu label={<ItemContent name="download" />}>
+-          <Item onClick={batchDownloadSelected}>
+-            {t("home.toolbar.batch_download")}
+-          </Item>
+-          <Show
+-            when={
+-              UserMethods.is_admin(me()) || getSettingBool("package_download")
+-            }
+-          >
+-            <Item onClick={() => bus.emit("tool", "package_download")}>
+-              {t("home.toolbar.package_download")}
+-            </Item>
+-            <Item onClick={playlistDownloadSelected}>
+-              {t("home.toolbar.playlist_download")}
+-            </Item>
+-          </Show>
+-          <Item onClick={sendToAria2}>{t("home.toolbar.send_aria2")}</Item>
+-        </Submenu>
+-      </Show>
+     </Menu>
+   )
+ }
+diff --git a/src/pages/home/folder/open-item.ts b/src/pages/home/folder/open-item.ts
+new file mode 100644
+index 0000000..bf13d9b
+--- /dev/null
++++ b/src/pages/home/folder/open-item.ts
+@@ -0,0 +1,15 @@
++import type { StoreObj } from "~/types"
++import { joinBase } from "~/utils"
++
++// Keep folder navigation in the current tab. A file preview gets its own tab.
++export function openItem(
++  obj: Pick<StoreObj, "is_dir">,
++  href: string,
++  navigate: (path: string) => void,
++) {
++  if (obj.is_dir) {
++    navigate(href)
++  } else {
++    window.open(joinBase(href), "_blank", "noopener,noreferrer")
++  }
++}
+diff --git a/src/pages/home/toolbar/Rename.tsx b/src/pages/home/toolbar/Rename.tsx
+index 57e34a5..4579d74 100644
+--- a/src/pages/home/toolbar/Rename.tsx
++++ b/src/pages/home/toolbar/Rename.tsx
+@@ -1,64 +1,39 @@
+-import { Checkbox, createDisclosure } from "@hope-ui/solid"
+-import { createSignal, onCleanup, Show } from "solid-js"
+-import { ModalInput } from "~/components"
+-import { useFetch, usePath, useRouter, useT } from "~/hooks"
+-import { oneChecked, selectedObjs } from "~/store"
+-import { bus, fsRename, handleRespWithNotifySuccess, pathJoin } from "~/utils"
++import { createEffect, onCleanup } from "solid-js"
++import { useRouter } from "~/hooks"
++import {
++  layout,
++  me,
++  objStore,
++  oneChecked,
++  selectedObjs,
++  setLayout,
++  userCan,
++} from "~/store"
++import { setInlineRename } from "~/store/inline_rename"
++import { bus } from "~/utils"
+ 
+ export const Rename = () => {
+-  const t = useT()
+-  const { isOpen, onOpen, onClose } = createDisclosure()
+-  const [loading, ok] = useFetch(fsRename)
+-  const { pathname } = useRouter()
+-  const { refresh } = usePath()
+-  const [overwrite, setOverwrite] = createSignal(false)
++  const { pathname, isShare } = useRouter()
++  createEffect(() => {
++    pathname()
++    me().id
++    setInlineRename(undefined)
++  })
+   const handler = (name: string) => {
+-    if (name === "rename") {
+-      if (!oneChecked()) {
+-        bus.emit("tool", "batchRename")
+-        return
+-      }
+-      onOpen()
+-      setOverwrite(false)
++    if (name !== "rename" || isShare() || !objStore.write || !userCan("rename"))
++      return
++    if (!oneChecked()) {
++      bus.emit("tool", "batchRename")
++      return
+     }
++    const obj = selectedObjs()[0]
++    if (layout() !== "list") setLayout("list")
++    setInlineRename({ directory: pathname(), name: obj.name, owner: me().id })
+   }
+   bus.on("tool", handler)
+   onCleanup(() => {
+     bus.off("tool", handler)
++    setInlineRename(undefined)
+   })
+-  return (
+-    <Show when={isOpen()}>
+-      <ModalInput
+-        title="home.toolbar.input_new_name"
+-        validateFilename={true}
+-        footerSlot={
+-          <Checkbox
+-            mr="auto"
+-            checked={overwrite()}
+-            onChange={() => {
+-              setOverwrite(!overwrite())
+-            }}
+-          >
+-            {t("home.conflict_policy.overwrite_existing")}
+-          </Checkbox>
+-        }
+-        isRenamingFile={!selectedObjs()[0].is_dir}
+-        opened={isOpen()}
+-        onClose={onClose}
+-        defaultValue={selectedObjs()[0]?.name ?? ""}
+-        loading={loading()}
+-        onSubmit={async (name) => {
+-          const resp = await ok(
+-            pathJoin(pathname(), selectedObjs()[0].name),
+-            name,
+-            overwrite(),
+-          )
+-          handleRespWithNotifySuccess(resp, () => {
+-            refresh()
+-            onClose()
+-          })
+-        }}
+-      />
+-    </Show>
+-  )
++  return null
+ }
+diff --git a/src/pages/home/toolbar/Share.tsx b/src/pages/home/toolbar/Share.tsx
+index dc0cf0f..14b0d34 100644
+--- a/src/pages/home/toolbar/Share.tsx
++++ b/src/pages/home/toolbar/Share.tsx
+@@ -1,19 +1,9 @@
+-import { useFetch, useRouter, useT, useUtil } from "~/hooks"
+-import {
+-  bus,
+-  getExpireDate,
+-  handleResp,
+-  makeTemplateData,
+-  matchTemplate,
+-  r,
+-  randomPwd,
+-} from "~/utils"
+-import { batch, createSignal, Match, onCleanup, Switch } from "solid-js"
++import { useRouter, useT, useUtil } from "~/hooks"
++import { bus, handleResp, joinBase, notify, r } from "~/utils"
++import { batch, createSignal, onCleanup, Show } from "solid-js"
+ import {
+   Button,
+   createDisclosure,
+-  HStack,
+-  IconButton,
+   Input,
+   Modal,
+   ModalBody,
+@@ -21,282 +11,244 @@ import {
+   ModalFooter,
+   ModalHeader,
+   ModalOverlay,
+-  Select,
+-  Text,
+-  Textarea,
+-  VStack,
+ } from "@hope-ui/solid"
+-import {
+-  ExtractFolder,
+-  OrderBy,
+-  OrderDirection,
+-  PResp,
+-  Share as ShareType,
+-  ShareInfo,
+-} from "~/types"
+-import { createStore } from "solid-js/store"
+-import { getSetting, me, selectedObjs } from "~/store"
+-import { TbRefresh } from "solid-icons/tb"
+-import { SelectOptions, MultiPathInput } from "~/components"
++import { Resp, ShareInfo } from "~/types"
++import { me, selectedObjs } from "~/store"
++import { currentLang } from "~/app/i18n"
++
++const zhLabels = {
++  view_link: "用于查看的链接",
++  link_settings: "链接设置",
++  access_label: "访问权限",
++  anyone_with_link: "任何获得链接的人都可以查看",
++  expiry_label: "链接到期时间",
++  custom_expiry: "指定时间",
++  never_expires: "长期有效",
++  expiry_invalid: "请选择未来的到期时间",
++  password_label: "密码保护",
++  password_on: "已开启",
++  no_password: "无密码",
++  password_placeholder: "设置访问密码",
++  password_required: "请输入访问密码",
++  link_ready: "分享链接已创建",
++  link_created_hint: "任何获得链接的人都可以查看，除非你设置了密码。",
++  create_link: "创建链接",
++} as const
++
++const shareUrl = (id: string) =>
++  `${location.origin}${joinBase("@s", encodeURIComponent(id))}`
+ 
+ export const Share = () => {
+   const t = useT()
+-  const [link, setLink] = createSignal("")
+   const { pathname } = useRouter()
++  const { copy } = useUtil()
++  const label = (key: keyof typeof zhLabels) =>
++    String(currentLang()).startsWith("zh") ? zhLabels[key] : t(`shares.${key}`)
++  const { isOpen, onOpen, onClose } = createDisclosure()
++  const [names, setNames] = createSignal<string[]>([])
++  const [paths, setPaths] = createSignal<string[]>([])
++  const [link, setLink] = createSignal("")
++  const [passwordEnabled, setPasswordEnabled] = createSignal(false)
++  const [password, setPassword] = createSignal("")
++  const [expiryEnabled, setExpiryEnabled] = createSignal(false)
++  const [expiry, setExpiry] = createSignal("")
++  const [creating, setCreating] = createSignal(false)
++
+   const handler = (name: string) => {
+-    if (name === "share") {
+-      batch(() => {
+-        setLink("")
+-        setExpireString("")
+-        setExpireValid(true)
+-        const paths = selectedObjs().map((obj) => {
++    if (name !== "share") return
++    const objects = selectedObjs()
++    batch(() => {
++      setNames(objects.map((obj) => obj.name))
++      setPaths(
++        objects.map((obj) => {
+           const split =
+             pathname().endsWith("/") || obj.name.startsWith("/") ? "" : "/"
+           return `${me().base_path}${pathname()}${split}${obj.name}`
+-        })
+-        setShare({
+-          files: paths,
+-          expires: null,
+-          pwd: "",
+-          max_accessed: 0,
+-          order_by: OrderBy.None,
+-          order_direction: OrderDirection.None,
+-          extract_folder: ExtractFolder.None,
+-          remark: "",
+-          readme: "",
+-          header: "",
+-        } as ShareType)
++        }),
++      )
++      setLink("")
++      setPasswordEnabled(false)
++      setPassword("")
++      setExpiryEnabled(false)
++      setExpiry("")
++    })
++    onOpen()
++  }
++  bus.on("tool", handler)
++  onCleanup(() => bus.off("tool", handler))
++
++  const createShare = async () => {
++    if (creating()) return
++    if (paths().length === 0) {
++      notify.error(t("home.toolbar.no_selected"))
++      return
++    }
++    let expires: string | null = null
++    if (expiryEnabled()) {
++      const date = new Date(expiry())
++      if (
++        !expiry() ||
++        !Number.isFinite(date.getTime()) ||
++        date.getTime() <= Date.now()
++      ) {
++        notify.error(label("expiry_invalid"))
++        return
++      }
++      expires = date.toISOString()
++    }
++    if (passwordEnabled() && !password().trim()) {
++      notify.error(label("password_required"))
++      return
++    }
++
++    setCreating(true)
++    try {
++      const resp: Resp<ShareInfo> = await r.post("/share/create", {
++        files: paths(),
++        expires,
++        pwd: passwordEnabled() ? password().trim() : "",
++        max_accessed: 0,
++      })
++      handleResp(resp, (data) => {
++        // share_summary_content is empty by default; always show a real URL.
++        setLink(shareUrl(data.id))
+       })
+-      onOpen()
++    } catch (error) {
++      notify.error(error instanceof Error ? error.message : String(error))
++    } finally {
++      setCreating(false)
+     }
+   }
+-  bus.on("tool", handler)
+-  onCleanup(() => {
+-    bus.off("tool", handler)
+-  })
+-  const { isOpen, onOpen, onClose } = createDisclosure()
+-  const { copy } = useUtil()
+-  const [expireString, setExpireString] = createSignal("")
+-  const [expireValid, setExpireValid] = createSignal(true)
+-  const [share, setShare] = createStore<ShareType>({} as ShareType)
+-  const [okLoading, ok] = useFetch((): PResp<ShareInfo> => {
+-    return r.post(`/share/create`, share)
+-  })
++
+   return (
+     <Modal
+       blockScrollOnMount={false}
+       opened={isOpen()}
+       onClose={onClose}
+-      size={{
+-        "@initial": "xs",
+-        "@md": "md",
+-        "@lg": "lg",
+-        "@xl": "xl",
+-        "@2xl": "2xl",
+-      }}
++      size="md"
+     >
+       <ModalOverlay />
+-      <ModalContent>
+-        <ModalHeader>{t("home.toolbar.share")}</ModalHeader>
+-        <Switch
+-          fallback={
+-            <>
+-              <ModalBody>
+-                <Textarea variant="filled" value={link()} readonly />
+-              </ModalBody>
+-              <ModalFooter display="flex" gap="$2">
+-                <Button
+-                  colorScheme="primary"
+-                  onClick={() => {
+-                    copy(link())
+-                  }}
+-                >
+-                  {t("shares.copy_msg")}
+-                </Button>
+-                <Button colorScheme="info" onClick={onClose}>
+-                  {t("global.confirm")}
+-                </Button>
+-              </ModalFooter>
+-            </>
+-          }
+-        >
+-          <Match when={link() === ""}>
+-            <ModalBody>
+-              <VStack spacing="$1" alignItems="flex-start">
+-                <Text size="sm">{t("shares.id")}</Text>
+-                <Input
+-                  size="sm"
+-                  value={share.id ?? ""}
+-                  maxLength={64}
+-                  placeholder={t("shares.id_placeholder")}
+-                  onInput={(e) => {
+-                    setShare("id", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.remark")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.remark}
+-                  onInput={(e) => {
+-                    setShare("remark", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.extract_folder")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.extract_folder}
+-                  onChange={(e) => {
+-                    setShare("extract_folder", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      {
+-                        key: ExtractFolder.Front,
+-                        label: t("shares.extract_folders.front"),
+-                      },
+-                      {
+-                        key: ExtractFolder.Back,
+-                        label: t("shares.extract_folders.back"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.order_by")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.order_by}
+-                  onChange={(e) => {
+-                    setShare("order_by", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      { key: OrderBy.Name, label: t("shares.order_bys.name") },
+-                      { key: OrderBy.Size, label: t("shares.order_bys.size") },
+-                      {
+-                        key: OrderBy.Modified,
+-                        label: t("shares.order_bys.modified"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.order_direction")}</Text>
+-                <Select
+-                  size="sm"
+-                  value={share.order_direction}
+-                  onChange={(e) => {
+-                    setShare("order_direction", e)
+-                  }}
+-                >
+-                  <SelectOptions
+-                    options={[
+-                      {
+-                        key: OrderDirection.Asc,
+-                        label: t("shares.order_directions.asc"),
+-                      },
+-                      {
+-                        key: OrderDirection.Desc,
+-                        label: t("shares.order_directions.desc"),
+-                      },
+-                    ]}
+-                  />
+-                </Select>
+-                <Text size="sm">{t("shares.pwd")}</Text>
+-                <HStack spacing="$1" w="$full">
+-                  <Input
+-                    size="sm"
+-                    value={share.pwd}
+-                    onInput={(e) => {
+-                      setShare("pwd", e.currentTarget.value)
+-                    }}
+-                  />
+-                  <IconButton
+-                    colorScheme="neutral"
+-                    size="sm"
+-                    aria-label="random"
+-                    icon={<TbRefresh />}
+-                    onClick={() => {
+-                      setShare("pwd", randomPwd())
+-                    }}
+-                  />
+-                </HStack>
+-                <Text size="sm">{t("shares.max_accessed")}</Text>
+-                <Input
+-                  type="number"
+-                  size="sm"
+-                  value={share.max_accessed}
+-                  onInput={(e) => {
+-                    setShare("max_accessed", parseInt(e.currentTarget.value))
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.expires")}</Text>
++      <ModalContent class="drive-share-dialog">
++        <ModalHeader class="drive-share-heading">
++          {t("home.toolbar.share")}
++        </ModalHeader>
++        <ModalBody class="drive-share-body">
++          <div class="drive-share-target" title={names().join(", ")}>
++            <span class="drive-share-target-icon" aria-hidden="true">
++              ↗
++            </span>
++            <div>
++              <strong>
++                {names().length === 1
++                  ? names()[0]
++                  : String(currentLang()).startsWith("zh")
++                    ? `${names().length} 个项目`
++                    : t("shares.item_count", { count: names().length })}
++              </strong>
++              <span>{label("view_link")}</span>
++            </div>
++          </div>
++          <Show
++            when={!link()}
++            fallback={
++              <div class="drive-share-result">
++                <label for="drive-share-link">{label("link_ready")}</label>
+                 <Input
+-                  size="sm"
+-                  invalid={!expireValid()}
+-                  value={expireString()}
+-                  placeholder="yyyy-MM-dd HH:mm:ss or +1w1d1H1m1s1ms"
+-                  onInput={(e) => {
+-                    setExpireString(e.currentTarget.value)
+-                    if (e.currentTarget.value === "") {
+-                      setExpireValid(true)
+-                      setShare("expires", null)
+-                      return
+-                    }
+-                    const date = getExpireDate(e.currentTarget.value)
+-                    if (isNaN(date.getTime())) {
+-                      setExpireValid(false)
+-                    } else {
+-                      setExpireValid(true)
+-                      setShare("expires", date.toISOString())
+-                    }
+-                  }}
++                  id="drive-share-link"
++                  value={link()}
++                  readonly
++                  onFocus={(event) => event.currentTarget.select()}
+                 />
+-                <Text size="sm">{t("shares.readme")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.readme}
+-                  onInput={(e) => {
+-                    setShare("readme", e.currentTarget.value)
+-                  }}
+-                />
+-                <Text size="sm">{t("shares.header")}</Text>
+-                <Textarea
+-                  size="sm"
+-                  value={share.header}
+-                  onInput={(e) => {
+-                    setShare("header", e.currentTarget.value)
+-                  }}
+-                />
+-              </VStack>
+-            </ModalBody>
+-            <ModalFooter display="flex" gap="$2">
+-              <Button colorScheme="neutral" onClick={onClose}>
+-                {t("global.cancel")}
+-              </Button>
+-              <Button
+-                colorScheme="info"
+-                disabled={!expireValid()}
+-                loading={okLoading()}
+-                onClick={async () => {
+-                  const resp = await ok()
+-                  handleResp(resp, (data) => {
+-                    const templateData = makeTemplateData(data, {
+-                      site_title: getSetting("site_title"),
+-                    })
+-                    const msg = matchTemplate(
+-                      getSetting("share_summary_content"),
+-                      templateData,
+-                    )
+-                    setLink(msg)
+-                  })
+-                }}
+-              >
+-                {t("global.confirm")}
++                <p>{label("link_created_hint")}</p>
++              </div>
++            }
++          >
++            <div class="drive-share-section-title">
++              {label("link_settings")}
++            </div>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("access_label")}</strong>
++                <span>{label("anyone_with_link")}</span>
++              </div>
++            </div>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("expiry_label")}</strong>
++                <span>
++                  {expiryEnabled()
++                    ? label("custom_expiry")
++                    : label("never_expires")}
++                </span>
++              </div>
++              <input
++                type="checkbox"
++                aria-label={label("expiry_label")}
++                checked={expiryEnabled()}
++                onChange={(event) =>
++                  setExpiryEnabled(event.currentTarget.checked)
++                }
++              />
++            </div>
++            <Show when={expiryEnabled()}>
++              <input
++                class="drive-share-input"
++                type="datetime-local"
++                aria-label={label("expiry_label")}
++                value={expiry()}
++                onInput={(event) => setExpiry(event.currentTarget.value)}
++              />
++            </Show>
++            <div class="drive-share-setting">
++              <div>
++                <strong>{label("password_label")}</strong>
++                <span>
++                  {passwordEnabled()
++                    ? label("password_on")
++                    : label("no_password")}
++                </span>
++              </div>
++              <input
++                type="checkbox"
++                aria-label={label("password_label")}
++                checked={passwordEnabled()}
++                onChange={(event) =>
++                  setPasswordEnabled(event.currentTarget.checked)
++                }
++              />
++            </div>
++            <Show when={passwordEnabled()}>
++              <Input
++                type="text"
++                aria-label={label("password_label")}
++                placeholder={label("password_placeholder")}
++                value={password()}
++                onInput={(event) => setPassword(event.currentTarget.value)}
++              />
++            </Show>
++          </Show>
++        </ModalBody>
++        <ModalFooter class="drive-share-footer">
++          <Button colorScheme="neutral" onClick={onClose}>
++            {link() ? t("global.confirm") : t("global.cancel")}
++          </Button>
++          <Show
++            when={!link()}
++            fallback={
++              <Button colorScheme="info" onClick={() => copy(link())}>
++                {t("shares.copy_msg")}
+               </Button>
+-            </ModalFooter>
+-          </Match>
+-        </Switch>
++            }
++          >
++            <Button
++              colorScheme="info"
++              loading={creating()}
++              onClick={createShare}
++            >
++              {label("create_link")}
++            </Button>
++          </Show>
++        </ModalFooter>
+       </ModalContent>
+     </Modal>
+   )
+diff --git a/src/store/inline_rename.ts b/src/store/inline_rename.ts
+new file mode 100644
+index 0000000..a8baec7
+--- /dev/null
++++ b/src/store/inline_rename.ts
+@@ -0,0 +1,6 @@
++import { createSignal } from "solid-js"
++export const [inlineRename, setInlineRename] = createSignal<{
++  directory: string
++  name: string
++  owner: number
++}>()

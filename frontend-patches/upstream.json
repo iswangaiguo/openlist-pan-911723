@@ -5,9 +5,12 @@
     "directory-navigation.patch",
     "multipart-resources.patch",
     "upload-defaults.patch",
-    "dropbox-ui.patch",
+    "browser-ui.patch",
+    "file-actions.patch",
+    "upload-panel.patch",
+    "storage-usage.patch",
+    "module-recovery.patch",
     "video-buffer.patch",
-    "video-recovery.patch",
-    "video-recovery-on-error.patch"
+    "video-recovery.patch"
   ]
 }
