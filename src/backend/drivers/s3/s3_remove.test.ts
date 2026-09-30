@@ -1,6 +1,9 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { S3Driver } from "./driver"
+import { S3Client } from "./util"
+import { CryptDriver } from "../crypt/driver"
+import { ChunkDriver } from "../chunk/driver"
 
 /**
  * 调用约定（src/backend/internal/op/storage.ts 的 removeItems/moveItems/copyItems）：
@@ -42,9 +45,12 @@ function mockS3(objects: Set<string>, calls: Call[]) {
     }
     if (method === "PUT") {
       objects.add(url.pathname)
-      return new Response("<CopyObjectResult><ETag>\"etag\"</ETag></CopyObjectResult>", {
-        headers: { "content-type": "application/xml" },
-      })
+      return new Response(
+        '<CopyObjectResult><ETag>"etag"</ETag></CopyObjectResult>',
+        {
+          headers: { "content-type": "application/xml" },
+        },
+      )
     }
     return new Response(
       `<?xml version="1.0"?><ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>`,
@@ -100,6 +106,55 @@ test("S3 remove() deletes the object key itself, not <file>/<name>", async () =>
     deletes.includes(FILE_KEY),
     `DELETE must target ${FILE_KEY}, got: ${deletes.join(", ") || "(none)"}`,
   )
+})
+
+test("Crypt over S3 deletes the suffixed object rather than appending its display name", async () => {
+  const key = "/encrypted/movie.mp4.bin"
+  const objects = new Set([key])
+  const calls: Call[] = []
+  const driver = new CryptDriver({ remote_path: "/S3", password: "test" })
+  // Bind a real S3 driver without the unrelated database/key-derivation setup.
+  Object.assign(driver, {
+    remoteDriver: makeDriver(),
+    remoteRoot: "/encrypted",
+    cipher: {},
+  })
+  await withMock(objects, calls, () =>
+    driver.remove("/Crypt/movie.mp4", "/movie.mp4", ["movie.mp4"]),
+  )
+  assert.equal(objects.size, 0)
+  assert.deepEqual(
+    calls
+      .filter((c) => c.method === "DELETE")
+      .map((c) => new URL(c.url).pathname),
+    [key],
+  )
+})
+
+test("Chunk over S3 deletes the chunk directory's contents without appending its display name", async (t) => {
+  const dir = "parts/[openlist_chunk]movie.mp4"
+  const deleted: string[] = []
+  t.mock.method(S3Client.prototype, "listPrefixProbe", async () => false)
+  t.mock.method(S3Client.prototype, "headObject", async (key: string) => {
+    if (key === `${dir}/0` || key === `${dir}/1`)
+      return { size: 5, isFolder: false }
+    return null
+  })
+  t.mock.method(S3Client.prototype, "listObjects", async (key: string) => {
+    if (key === dir)
+      return [0, 1].map((n) => ({ name: String(n), size: 5, isFolder: false }))
+    return []
+  })
+  t.mock.method(S3Client.prototype, "deleteObject", async (key: string) => {
+    deleted.push(key)
+  })
+  const driver = new ChunkDriver({ remote_path: "/S3", part_size: 5 })
+  Object.assign(driver, { remoteDriver: makeDriver(), remoteRoot: "/parts" })
+  await driver.remove("/Chunk/movie.mp4", "/movie.mp4", ["movie.mp4"])
+  assert.ok(deleted.includes(`${dir}/0`))
+  assert.ok(deleted.includes(`${dir}/1`))
+  assert.ok(deleted.every((key) => key.startsWith(`${dir}/`)))
+  assert.ok(deleted.every((key) => !key.includes("movie.mp4/movie.mp4")))
 })
 
 test("S3 move() copies from / to the object key itself", async () => {

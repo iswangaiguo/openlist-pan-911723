@@ -5,7 +5,6 @@ import { sign } from "hono/jwt"
 import { saveDb } from "../internal/model/db"
 import { fsRouter } from "./fs"
 import { meHandler } from "./auth"
-import { S3Driver } from "../drivers/s3/driver"
 
 const env = { JWT_SECRET: "test-only-delete-permissions-secret-32-chars" }
 const adminToken = "test-admin-token"
@@ -197,14 +196,19 @@ test("B2 access failures do not report successful deletion", async (t) => {
   assert.deepEqual(methods, ["HEAD"])
 })
 
-test("S3 batch callers retain directory plus names semantics", async (t) => {
+test("remove endpoint resolves each selected item before calling S3", async (t) => {
+  await seed()
   const deleted: string[] = []
   t.mock.method(globalThis, "fetch", async (input: any, init: RequestInit) => {
     if (init.method === "DELETE")
       deleted.push(decodeURIComponent(new URL(String(input)).pathname))
     return new Response(null, { status: init.method === "DELETE" ? 204 : 200 })
   })
-  await new S3Driver(addition).remove("", "/assets/小P", ["a.txt", "b.txt"])
+  assert.equal(
+    (await (await remove(adminToken, "/B2/小P", ["a.txt", "b.txt"])).json())
+      .code,
+    200,
+  )
   assert.deepEqual(deleted, [
     "/private-bucket/assets/小P/a.txt",
     "/private-bucket/assets/小P/b.txt",

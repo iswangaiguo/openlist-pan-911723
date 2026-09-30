@@ -473,30 +473,19 @@ export class S3Driver implements StorageDriver {
     }
   }
 
-  async removeObject(virtualPath: string, physicalPath: string): Promise<void> {
-    // removeItems already resolves the full object path, including its name.
-    await this.remove(virtualPath, physicalPath, [])
-  }
-
   async remove(
     virtualPath: string,
     physicalPath: string,
     names: string[],
   ): Promise<void> {
     await this.checkDogeToken()
-    // Upstream resolves a single item's full path; fork batch callers still
-    // pass a directory plus names. removeObject uses [] for an explicit item.
-    const basePath = this.getRemotePath(physicalPath)
-    const itemPath = names.length === 0 ||
-      (names.length === 1 && getBaseName(basePath) === names[0])
-    const targets = itemPath ? [basePath] : names.map((name) => joinPath(basePath, name))
-    for (const targetPath of targets) {
-      const head = await this.client.headObject(targetPath)
-      if (head) {
-        await this.client.deleteObject(targetPath)
-      } else {
-        await this.removeDirRecursive(targetPath)
-      }
+    // physicalPath is the resolved item's own path, including adapter suffixes.
+    const targetPath = this.getRemotePath(physicalPath)
+    const head = await this.client.headObject(targetPath)
+    if (head) {
+      await this.client.deleteObject(targetPath)
+    } else {
+      await this.removeDirRecursive(targetPath)
     }
   }
 

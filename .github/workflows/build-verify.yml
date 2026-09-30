@@ -75,6 +75,7 @@ jobs:
 
       - name: Verify fork multipart and rename regressions
         run: |
+          pnpm exec tsx --test src/backend/drivers/s3/s3_remove.test.ts src/backend/server/fs_remove.test.ts src/backend/server/directory_cache.test.ts
           pnpm exec tsx --test src/backend/drivers/s3/multipart.test.ts src/backend/internal/upload/multipart.test.ts src/backend/server/fs_multipart.test.ts src/backend/server/frontend.test.ts src/backend/server/assets_route.test.ts src/backend/server/index_cdn.test.ts src/backend/server/storage_usage.test.ts src/backend/drivers/s3/head_cache.test.ts src/backend/drivers/s3/rename_steps.test.ts src/backend/server/rename_steps.test.ts src/backend/server/b2_rename.test.ts
           node --test scripts/tests/multipart-worker.test.mjs
 

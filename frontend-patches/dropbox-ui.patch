@@ -1083,7 +1083,7 @@ new file mode 100644
 index 0000000..4d0a982
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,1017 @@
+@@ -0,0 +1,984 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -1286,10 +1286,7 @@ index 0000000..4d0a982
 +.drive-header-tools > button {
 +  border-radius: 5px;
 +}
-+.drive-mobile-brand,
-+.drive-mobile-settings {
-+  display: none !important;
-+}
++
 +.drive-shell .body {
 +  padding: 30px 0 0;
 +  min-height: calc(100vh - 160px);
@@ -1416,21 +1413,7 @@ index 0000000..4d0a982
 +  font-size: 11px;
 +  padding: 22px 0;
 +}
-+.drive-upload {
-+  gap: 16px;
-+}
-+.drive-upload-file {
-+  padding: 16px;
-+  border-radius: 6px;
-+  gap: 10px;
-+}
-+.drive-upload-file > p:first-child {
-+  font-weight: 600;
-+}
-+.drive-upload-percent {
-+  font-weight: 600;
-+  font-variant-numeric: tabular-nums;
-+}
++
 +@media (max-width: 1100px) {
 +  .drive-shell {
 +    grid-template-columns: 196px minmax(0, 1fr);
@@ -1449,13 +1432,7 @@ index 0000000..4d0a982
 +  .drive-shell .drive-container {
 +    padding-inline: 18px;
 +  }
-+  .drive-mobile-brand,
-+  .drive-mobile-settings {
-+    display: flex !important;
-+  }
-+  .drive-mobile-brand {
-+    max-width: 50%;
-+  }
++
 +  .drive-brand {
 +    font-size: 16px;
 +  }
@@ -1502,10 +1479,7 @@ index 0000000..4d0a982
 +    height: 24px;
 +    margin-right: 6px;
 +  }
-+  .drive-upload-file {
-+    padding: 12px;
-+    font-size: 13px;
-+  }
++
 +}
 +@media (prefers-reduced-motion: reduce) {
 +  .drive-shell .list-item {
@@ -1739,9 +1713,7 @@ index 0000000..4d0a982
 +  height: 20px;
 +  color: inherit;
 +}
-+.drive-row-menu-space {
-+  flex: 0 0 28px;
-+}
++
 +.drive-shell .name-box {
 +  min-width: 0;
 +}
@@ -1761,9 +1733,7 @@ index 0000000..4d0a982
 +    display: grid;
 +    border: 0;
 +  }
-+  .drive-desktop-layout {
-+    display: none;
-+  }
++
 +  .drive-header-inner {
 +    height: 76px;
 +    min-height: 76px;
@@ -1896,9 +1866,7 @@ index 0000000..4d0a982
 +  .drive-row-menu {
 +    width: 36px;
 +  }
-+  .drive-row-menu-space {
-+    flex-basis: 20px;
-+  }
++
 +  .drive-shell .name-box .hope-checkbox {
 +    margin-right: 6px;
 +  }
@@ -2002,8 +1970,7 @@ index 0000000..4d0a982
 +.drive-inline-rename { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; position: relative; }
 +.drive-inline-rename > input { flex: 1; min-width: 0; height: 38px; padding: 6px 8px; border: 2px solid #0061ff; border-radius: 5px; background: var(--drive-bg); color: var(--drive-text); outline-offset: 1px; }
 +.drive-inline-rename .drive-icon-button { flex-shrink: 0; width: 32px; height: 32px; }
-+.drive-rename-overwrite { display: flex; align-items: center; gap: 4px; font-size: 11px; color: var(--drive-muted); white-space: nowrap; }
-+.drive-rename-overwrite input { accent-color: #0061ff; }
++
 +.drive-rename-error { position: absolute; top: 100%; left: 0; z-index: 2; background: var(--drive-bg); padding: 3px 6px; color: #c43a3a; font-size: 12px; }
 +@media (max-width: 760px) {
 +  .drive-list-toolbar { height: 88px; gap: 6px; }
@@ -2011,7 +1978,7 @@ index 0000000..4d0a982
 +  .drive-list-toolbar .drive-selection-count { width: 100%; font-size: 12px; }
 +  .drive-list-toolbar .drive-selection-actions { gap: 2px; }
 +  .drive-list-toolbar .drive-selection-actions .drive-select-button { margin-left: 0; }
-+  .drive-rename-overwrite { position: absolute; right: 0; bottom: -16px; font-size: 10px; }
++
 +}
 +.drive-list-toolbar:empty { display: none; }
 +
@@ -3460,70 +3427,6 @@ index 84dd905..ca2fe67 100644
        crossOrigin: "anonymous",
      },
      customType: {
-@@ -351,6 +353,63 @@ const Preview = () => {
-   onMount(() => {
-     player = new Artplayer(option)
-     createEffect(on(() => objStore.raw_url, switchUrl))
-+    let recoveryTimer: ReturnType<typeof setTimeout> | undefined
-+    let recoveryAttempts = 0
-+    let lastProgress = 0
-+    let recovering = false
-+    const video = player.video
-+    const clearRecovery = () => {
-+      if (recoveryTimer) clearTimeout(recoveryTimer)
-+      recoveryTimer = undefined
-+    }
-+    const onTimeUpdate = () => {
-+      if (video.currentTime > lastProgress + 3) {
-+        recoveryAttempts = 0
-+        lastProgress = video.currentTime
-+      }
-+      clearRecovery()
-+    }
-+    const onSeeking = () => {
-+      lastProgress = video.currentTime
-+      recoveryAttempts = 0
-+      clearRecovery()
-+    }
-+    const scheduleRecovery = () => {
-+      if (video.paused || video.ended || recoveryTimer || recovering || recoveryAttempts >= 2) return
-+      recoveryTimer = setTimeout(async () => {
-+        recoveryTimer = undefined
-+        if (video.paused || video.ended || video.readyState >= HTMLMediaElement.HAVE_FUTURE_DATA) return
-+        recoveryAttempts++
-+        recovering = true
-+        const resumeAt = video.currentTime
-+        try {
-+          const response = await fsGet(pathname(), password())
-+          if (response.code !== 200 || !response.data?.raw_url) throw new Error(response.message)
-+          await player.switchUrl(response.data.raw_url)
-+          player.currentTime = resumeAt
-+          await player.play()
-+        } catch {
-+          if (recoveryAttempts >= 2) {
-+            notify.error(String(currentLang()).startsWith("zh")
-+              ? "视频加载失败，请检查原文件或重新上传"
-+              : "Video stalled. Please check or reupload the source file")
-+          }
-+        } finally {
-+          recovering = false
-+        }
-+      }, 8000)
-+    }
-+    video.addEventListener("timeupdate", onTimeUpdate)
-+    video.addEventListener("seeking", onSeeking)
-+    video.addEventListener("waiting", scheduleRecovery)
-+    video.addEventListener("stalled", scheduleRecovery)
-+    onCleanup(() => {
-+      clearRecovery()
-+      video.removeEventListener("timeupdate", onTimeUpdate)
-+      video.removeEventListener("seeking", onSeeking)
-+      video.removeEventListener("waiting", scheduleRecovery)
-+      video.removeEventListener("stalled", scheduleRecovery)
-+    })
-     let auto_fullscreen: boolean
-     switch (searchParams["auto_fullscreen"]) {
-       case "true":
 diff --git a/src/pages/home/toolbar/Rename.tsx b/src/pages/home/toolbar/Rename.tsx
 index 57e34a5..4579d74 100644
 --- a/src/pages/home/toolbar/Rename.tsx

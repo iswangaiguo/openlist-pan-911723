@@ -1713,11 +1713,7 @@ export async function removeItems(
         [resolved.storage],
         requestContext,
         async () => {
-          if (driver.removeObject) {
-            await driver.removeObject(itemVirtual, resolved.physical!)
-          } else {
-            await driver.remove(itemVirtual, resolved.physical!, [name])
-          }
+          await driver.remove(itemVirtual, resolved.physical!, [name])
         },
       )
     } finally {
