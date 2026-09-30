@@ -181,6 +181,6 @@ export function setSpaFallbackHtml(html: string) {
   spaFallbackHtml = html
 }
 
-app.all("*", (c) => serveFrontend(c.req.raw, (c.env as any)?.ASSETS, spaFallbackHtml))
+app.all("*", (c) => serveFrontend(c.req.raw, (c.env as any)?.ASSETS, spaFallbackHtml, c.env))
 
 export default app

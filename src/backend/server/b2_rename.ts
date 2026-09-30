@@ -118,7 +118,7 @@ async function storageFingerprint(storage: any): Promise<string> {
 
 const clean = (path: string) => "/" + path.split("/").filter(Boolean).join("/")
 const within = (path: string, root: string) =>
-  path === root || path.startsWith(root + "/")
+  path === root || path.startsWith(root === "/" ? "/" : root + "/")
 
 export async function getB2RenameJob(
   env: any,
