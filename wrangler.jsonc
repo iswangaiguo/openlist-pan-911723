@@ -6,9 +6,8 @@
   "workers_dev": false,
   "keep_vars": true,
   "preview_urls": false,
-  // Preserve existing Cron schedules during routine deployments. Register the
-  // one-minute rename trigger separately after ensuring account quota is free.
-  // Do not use crons: [] here: that would delete the existing schedules.
+  // Advance persisted B2 rename jobs even after the browser has been closed.
+  "triggers": { "crons": ["* * * * *"] },
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
