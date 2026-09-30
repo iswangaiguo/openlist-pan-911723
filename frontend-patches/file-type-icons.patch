@@ -1,0 +1,395 @@
+diff --git a/src/components/FileTypeIcon.tsx b/src/components/FileTypeIcon.tsx
+new file mode 100644
+index 0000000..307411b
+--- /dev/null
++++ b/src/components/FileTypeIcon.tsx
+@@ -0,0 +1,168 @@
++import { IconProps, IconTemplate } from "solid-icons"
++
++const iconAttributes = (kind: string) => ({
++  viewBox: "0 0 32 32",
++  "aria-hidden": true as const,
++  "data-file-kind": kind,
++})
++
++// Local, multicolor SVGs keep file identity independent of the page accent.
++// Each type has a distinct symbol as well as a color, including at row sizes.
++function fileIcon(
++  kind: string,
++  ink: string,
++  paper: string,
++  fold: string,
++  symbol: string,
++) {
++  return (props: IconProps) =>
++    IconTemplate(
++      {
++        a: iconAttributes(kind),
++        c: `<path fill="${paper}" d="M8 2h11.5L27 9.5V28a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/>
++      <path fill="${fold}" d="M19.5 2v5.5a2 2 0 0 0 2 2H27Z"/>
++      <path stroke="${ink}" stroke-opacity=".25" stroke-width="1.5" stroke-linecap="round" d="M11 11.5h10M11 14.5h7"/>
++      <rect x="3" y="17" width="20" height="12" rx="2" fill="${ink}"/>
++      <g transform="translate(5 18.5)" fill="none" stroke="#fff" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">${symbol}</g>`,
++      },
++      props,
++    )
++}
++
++export const DriveFolderIcon = (props: IconProps) =>
++  IconTemplate(
++    {
++      a: iconAttributes("folder"),
++      c: `<path fill="#9ac8ff" d="M3 6h9l3 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Z"/>
++    <path fill="#69a9f5" d="M3 11h26a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V13a2 2 0 0 1 2-2Z"/>
++    <path fill="#c5dfff" d="M4 9h9l2 2H4Z"/>`,
++    },
++    props,
++  )
++
++export const DrivePdfIcon = fileIcon(
++  "pdf",
++  "#d83d47",
++  "#ffe9eb",
++  "#f9bcc2",
++  '<path d="M.5 8V1h2a1.8 1.8 0 0 1 0 3.6h-2M6 1v7h1.5c3.3 0 3.3-7 0-7ZM12 8V1h3.5M12 4.5h2.8"/>',
++)
++export const DriveDocumentIcon = fileIcon(
++  "document",
++  "#3478d4",
++  "#e8f1ff",
++  "#b6d2fa",
++  '<path d="m1.5 1 2 7 4.5-6 4.5 6 2-7"/>',
++)
++export const DriveSpreadsheetIcon = fileIcon(
++  "spreadsheet",
++  "#19845b",
++  "#e4f5eb",
++  "#acdec3",
++  '<rect x="2" y=".5" width="12" height="8" rx=".5"/><path d="M2 3.2h12M2 5.8h12M6 1v7M10 1v7"/>',
++)
++export const DrivePresentationIcon = fileIcon(
++  "presentation",
++  "#db792b",
++  "#fff0df",
++  "#f6c99b",
++  '<path d="M2 8V4h2v4M7 8V1h2v7M12 8V3h2v5M1 8.5h14"/>',
++)
++export const DriveImageIcon = fileIcon(
++  "image",
++  "#8260ca",
++  "#f0eafb",
++  "#d3c0ef",
++  '<rect x="1.5" y=".5" width="13" height="8" rx=".7"/><circle cx="10.8" cy="2.8" r=".7" fill="#fff" stroke="none"/><path d="m2 7 3.4-3.4L9 7l2-2 3 3"/>',
++)
++export const DriveVideoIcon = fileIcon(
++  "video",
++  "#5368c7",
++  "#e9edff",
++  "#bdc8f3",
++  '<path fill="#fff" stroke="none" d="M5 0.5 12 4.5 5 8.5Z"/>',
++)
++export const DriveAudioIcon = fileIcon(
++  "audio",
++  "#c74f84",
++  "#fce9f1",
++  "#efbdd3",
++  '<path d="M6 6.5V1L13 0v5.5M6 2.5l7-1"/><ellipse cx="4.4" cy="7" rx="1.7" ry="1.2" fill="#fff" stroke="none"/><ellipse cx="11.4" cy="6" rx="1.7" ry="1.2" fill="#fff" stroke="none"/>',
++)
++export const DriveArchiveIcon = fileIcon(
++  "archive",
++  "#aa7b26",
++  "#fff3d9",
++  "#f0d49a",
++  '<path d="M7 0h2v1H7ZM5 1h2v1H5ZM7 2h2v1H7ZM5 3h2v1H5Z" fill="#fff" stroke="none"/><path d="M6 4h3l.7 4H5.3Z"/><path d="M6.5 6.5h1.5"/>',
++)
++export const DriveTextIcon = fileIcon(
++  "text",
++  "#66788a",
++  "#edf1f5",
++  "#c6d0da",
++  '<path d="M3 1h10M3 4.5h10M3 8h6"/>',
++)
++export const DriveCodeIcon = fileIcon(
++  "code",
++  "#188b87",
++  "#e2f5f2",
++  "#a8dbd4",
++  '<path d="m4.5 1.5-3 3 3 3M11.5 1.5l3 3-3 3M9.3 0 6.7 9"/>',
++)
++export const DriveBookIcon = fileIcon(
++  "ebook",
++  "#94673f",
++  "#f9eee4",
++  "#dfc5ac",
++  '<path d="M8 2c-2-1.5-4-1.5-6-1v6.5c2-.5 4-.5 6 1 2-1.5 4-1.5 6-1V1c-2-.5-4-.5-6 1ZM8 2v6.5"/>',
++)
++export const DriveDatabaseIcon = fileIcon(
++  "database",
++  "#277f9e",
++  "#e4f3f8",
++  "#b0d9e6",
++  '<ellipse cx="8" cy="1.5" rx="5.5" ry="1.5"/><path d="M2.5 1.5v6c0 2 11 2 11 0v-6M2.5 4.5c0 2 11 2 11 0"/>',
++)
++export const DriveDesignIcon = fileIcon(
++  "design",
++  "#b65978",
++  "#fbe9ef",
++  "#ebbbcb",
++  '<path d="m3 8 1-3 6-5 3 3-6 5ZM9 1l3 3M4 5l3 3"/>',
++)
++export const DriveApplicationIcon = fileIcon(
++  "application",
++  "#6273ad",
++  "#eceffd",
++  "#c4cdef",
++  '<path fill="#fff" stroke="none" d="M3 0h4v4H3ZM9 0h4v4H9ZM3 6h4v3H3ZM9 6h4v3H9Z"/>',
++)
++export const DriveLinkIcon = fileIcon(
++  "link",
++  "#3188bb",
++  "#e4f4fb",
++  "#afd9ed",
++  '<path d="m6 6-1 1a2.6 2.6 0 0 1-4-4l3-3a2.6 2.6 0 0 1 4 0M10 3l1-1a2.6 2.6 0 0 1 4 4l-3 3a2.6 2.6 0 0 1-4 0M5.5 6.5l5-4"/>',
++)
++export const DriveFontIcon = fileIcon(
++  "font",
++  "#8462a2",
++  "#f1eaf8",
++  "#d8c3e8",
++  '<path d="m3 8 5-8 5 8M5 5h6"/>',
++)
++export const DriveDiskIcon = fileIcon(
++  "disk",
++  "#737c9e",
++  "#edf0f8",
++  "#c9d0e4",
++  '<circle cx="8" cy="4.5" r="4.2"/><circle cx="8" cy="4.5" r="1.1"/><path d="m10 2 .8-.8M5.2 7.3l.8-.8"/>',
++)
++export const DriveUnknownIcon = fileIcon(
++  "unknown",
++  "#85909b",
++  "#eff2f5",
++  "#ced6dd",
++  '<path d="M5 2a3 3 0 0 1 6 0c0 2-3 1.5-3 4M8 8h.01"/>',
++)
+diff --git a/src/components/FolderTree.tsx b/src/components/FolderTree.tsx
+index d57ca15..8a8f8ba 100644
+--- a/src/components/FolderTree.tsx
++++ b/src/components/FolderTree.tsx
+@@ -19,7 +19,8 @@ import {
+   Text,
+   VStack,
+ } from "@hope-ui/solid"
+-import { BiSolidRightArrow, BiSolidFolderOpen } from "solid-icons/bi"
++import { BiSolidRightArrow } from "solid-icons/bi"
++import { DriveFolderIcon } from "./FileTypeIcon"
+ import { TbX, TbCheck } from "solid-icons/tb"
+ import {
+   Accessor,
+@@ -170,7 +171,7 @@ const FolderTreeNode = (props: { path: string }) => {
+           >
+             <Show
+               when={!emptyIconVisible()}
+-              fallback={<Icon color={getMainColor()} as={BiSolidFolderOpen} />}
++              fallback={<Icon as={DriveFolderIcon} />}
+             >
+               <Icon
+                 color={getMainColor()}
+@@ -278,7 +279,7 @@ const FolderNameInput = (props: {
+ 
+   return (
+     <HStack spacing="$2" w="$full" pl="$4" alignItems="center">
+-      <Icon color={getMainColor()} as={BiSolidFolderOpen} />
++      <Icon as={DriveFolderIcon} />
+       <Input
+         ref={(el) => (inputRef = el)}
+         value={folderName()}
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index c527b1c..1f73b5c 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -311,7 +311,6 @@
+   height: 28px;
+   margin-right: 10px;
+   flex-shrink: 0;
+-  color: var(--drive-blue);
+ }
+ .drive-shell .list-item .name {
+   font-weight: 500;
+diff --git a/src/utils/icon.ts b/src/utils/icon.ts
+index 0fb5596..3142307 100644
+--- a/src/utils/icon.ts
++++ b/src/utils/icon.ts
+@@ -1,94 +1,92 @@
+-import {
+-  BsFileEarmarkWordFill,
+-  BsFileEarmarkExcelFill,
+-  BsFileEarmarkPptFill,
+-  BsFileEarmarkPdfFill,
+-  BsFileEarmarkPlayFill,
+-  BsFileEarmarkMusicFill,
+-  BsFileEarmarkFontFill,
+-  BsFileEarmarkImageFill,
+-  BsFileEarmarkMinusFill,
+-  BsApple,
+-  BsWindows,
+-  BsFileEarmarkZipFill,
+-  BsMarkdownFill,
+-} from "solid-icons/bs"
+-import {
+-  FaSolidDatabase,
+-  FaSolidBook,
+-  FaSolidCompactDisc,
+-  FaSolidLink,
+-} from "solid-icons/fa"
+-import { IoFolder } from "solid-icons/io"
+-import { ImAndroid } from "solid-icons/im"
+ import { Obj, ObjType } from "~/types"
+-import { ext } from "./path"
+-import {
+-  VscodeIconsFileTypeAi2,
+-  VscodeIconsFileTypePhotoshop2,
+-} from "~/components"
+-import { SiAsciinema } from "solid-icons/si"
+ import { isArchive } from "~/store/archive"
++import {
++  DriveFolderIcon,
++  DrivePdfIcon,
++  DriveDocumentIcon,
++  DriveSpreadsheetIcon,
++  DrivePresentationIcon,
++  DriveImageIcon,
++  DriveVideoIcon,
++  DriveAudioIcon,
++  DriveArchiveIcon,
++  DriveTextIcon,
++  DriveCodeIcon,
++  DriveBookIcon,
++  DriveDatabaseIcon,
++  DriveDesignIcon,
++  DriveApplicationIcon,
++  DriveLinkIcon,
++  DriveFontIcon,
++  DriveDiskIcon,
++  DriveUnknownIcon,
++} from "~/components/FileTypeIcon"
+ 
+-const iconMap = {
+-  "dmg,ipa,plist,tipa": BsApple,
+-  "exe,msi": BsWindows,
+-  apk: ImAndroid,
+-  db: FaSolidDatabase,
+-  md: BsMarkdownFill,
+-  epub: FaSolidBook,
+-  iso: FaSolidCompactDisc,
+-  m3u8: BsFileEarmarkPlayFill,
+-  "doc,docx": BsFileEarmarkWordFill,
+-  "xls,xlsx": BsFileEarmarkExcelFill,
+-  "ppt,pptx": BsFileEarmarkPptFill,
+-  pdf: BsFileEarmarkPdfFill,
+-  psd: VscodeIconsFileTypePhotoshop2,
+-  ai: VscodeIconsFileTypeAi2,
+-  url: FaSolidLink,
+-  cast: SiAsciinema,
+-}
++const iconGroups = [
++  ["pdf", DrivePdfIcon],
++  ["doc,docx,docm,dot,dotx,odt,rtf,pages", DriveDocumentIcon],
++  ["xls,xlsx,xlsm,xlsb,xlt,xltx,csv,tsv,ods,numbers", DriveSpreadsheetIcon],
++  ["ppt,pptx,pptm,pps,ppsx,odp,key", DrivePresentationIcon],
++  [
++    "jpg,jpeg,png,gif,bmp,webp,tif,tiff,heic,heif,avif,svg,ico,raw,cr2,nef,dng",
++    DriveImageIcon,
++  ],
++  [
++    "mp4,m4v,webm,mov,mkv,mpeg,mpg,avi,m3u8,mts,m2ts,flv,vob,ogv,3gp,wmv",
++    DriveVideoIcon,
++  ],
++  ["mp3,flac,aac,m4a,m4b,wav,ogg,opus,aif,aiff,mid,midi,wma", DriveAudioIcon],
++  ["zip,rar,7z,tar,gz,tgz,bz,bz2,tbz2,xz,txz,zst,lz,lz4", DriveArchiveIcon],
++  [
++    "txt,log,md,markdown,rst,ini,conf,cfg,yaml,yml,json,xml,toml,srt,vtt,ass,ssa,sub,ics",
++    DriveTextIcon,
++  ],
++  [
++    "js,jsx,ts,tsx,css,scss,sass,less,html,htm,py,ex,exs,erl,hrl,java,c,cpp,h,hpp,rb,go,rs,php,sql,sh,bash,ps1,cs,vue,svelte,swift,kt,cast",
++    DriveCodeIcon,
++  ],
++  ["epub,mobi,azw,azw3,fb2,cbz,cbr", DriveBookIcon],
++  ["db,sqlite,sqlite3,mdb,accdb,dbf", DriveDatabaseIcon],
++  ["psd,psb,ai,eps,sketch,fig,xcf,afdesign,afphoto,blend,dxf", DriveDesignIcon],
++  [
++    "exe,msi,dll,apk,dmg,ipa,tipa,app,deb,rpm,jar,wasm,plist",
++    DriveApplicationIcon,
++  ],
++  ["url,webloc,lnk", DriveLinkIcon],
++  ["ttf,otf,woff,woff2", DriveFontIcon],
++  ["iso,img,vhd,vhdx,vmdk,qcow2", DriveDiskIcon],
++] as const
++
++const iconMap = new Map(
++  iconGroups.flatMap(([extensions, icon]) =>
++    extensions.split(",").map((extension) => [extension, icon] as const),
++  ),
++)
+ 
+ export const getIconByTypeAndName = (type: number, name: string) => {
+-  if (type !== ObjType.FOLDER) {
+-    for (const [extensions, icon] of Object.entries(iconMap)) {
+-      if (extensions.split(",").includes(ext(name).toLowerCase())) {
+-        return icon
+-      }
+-    }
+-    if (isArchive(name)) {
+-      return BsFileEarmarkZipFill
+-    }
+-  }
++  if (type === ObjType.FOLDER) return DriveFolderIcon
++  const filename = name.split(/[\\/]/).pop() ?? name
++  const dot = filename.lastIndexOf(".")
++  const extension = dot > 0 ? filename.slice(dot + 1).toLowerCase() : ""
++  // .ts is also MPEG transport stream; respect the server's video type.
++  if (extension === "ts" && type === ObjType.VIDEO) return DriveVideoIcon
++  const icon = iconMap.get(extension)
++  if (icon) return icon
++  if (isArchive(name)) return DriveArchiveIcon
+   switch (type) {
+-    case ObjType.FOLDER:
+-      return IoFolder
+-    // case ObjType.OFFICE: {
+-    //   if (ext === "doc" || ext === "docx") {
+-    //     return BsFileEarmarkWordFill;
+-    //   }
+-    //   if (ext === "xls" || ext === "xlsx") {
+-    //     return BsFileEarmarkExcelFill;
+-    //   }
+-    //   if (ext === "ppt" || ext === "pptx") {
+-    //     return BsFileEarmarkPptFill;
+-    //   } else {
+-    //     return BsFileEarmarkPdfFill;
+-    //   }
+-    // }
+     case ObjType.VIDEO:
+-      return BsFileEarmarkPlayFill
++      return DriveVideoIcon
+     case ObjType.AUDIO:
+-      return BsFileEarmarkMusicFill
++      return DriveAudioIcon
+     case ObjType.TEXT:
+-      return BsFileEarmarkFontFill
++      return DriveTextIcon
+     case ObjType.IMAGE:
+-      return BsFileEarmarkImageFill
++      return DriveImageIcon
+     default:
+-      return BsFileEarmarkMinusFill
++      return DriveUnknownIcon
+   }
+ }
+ 
+-export const getIconByObj = (obj: Pick<Obj, "type" | "name">) => {
+-  return getIconByTypeAndName(obj.type, obj.name)
+-}
++export const getIconByObj = (
++  obj: Pick<Obj, "type" | "name"> & { is_dir?: boolean },
++) => getIconByTypeAndName(obj.is_dir ? ObjType.FOLDER : obj.type, obj.name)
