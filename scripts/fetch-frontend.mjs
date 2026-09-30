@@ -290,6 +290,7 @@ function buildLocalRepo(repo) {
       path.join(ROOT, "scripts/tests/frontend-upload-queue.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-module-recovery.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-video-recovery.test.mjs"),
+      path.join(ROOT, "scripts/tests/frontend-storage-usage.test.mjs"),
     ],
     {
       cwd: ROOT,

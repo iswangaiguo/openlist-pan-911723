@@ -1,0 +1,2259 @@
+diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
+index a8d032d..c8f0892 100644
+--- a/src/pages/home/Body.tsx
++++ b/src/pages/home/Body.tsx
+@@ -3,6 +3,8 @@ import { Nav } from "./Nav"
+ import { Obj } from "./Obj"
+ import { Readme } from "./Readme"
+ import { Container } from "./Container"
++import { DriveSelection } from "./DriveSelection"
++import { DriveHeading, DriveViewToolbar } from "./DriveChrome"
+ import { Sidebar } from "./Sidebar"
+ 
+ export const Body = () => {
+@@ -19,6 +21,11 @@ export const Body = () => {
+       >
+         <Readme files={["header.md", "top.md", "index.md"]} fromMeta="header" />
+         <Nav />
++        <DriveHeading />
++        <div class="drive-list-toolbar">
++          <DriveSelection />
++          <DriveViewToolbar />
++        </div>
+         <Obj />
+         <Readme
+           files={["readme.md", "footer.md", "bottom.md"]}
+diff --git a/src/pages/home/Container.tsx b/src/pages/home/Container.tsx
+index bd2219d..6c92b35 100644
+--- a/src/pages/home/Container.tsx
++++ b/src/pages/home/Container.tsx
+@@ -5,9 +5,15 @@ import { Box, Container as HopeContainer } from "@hope-ui/solid"
+ export const Container = (props: { children: JSXElement }) => {
+   const container = getSetting("home_container")
+   return (
+-    <Switch fallback={<Box w="min(99%, 980px)">{props.children}</Box>}>
++    <Switch
++      fallback={
++        <Box class="drive-container" w="min(99%, 980px)">
++          {props.children}
++        </Box>
++      }
++    >
+       <Match when={container === "hope_container"}>
+-        <HopeContainer>{props.children}</HopeContainer>
++        <HopeContainer class="drive-container">{props.children}</HopeContainer>
+       </Match>
+     </Switch>
+   )
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+new file mode 100644
+index 0000000..6b496bb
+--- /dev/null
++++ b/src/pages/home/DriveChrome.tsx
+@@ -0,0 +1,172 @@
++import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
++import { Show } from "solid-js"
++import {
++  BsFolder2,
++  BsGear,
++  BsArrowClockwise,
++  BsFolderPlus,
++  BsArrowUp,
++} from "solid-icons/bs"
++import { useRouter, usePath, useT } from "~/hooks"
++import { currentLang } from "~/app/i18n"
++import { getSetting, me, objStore, State, userCan } from "~/store"
++import { UserMethods } from "~/types"
++import { Layout } from "./header/layout"
++import { bus } from "~/utils"
++
++export const driveText = (key: "files" | "workspace" | "waiting") => {
++  const zh = String(currentLang()).startsWith("zh")
++  return {
++    files: zh ? "所有文件" : "All files",
++    workspace: zh ? "文件空间" : "Workspace",
++    waiting: zh ? "等待传输" : "Waiting for transfer",
++  }[key]
++}
++
++export const DriveBrand = () => {
++  const { to } = useRouter()
++  const logos = getSetting("logo").split("\n")
++  const logo = useColorModeValue(logos[0], logos[1] || logos[0])
++  return (
++    <button
++      type="button"
++      class="drive-brand"
++      aria-label={String(currentLang()).startsWith("zh") ? "返回首页" : "Go home"}
++      onClick={() => to("/")}
++    >
++      <Show when={logo()} fallback={<span class="drive-brand-mark">O</span>}>
++        <Image
++          src={logo()}
++          alt=""
++          width="32px"
++          height="32px"
++          objectFit="contain"
++        />
++      </Show>
++      <span>{getSetting("site_title") || "OpenList"}</span>
++    </button>
++  )
++}
++
++export const DriveRail = () => {
++  const t = useT()
++  const { to, isShare } = useRouter()
++  return (
++    <aside class="drive-rail" aria-label={driveText("workspace")}>
++      <DriveBrand />
++      <div class="drive-rail-label">{driveText("workspace")}</div>
++      <nav class="drive-rail-nav">
++        <Show when={!isShare()}>
++          <button
++            class="drive-nav-item drive-nav-current"
++            onClick={() => to("/")}
++          >
++            <Icon as={BsFolder2} />
++            <span>{driveText("files")}</span>
++          </button>
++        </Show>
++        <button
++          class="drive-nav-item"
++          onClick={() => bus.emit("tool", "local_settings")}
++        >
++          <Icon as={BsGear} />
++          <span>{t("home.toolbar.local_settings")}</span>
++        </button>
++      </nav>
++    </aside>
++  )
++}
++
++export const DriveAccount = () => {
++  const t = useT()
++  const { to } = useRouter()
++  return (
++    <button
++      class="drive-account drive-desktop-account"
++      onClick={() => to(UserMethods.is_guest(me()) ? "/@login" : "/@manage")}
++    >
++      <span class="drive-avatar">
++        {(me().username || "O").slice(0, 1).toUpperCase()}
++      </span>
++      <span>
++        <strong>{me().username || "OpenList"}</strong>
++        <small>
++          {t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}
++        </small>
++      </span>
++    </button>
++  )
++}
++
++export const DriveViewToolbar = () => (
++  <Show when={objStore.state === State.Folder}>
++    <div class="drive-view-toolbar">
++      <Layout />
++    </div>
++  </Show>
++)
++
++export const DriveHeading = () => {
++  const t = useT()
++  const { pathname, isShare } = useRouter()
++  const { refresh } = usePath()
++  const canWrite = () =>
++    objStore.state === State.Folder &&
++    !isShare() &&
++    (userCan("write_content") || objStore.write_content_bypass) &&
++    objStore.write
++  return (
++    <div class="drive-heading">
++      <div class="drive-heading-title">
++        <h1>
++          {pathname() === "/"
++            ? driveText("files")
++            : pathname().split("/").filter(Boolean).pop()}
++        </h1>
++        <button
++          class="drive-icon-button drive-heading-settings"
++          aria-label={t("home.toolbar.local_settings")}
++          title={t("home.toolbar.local_settings")}
++          onClick={() => bus.emit("tool", "local_settings")}
++        >
++          <Icon as={BsGear} />
++        </button>
++      </div>
++      <div class="drive-actions">
++        <button
++          class="drive-icon-button drive-heading-refresh"
++          aria-label={t("home.toolbar.refresh")}
++          title={t("home.toolbar.refresh")}
++          onClick={() => refresh(undefined, true)}
++        >
++          <Icon as={BsArrowClockwise} />
++        </button>
++        <Show when={canWrite()}>
++          <button
++            class="drive-button drive-heading-mkdir"
++            aria-label={t("home.toolbar.mkdir")}
++            title={t("home.toolbar.mkdir")}
++            onClick={() => bus.emit("tool", "mkdir")}
++          >
++            <Icon as={BsFolderPlus} />
++            <span>{t("home.toolbar.mkdir")}</span>
++          </button>
++          <button
++            class="drive-button drive-button-primary drive-heading-upload"
++            aria-label={t("home.toolbar.upload")}
++            title={t("home.toolbar.upload")}
++            onClick={() => bus.emit("tool", "upload")}
++          >
++            <Icon as={BsArrowUp} />
++            <span>{t("home.toolbar.upload")}</span>
++          </button>
++        </Show>
++        <div class="drive-heading-layout">
++          <Show when={objStore.state === State.Folder}>
++            <Layout />
++          </Show>
++        </div>
++      </div>
++    </div>
++  )
++}
+diff --git a/src/pages/home/DriveSelection.tsx b/src/pages/home/DriveSelection.tsx
+new file mode 100644
+index 0000000..1dd63f0
+--- /dev/null
++++ b/src/pages/home/DriveSelection.tsx
+@@ -0,0 +1,96 @@
++import { Icon } from "@hope-ui/solid"
++import { Show } from "solid-js"
++import { useContextMenu } from "solid-contextmenu"
++import { BsCheck2Square, BsDownload, BsThreeDots } from "solid-icons/bs"
++import { useDownload, useT } from "~/hooks"
++import {
++  checkboxOpen,
++  getSettingBool,
++  haveSelected,
++  me,
++  objStore,
++  selectedMsg,
++  selectedObjs,
++  selectAll,
++  State,
++  toggleCheckbox,
++  layout,
++} from "~/store"
++import { currentLang } from "~/app/i18n"
++import { bus, notify } from "~/utils"
++import { UserMethods } from "~/types"
++
++// Keep file operations alongside the list, and use the existing handlers.
++export const DriveSelection = () => {
++  const t = useT()
++  const { batchDownloadSelected } = useDownload()
++  const { show } = useContextMenu({ id: 1 })
++  const isFolder = () =>
++    [State.Folder, State.FetchingMore].includes(objStore.state)
++  const downloadSelected = () => {
++    if (selectedObjs().some((obj) => obj.is_dir)) {
++      if (!UserMethods.is_admin(me()) && !getSettingBool("package_download")) {
++        notify.warning(t("home.toolbar.package_download_disabled"))
++        return
++      }
++      bus.emit("tool", "package_download")
++      return
++    }
++    batchDownloadSelected()
++  }
++  const closeSelection = () => {
++    selectAll(false)
++    if (layout() !== "list" && checkboxOpen()) toggleCheckbox()
++  }
++  const selectLabel = () =>
++    String(currentLang()).startsWith("zh") ? "选择文件" : "Select files"
++  const hint = () =>
++    String(currentLang()).startsWith("zh")
++      ? "勾选文件后可下载或管理"
++      : "Select files to download or manage"
++  return (
++    <Show when={isFolder()}>
++      <div class="drive-file-tools" role="group" aria-label={selectLabel()}>
++        <Show when={haveSelected() || layout() !== "list"}>
++          <Show
++            when={haveSelected() || checkboxOpen()}
++            fallback={
++              <button class="drive-select-button" onClick={toggleCheckbox}>
++                <Icon as={BsCheck2Square} />
++                <span>{selectLabel()}</span>
++              </button>
++            }
++          >
++            <span class="drive-selection-count" role="status">
++              {haveSelected() ? selectedMsg() : hint()}
++            </span>
++            <div class="drive-selection-actions">
++              <Show when={haveSelected()}>
++                <button class="drive-button drive-selection-action" onClick={downloadSelected}>
++                  <Icon as={BsDownload} />
++                  <span>{t("home.toolbar.download")}</span>
++                </button>
++                <button
++                  type="button"
++                  class="drive-button drive-selection-action"
++                  aria-label={t("home.toolbar.more")}
++                  onClick={(event) => {
++                    event.preventDefault()
++                    event.stopPropagation()
++                    show(event, { props: selectedObjs()[0] })
++                  }}
++                >
++                  <Icon as={BsThreeDots} />
++                  <span>{t("home.toolbar.more")}</span>
++                </button>
++              </Show>
++              <button class="drive-select-button drive-selection-cancel" onClick={closeSelection}>
++                {t("home.toolbar.cancel_select")}
++              </button>
++            </div>
++          </Show>
++        </Show>
++      </div>
++    </Show>
++  )
++}
+diff --git a/src/pages/home/Footer.tsx b/src/pages/home/Footer.tsx
+index 28775ab..0492daf 100644
+--- a/src/pages/home/Footer.tsx
++++ b/src/pages/home/Footer.tsx
+@@ -1,26 +1,16 @@
+-import { Anchor, HStack, VStack } from "@hope-ui/solid"
+-import { Link } from "@solidjs/router"
+-import { AnchorWithBase } from "~/components"
+-import { useT } from "~/hooks"
+-import { me } from "~/store"
+-import { UserMethods } from "~/types"
++import { Show } from "solid-js"
++import { countMsg, layout, local, objStore, State } from "~/store"
++import { ObjType } from "~/types"
+ 
+-export const Footer = () => {
+-  const t = useT()
+-  return (
+-    <VStack class="footer" w="$full" py="$4">
+-      <HStack spacing="$1">
+-        <Anchor href="https://github.com/OpenListTeam/OpenList" external>
+-          {t("home.footer.powered_by")}
+-        </Anchor>
+-        <span>|</span>
+-        <AnchorWithBase
+-          as={Link}
+-          href={UserMethods.is_guest(me()) ? "/@login" : "/@manage"}
+-        >
+-          {t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}
+-        </AnchorWithBase>
+-      </HStack>
+-    </VStack>
+-  )
+-}
++export const Footer = () => (
++  <Show
++    when={
++      local["show_count_msg"] === "visible" &&
++      [State.Folder, State.FetchingMore].includes(objStore.state)
++    }
++  >
++    <footer class="footer drive-directory-count" aria-live="polite">
++      {countMsg(layout() === "image" ? ObjType.IMAGE : undefined)}
++    </footer>
++  </Show>
++)
+diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
+index de14427..1cedec6 100644
+--- a/src/pages/home/Layout.tsx
++++ b/src/pages/home/Layout.tsx
+@@ -1,25 +1,32 @@
++import { useColorModeValue } from "@hope-ui/solid"
+ import { Markdown } from "~/components"
+ import { useTitle } from "~/hooks"
+ import { getSetting } from "~/store"
+ import { notify } from "~/utils"
++import { DriveRail } from "./DriveChrome"
++import "./drive.css"
+ import { Body } from "./Body"
+ import { Footer } from "./Footer"
+ import { Header } from "./header/Header"
+ import { Toolbar } from "./toolbar/Toolbar"
+ 
+ const Index = () => {
++  const mode = useColorModeValue("light", "dark")
+   useTitle(getSetting("site_title"))
+   const announcement = getSetting("announcement")
+   if (announcement) {
+     notify.render(<Markdown children={announcement} />)
+   }
+   return (
+-    <>
+-      <Header />
+-      <Toolbar />
+-      <Body />
+-      <Footer />
+-    </>
++    <div class="drive-shell" data-drive-mode={mode()}>
++      <DriveRail />
++      <main class="drive-main">
++        <Header />
++        <Toolbar />
++        <Body />
++        <Footer />
++      </main>
++    </div>
+   )
+ }
+ 
+diff --git a/src/pages/home/Nav.tsx b/src/pages/home/Nav.tsx
+index 0d0ed69..e9e28d3 100644
+--- a/src/pages/home/Nav.tsx
++++ b/src/pages/home/Nav.tsx
+@@ -12,7 +12,7 @@ import { getSetting, local } from "~/store"
+ import { encodePath, hoverColor, joinBase } from "~/utils"
+ 
+ export const Nav = () => {
+-  const { pathname, isShare } = useRouter()
++  const { pathname, isShare, to } = useRouter()
+   const paths = createMemo(() => {
+     if (!isShare()) {
+       return ["", ...pathname().split("/").filter(Boolean)]
+@@ -59,10 +59,15 @@ export const Nav = () => {
+       <For each={paths()}>
+         {(name, i) => {
+           const isLast = createMemo(() => i() === paths().length - 1)
+-          const path = paths()
+-            .slice(0, i() + 1)
+-            .join("/")
+-          const href = encodePath(path)
++          const path = createMemo(
++            () =>
++              "/" +
++              paths()
++                .slice(0, i() + 1)
++                .filter(Boolean)
++                .join("/"),
++          )
++          const href = () => encodePath(path())
+           let text = () => name
+           if (!isShare() && text() === "") {
+             text = () => getSetting("home_icon") + t("manage.sidemenu.home")
+@@ -84,8 +89,22 @@ export const Nav = () => {
+                 rounded="$lg"
+                 currentPage={isLast()}
+                 as={isLast() ? undefined : Link}
+-                href={joinBase(href)}
+-                onMouseEnter={() => setPathAs(path)}
++                href={joinBase(href())}
++                onMouseEnter={() => setPathAs(path())}
++                onClick={(event: MouseEvent) => {
++                  if (
++                    isLast() ||
++                    event.button !== 0 ||
++                    event.ctrlKey ||
++                    event.metaKey ||
++                    event.shiftKey ||
++                    event.altKey
++                  )
++                    return
++                  event.preventDefault()
++                  setPathAs(path())
++                  to(href())
++                }}
+               >
+                 {text()}
+               </BreadcrumbLink>
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+new file mode 100644
+index 0000000..83edaa5
+--- /dev/null
++++ b/src/pages/home/drive.css
+@@ -0,0 +1,953 @@
++/* File browser skin, scoped so management and login keep their own layouts. */
++.drive-shell {
++  --drive-bg: #fff;
++  --drive-rail: #f9fafd;
++  --drive-text: #1e1919;
++  --drive-muted: #706b67;
++  --drive-line: #e8e6e3;
++  --drive-hover: #f7f8fa;
++  --drive-blue: #0061ff;
++  --drive-selected: #eaf1ff;
++  width: 100%;
++  min-height: 100vh;
++  display: grid;
++  grid-template-columns: 228px minmax(0, 1fr);
++  color: var(--drive-text);
++  background: var(--drive-bg);
++  font-size: 14px;
++}
++.drive-shell[data-drive-mode="dark"] {
++  --drive-bg: #181a1e;
++  --drive-rail: #202227;
++  --drive-text: #f1f1f1;
++  --drive-muted: #adafb5;
++  --drive-line: #34373e;
++  --drive-hover: #24272e;
++  --drive-selected: #183354;
++  --drive-blue: #79abff;
++}
++.drive-shell button {
++  font: inherit;
++  cursor: pointer;
++}
++.drive-shell button:focus-visible {
++  outline: 3px solid #6da3ff;
++  outline-offset: 3px;
++}
++.drive-rail {
++  position: sticky;
++  top: 0;
++  height: 100vh;
++  padding: 32px 18px 20px;
++  display: flex;
++  flex-direction: column;
++  background: var(--drive-rail);
++  border-right: 1px solid var(--drive-line);
++}
++.drive-brand {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  min-width: 0;
++  font-size: 18px;
++  font-weight: 700;
++  letter-spacing: -0.5px;
++  width: 100%;
++  padding: 0;
++  border: 0;
++  background: transparent;
++  color: inherit;
++  text-align: left;
++  cursor: pointer;
++}
++.drive-brand > span:last-child {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++.drive-brand-mark {
++  width: 32px;
++  height: 32px;
++  display: grid;
++  place-items: center;
++  background: #0061ff;
++  color: white;
++  border-radius: 5px;
++  flex-shrink: 0;
++}
++.drive-rail .drive-brand {
++  padding: 0 10px;
++}
++.drive-rail-label {
++  margin: 48px 12px 12px;
++  color: var(--drive-muted);
++  font-size: 11px;
++  font-weight: 600;
++  letter-spacing: 1px;
++  text-transform: uppercase;
++}
++.drive-rail-nav {
++  display: grid;
++  gap: 5px;
++}
++.drive-nav-item {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  text-align: left;
++  width: 100%;
++  border: 0;
++  border-radius: 5px;
++  padding: 13px 12px;
++  color: var(--drive-text);
++  background: transparent;
++}
++.drive-nav-item svg {
++  width: 19px;
++  height: 19px;
++}
++.drive-nav-item:hover {
++  background: var(--drive-line);
++}
++.drive-nav-current {
++  background: var(--drive-selected);
++  color: var(--drive-blue);
++  font-weight: 600;
++}
++.drive-account {
++  margin-top: auto;
++  padding: 16px 8px 0;
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  text-align: left;
++  border: 0;
++  border-top: 1px solid var(--drive-line);
++  background: transparent;
++  color: var(--drive-text);
++  min-width: 0;
++}
++.drive-account > span:last-child {
++  min-width: 0;
++}
++.drive-account strong {
++  display: block;
++  font-size: 13px;
++  overflow: hidden;
++  text-overflow: ellipsis;
++}
++.drive-account small {
++  display: block;
++  margin-top: 3px;
++  color: var(--drive-muted);
++  font-size: 11px;
++}
++.drive-avatar {
++  width: 34px;
++  height: 34px;
++  flex-shrink: 0;
++  display: grid;
++  place-items: center;
++  background: #e4ded7;
++  color: #524a43;
++  border-radius: 50%;
++  font-weight: 600;
++}
++.drive-main {
++  min-width: 0;
++}
++.drive-shell .drive-container {
++  width: 100%;
++  max-width: 1440px;
++  margin-inline: auto;
++  padding-inline: 40px;
++}
++.drive-header {
++  background: var(--drive-bg);
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-header-inner {
++  height: 88px;
++  display: flex;
++  align-items: center;
++  gap: 20px;
++}
++.drive-search {
++  width: min(480px, 100%);
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  border: 1px solid var(--drive-line);
++  border-radius: 5px;
++  background: var(--drive-hover);
++  color: var(--drive-muted);
++  padding: 11px 14px;
++  text-align: left;
++}
++.drive-search:hover {
++  border-color: #b7c8e6;
++}
++.drive-search-shortcut {
++  margin-left: auto;
++  font-size: 11px;
++}
++.drive-header-tools {
++  margin-left: auto;
++  display: flex;
++  gap: 8px;
++  align-items: center;
++}
++.drive-header-tools > button {
++  border-radius: 5px;
++}
++
++.drive-shell .body {
++  padding: 30px 0 0;
++  min-height: calc(100vh - 160px);
++  gap: 20px;
++}
++.drive-shell .nav {
++  background: var(--drive-bg);
++  font-size: 12px;
++  color: var(--drive-muted);
++}
++.drive-shell .nav::after {
++  display: none;
++}
++.drive-shell .nav-link {
++  padding: 3px 0;
++  border-radius: 3px;
++}
++.drive-heading {
++  width: 100%;
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++  margin: 2px 0 10px;
++}
++.drive-heading h1 {
++  font-size: 30px;
++  font-weight: 600;
++  line-height: 1.25;
++  letter-spacing: -0.8px;
++  overflow-wrap: anywhere;
++  margin: 0;
++}
++.drive-actions {
++  display: flex;
++  gap: 10px;
++  align-items: center;
++  flex-shrink: 0;
++}
++.drive-button,
++.drive-icon-button {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  gap: 9px;
++  border: 1px solid var(--drive-line);
++  border-radius: 5px;
++  color: var(--drive-text);
++  background: var(--drive-bg);
++  min-height: 40px;
++  padding: 0 14px;
++  font-weight: 500 !important;
++}
++.drive-icon-button {
++  padding: 0;
++  width: 40px;
++  font-size: 18px !important;
++}
++.drive-button svg {
++  width: 17px;
++  height: 17px;
++}
++.drive-button:hover,
++.drive-icon-button:hover {
++  background: var(--drive-hover);
++  border-color: #b6b8be;
++}
++.drive-button-primary {
++  background: #0061ff;
++  color: white;
++  border-color: #0061ff;
++}
++.drive-button-primary:hover {
++  background: #0052d9;
++  border-color: #0052d9;
++}
++.drive-shell .obj-box {
++  padding: 0;
++  background: var(--drive-bg);
++  border-radius: 0;
++  box-shadow: none;
++}
++.drive-shell .list {
++  gap: 0;
++}
++.drive-shell .list .title {
++  padding: 12px 16px;
++  font-size: 12px;
++  color: var(--drive-muted);
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-shell .list-item {
++  padding: 18px 16px;
++  min-height: 64px;
++  border-radius: 0;
++  border-bottom: 1px solid var(--drive-line);
++  transition: background 0.15s;
++}
++.drive-shell .list-item:hover {
++  transform: none;
++  background: var(--drive-hover);
++}
++.drive-shell .list-item.selected {
++  background: var(--drive-selected);
++}
++.drive-shell .list-item .icon {
++  width: 28px;
++  height: 28px;
++  margin-right: 10px;
++  flex-shrink: 0;
++  color: var(--drive-blue);
++}
++.drive-shell .list-item .name {
++  font-weight: 500;
++}
++.drive-shell .list-item .size,
++.drive-shell .list-item .modified {
++  color: var(--drive-muted);
++  font-size: 13px;
++  font-variant-numeric: tabular-nums;
++}
++.drive-shell .footer {
++  color: var(--drive-muted);
++  font-size: 11px;
++  padding: 22px 0;
++}
++
++@media (max-width: 1100px) {
++  .drive-shell {
++    grid-template-columns: 196px minmax(0, 1fr);
++  }
++  .drive-shell .drive-container {
++    padding-inline: 24px;
++  }
++}
++@media (max-width: 760px) {
++  .drive-shell {
++    display: block;
++  }
++  .drive-rail {
++    display: none;
++  }
++  .drive-shell .drive-container {
++    padding-inline: 18px;
++  }
++
++  .drive-brand {
++    font-size: 16px;
++  }
++  .drive-header-inner {
++    height: auto;
++    min-height: 72px;
++    flex-wrap: wrap;
++    gap: 12px;
++    padding-block: 16px;
++  }
++  .drive-search {
++    order: 3;
++    width: 100%;
++  }
++  .drive-search-shortcut {
++    display: none;
++  }
++  .drive-shell .body {
++    padding-top: 22px;
++    gap: 16px;
++  }
++  .drive-heading {
++    flex-wrap: wrap;
++    margin-bottom: 8px;
++  }
++  .drive-heading h1 {
++    font-size: 26px;
++  }
++  .drive-actions {
++    gap: 8px;
++  }
++  .drive-button {
++    padding-inline: 12px;
++  }
++  .drive-shell .list-item {
++    padding: 16px 8px;
++    min-height: 64px;
++  }
++  .drive-shell .list .title {
++    padding-inline: 8px;
++  }
++  .drive-shell .list-item .icon {
++    width: 24px;
++    height: 24px;
++    margin-right: 6px;
++  }
++
++}
++@media (prefers-reduced-motion: reduce) {
++  .drive-shell .list-item {
++    transition: none;
++  }
++}
++
++.drive-file-tools {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  flex-wrap: wrap;
++  gap: 12px;
++  width: 100%;
++  min-height: 36px;
++  margin-top: -12px;
++  color: var(--drive-muted);
++}
++.drive-select-button {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  gap: 8px;
++  min-height: 40px;
++  padding: 0 10px;
++  border: 0;
++  border-radius: 5px;
++  background: transparent;
++  color: var(--drive-muted);
++}
++.drive-select-button:hover {
++  background: var(--drive-hover);
++  color: var(--drive-text);
++}
++.drive-select-button svg {
++  width: 18px;
++  height: 18px;
++}
++.drive-selection-count {
++  margin-right: auto;
++  font-size: 13px;
++  overflow-wrap: anywhere;
++}
++.drive-selection-actions {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 8px;
++}
++.drive-selection-actions .drive-selection-action {
++  min-height: 38px;
++  padding: 0 14px;
++  border: 1px solid var(--drive-line);
++  border-radius: 8px;
++  background: var(--drive-bg);
++  color: var(--drive-text);
++  box-shadow: 0 1px 1px #00000008;
++  font-weight: 500;
++}
++.drive-selection-actions .drive-selection-action:hover {
++  border-color: #c9c7c4;
++  background: var(--drive-hover);
++}
++.drive-selection-actions .drive-selection-action svg {
++  width: 18px;
++  height: 18px;
++}
++.drive-selection-actions .drive-selection-cancel {
++  padding-inline: 10px;
++  color: var(--drive-muted);
++}
++@media (max-width: 760px) {
++  .drive-file-tools {
++    margin-top: -4px;
++    gap: 8px;
++  }
++  .drive-selection-count {
++    width: 100%;
++  }
++  .drive-selection-actions {
++    width: 100%;
++  }
++  .drive-selection-actions .drive-select-button {
++    margin-left: auto;
++  }
++}
++
++/* Compact mobile navigation and directly accessible file actions. */
++.drive-mobile-nav,
++.drive-mobile-create,
++.drive-mobile-account,
++.drive-heading-settings,
++.drive-heading-layout {
++  display: none;
++}
++.drive-heading-title {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  min-width: 0;
++}
++.drive-file-row {
++  display: flex;
++  align-items: stretch;
++  width: 100%;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-shell .drive-file-row .list-item {
++  flex: 1;
++  min-width: 0;
++  width: auto;
++  border-bottom: 0;
++}
++.drive-file-row-selected {
++  background: var(--drive-selected);
++}
++.drive-file-row:hover {
++  background: var(--drive-hover);
++}
++.drive-file-row-selected:hover {
++  background: var(--drive-selected);
++}
++.drive-row-actions {
++  display: flex;
++  align-items: center;
++  flex: 0 0 44px;
++}
++.drive-row-menu {
++  width: 40px;
++  min-height: 44px;
++  border: 0;
++  background: transparent;
++  opacity: 0;
++  pointer-events: none;
++  transition: opacity 120ms ease;
++}
++.drive-file-row:hover .drive-row-menu,
++.drive-file-row:focus-within .drive-row-menu {
++  opacity: 1;
++  pointer-events: auto;
++}
++@media (hover: none) {
++  .drive-row-menu {
++    opacity: 1;
++    pointer-events: auto;
++  }
++}
++.drive-layout-menu {
++  min-width: 190px;
++  border-radius: 14px;
++}
++.drive-layout-label {
++  padding: 10px 14px 4px;
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-layout-choice {
++  display: inline-flex;
++  align-items: center;
++  gap: 10px;
++}
++.drive-layout-choice > span {
++  width: 16px;
++}
++.drive-context-menu.solid-contextmenu {
++  --menu-bg: #fff;
++  --menu-text: #1e1919;
++  --menu-muted: #6b6662;
++  --menu-border: #e8e6e3;
++  --menu-hover: #f4f5f7;
++  min-width: 258px;
++  max-width: min(300px, calc(100vw - 24px));
++  max-height: min(680px, calc(100vh - 24px));
++  overflow-y: auto;
++  border: 1px solid var(--menu-border);
++  border-radius: 12px;
++  padding: 6px 0;
++  background: var(--menu-bg);
++  color: var(--menu-text);
++  box-shadow: 0 12px 32px #00000024;
++  font-size: 14px;
++}
++.drive-context-menu.solid-contextmenu__theme--dark {
++  --menu-bg: #25272b;
++  --menu-text: #f1f1f1;
++  --menu-muted: #adafb5;
++  --menu-border: #3a3d43;
++  --menu-hover: #363940;
++}
++.drive-context-title {
++  padding: 10px 16px 12px;
++  font-weight: 600;
++  color: var(--menu-text);
++  overflow: hidden;
++  white-space: nowrap;
++  text-overflow: ellipsis;
++  border-bottom: 1px solid var(--menu-border);
++}
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item__content {
++  min-height: 40px;
++  gap: 12px;
++  padding: 8px 16px;
++  color: var(--menu-text);
++  font-weight: 400;
++}
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item:hover > .solid-contextmenu__item__content,
++.drive-context-menu.solid-contextmenu .solid-contextmenu__item:focus > .solid-contextmenu__item__content,
++.drive-context-menu.solid-contextmenu .solid-contextmenu__submenu--is-open > .solid-contextmenu__item__content {
++  background: var(--menu-hover);
++  color: var(--menu-text);
++}
++.drive-context-menu.solid-contextmenu .solid-contextmenu__separator {
++  height: 1px;
++  margin: 6px 0;
++  background: var(--menu-border);
++}
++.drive-context-menu .solid-contextmenu__submenu {
++  border: 1px solid var(--menu-border);
++  border-radius: 10px;
++  background: var(--menu-bg);
++  box-shadow: 0 12px 32px #00000024;
++}
++.drive-context-item {
++  width: 100%;
++  min-width: 0;
++  color: inherit;
++}
++.drive-context-item svg {
++  flex-shrink: 0;
++  width: 20px;
++  height: 20px;
++  color: inherit;
++}
++
++.drive-shell .name-box {
++  min-width: 0;
++}
++.drive-shell .name-box .hope-checkbox {
++  flex-shrink: 0;
++  margin-right: 10px;
++}
++.drive-shell .drive-selection-count {
++  width: auto;
++}
++@media (max-width: 760px) {
++  .drive-mobile-nav,
++  .drive-mobile-create {
++    display: block;
++  }
++  .drive-mobile-account {
++    display: grid;
++    border: 0;
++  }
++
++  .drive-header-inner {
++    height: 76px;
++    min-height: 76px;
++    padding-block: 12px;
++    flex-wrap: nowrap;
++    gap: 10px;
++  }
++  .drive-menu-button {
++    border: 0;
++    width: 32px;
++    background: transparent;
++  }
++  .drive-create-button {
++    background: var(--drive-text);
++    color: var(--drive-bg);
++    border-color: var(--drive-text);
++    border-radius: 16px;
++    padding-inline: 12px;
++    white-space: nowrap;
++  }
++  .drive-create-button:hover {
++    background: var(--drive-text);
++    color: var(--drive-bg);
++    opacity: 0.85;
++  }
++  .drive-search {
++    order: initial;
++    width: auto;
++    flex: 1;
++    min-width: 40px;
++    max-width: 160px;
++    gap: 8px;
++    padding-inline: 10px;
++    background: var(--drive-bg);
++    border-radius: 14px;
++  }
++  .drive-header-tools {
++    gap: 0;
++  }
++  .drive-heading {
++    flex-wrap: nowrap;
++    gap: 8px;
++    margin-block: 0 8px;
++  }
++  .drive-heading h1 {
++    font-size: 24px;
++    overflow: hidden;
++    white-space: nowrap;
++    text-overflow: ellipsis;
++  }
++  .drive-heading-settings {
++    display: inline-flex;
++    flex-shrink: 0;
++    width: 32px;
++    min-height: 36px;
++    border: 0;
++    background: transparent;
++  }
++  .drive-heading-refresh {
++    display: none;
++  }
++  .drive-heading-mkdir,
++  .drive-heading-upload {
++    width: 40px;
++    padding: 0;
++    background: var(--drive-hover);
++    border-color: transparent;
++    color: var(--drive-text);
++    border-radius: 10px;
++  }
++  .drive-heading-mkdir span,
++  .drive-heading-upload span {
++    display: none;
++  }
++  .drive-heading-mkdir svg,
++  .drive-heading-upload svg {
++    width: 21px;
++    height: 21px;
++  }
++  .drive-heading-mkdir {
++    order: 2;
++  }
++  .drive-heading-upload {
++    order: 1;
++  }
++  .drive-heading-layout {
++    display: block;
++    order: 3;
++  }
++  .drive-heading-layout button {
++    width: 32px;
++    background: transparent;
++    color: var(--drive-text);
++  }
++  .drive-actions {
++    gap: 4px;
++  }
++  .drive-shell .body {
++    padding-top: 16px;
++    gap: 12px;
++  }
++  .drive-file-tools {
++    margin-top: 0;
++    padding: 8px;
++    background: var(--drive-hover);
++    border-radius: 8px;
++    justify-content: space-between;
++  }
++  .drive-selection-actions {
++    width: auto;
++    gap: 4px;
++  }
++  .drive-selection-actions .drive-button {
++    padding-inline: 8px;
++    min-height: 36px;
++  }
++  .drive-selection-actions .drive-select-button {
++    min-height: 36px;
++    padding-inline: 4px;
++  }
++  .drive-shell .list-item {
++    padding: 14px 4px;
++  }
++  .drive-shell .list .title {
++    padding-inline: 4px;
++  }
++  .drive-row-actions {
++    flex-basis: 36px;
++  }
++  .drive-row-menu {
++    width: 36px;
++  }
++
++  .drive-shell .name-box .hope-checkbox {
++    margin-right: 6px;
++  }
++}
++
++.drive-row-check {
++  flex: 0 0 36px;
++  display: flex;
++  align-items: center;
++  justify-content: center;
++}
++@media (max-width: 760px) {
++  .drive-row-check {
++    flex-basis: 30px;
++  }
++}
++.drive-header-tools > .drive-mobile-account {
++  border-radius: 50%;
++}
++
++/* The title and rows share the same selection, content and actions columns. */
++.drive-list-title {
++  display: flex;
++  align-items: center;
++  width: 100%;
++  border-bottom: 1px solid var(--drive-border);
++}
++.drive-shell .drive-list-title .title {
++  flex: 1;
++  min-width: 0;
++  width: auto;
++  border-bottom: 0;
++}
++.drive-title-actions-space {
++  flex: 0 0 44px;
++}
++@media (max-width: 760px) {
++  .drive-title-actions-space {
++    flex-basis: 36px;
++  }
++}
++
++.drive-header-tools .drive-desktop-account {
++  margin: 0;
++  padding: 0;
++  border: 0;
++  border-radius: 0;
++}
++.drive-view-toolbar {
++  display: flex;
++  justify-content: flex-end;
++  width: 100%;
++  margin-bottom: -12px;
++}
++@media (max-width: 760px) {
++  .drive-desktop-account,
++  .drive-view-toolbar {
++    display: none !important;
++  }
++}
++
++/* Reserve the same toolbar row before and after selection. */
++.drive-list-toolbar { display: flex; align-items: center; gap: 12px; width: 100%; height: 56px; flex-shrink: 0; }
++.drive-list-toolbar .drive-file-tools { margin: 0; min-width: 0; justify-content: flex-start; flex-wrap: nowrap; flex: 1; min-height: 44px; }
++.drive-list-toolbar .drive-selection-count { margin-right: 0; width: auto; white-space: nowrap; }
++.drive-list-toolbar .drive-selection-actions { width: auto; flex-wrap: nowrap; }
++.drive-list-toolbar .drive-view-toolbar { width: auto; margin: 0 0 0 auto; flex-shrink: 0; }
++.drive-file-row-renaming .name-box { width: 100%; min-width: 0; }
++.drive-file-row-renaming .size, .drive-file-row-renaming .modified, .drive-file-row-renaming .disk-usage-percentage { display: none; }
++.drive-inline-rename { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; position: relative; }
++.drive-inline-rename > input { flex: 1; min-width: 0; height: 38px; padding: 6px 8px; border: 2px solid #0061ff; border-radius: 5px; background: var(--drive-bg); color: var(--drive-text); outline-offset: 1px; }
++.drive-inline-rename .drive-icon-button { flex-shrink: 0; width: 32px; height: 32px; }
++
++.drive-rename-error { position: absolute; top: 100%; left: 0; z-index: 2; background: var(--drive-bg); padding: 3px 6px; color: #c43a3a; font-size: 12px; }
++@media (max-width: 760px) {
++  .drive-list-toolbar { height: 88px; gap: 6px; }
++  .drive-list-toolbar .drive-file-tools { display: flex; flex-wrap: wrap; padding: 0; background: transparent; gap: 2px; align-content: center; height: 80px; }
++  .drive-list-toolbar .drive-selection-count { width: 100%; font-size: 12px; }
++  .drive-list-toolbar .drive-selection-actions { gap: 2px; }
++  .drive-list-toolbar .drive-selection-actions .drive-select-button { margin-left: 0; }
++
++}
++.drive-list-toolbar:empty { display: none; }
++
++/* Compact rows retain a comfortable selection and action target. */
++.drive-shell .drive-file-row .list-item {
++  min-height: 48px;
++  padding-block: 10px;
++}
++.drive-shell .drive-file-row-renaming .list-item {
++  padding-block: 4px;
++}
++
++/* Directory counts occupy the page footer, below browsing content. */
++.drive-main {
++  display: flex;
++  flex-direction: column;
++  min-height: 100vh;
++}
++.drive-shell .drive-container {
++  flex: 1;
++}
++.drive-shell .drive-directory-count {
++  min-height: 48px;
++  padding: 14px 24px;
++  text-align: center;
++  font-size: 13px;
++}
++
++.drive-rename-progress { position: absolute; top: calc(100% + 2px); left: 0; z-index: 2; background: var(--drive-bg); color: var(--drive-muted); font-size: 12px; padding: 2px 6px; border-radius: 4px; }
++
++/* Share links use the same restrained settings layout as the file browser. */
++.drive-share-dialog {
++  border-radius: 22px;
++  overflow: hidden;
++  max-width: min(520px, calc(100vw - 24px));
++}
++.drive-share-heading {
++  font-size: 22px;
++  font-weight: 650;
++  padding: 28px 30px 12px;
++}
++.drive-share-body { padding: 8px 30px 20px; }
++.drive-share-target {
++  display: flex;
++  align-items: center;
++  gap: 14px;
++  min-width: 0;
++  padding: 14px 0 24px;
++  border-bottom: 1px solid rgba(128, 128, 128, .24);
++}
++.drive-share-target-icon {
++  display: grid;
++  place-items: center;
++  width: 42px;
++  height: 42px;
++  flex: 0 0 42px;
++  border-radius: 9px;
++  color: #0061ff;
++  background: #eaf1ff;
++  font-size: 24px;
++}
++.drive-share-target > div { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
++.drive-share-target strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
++.drive-share-target span:last-child,
++.drive-share-setting span,
++.drive-share-result p { color: #75716e; font-size: 13px; }
++.drive-share-section-title { font-size: 14px; font-weight: 650; margin: 22px 0 4px; }
++.drive-share-setting {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++  min-height: 68px;
++  border-bottom: 1px solid rgba(128, 128, 128, .2);
++}
++.drive-share-setting > div { display: flex; flex-direction: column; gap: 3px; }
++.drive-share-setting strong { font-size: 14px; font-weight: 550; }
++.drive-share-setting input[type="checkbox"] { width: 19px; height: 19px; accent-color: #0061ff; cursor: pointer; flex: none; }
++.drive-share-input { width: 100%; margin: 10px 0; padding: 10px 12px; border: 1px solid rgba(128,128,128,.4); border-radius: 7px; color: inherit; background: transparent; }
++.drive-share-setting + input:not([type="checkbox"]) { margin-top: 10px; }
++.drive-share-result { padding: 24px 0 4px; }
++.drive-share-result label { display: block; margin-bottom: 9px; font-weight: 600; }
++.drive-share-result p { margin: 10px 0 0; }
++.drive-share-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 30px 28px; }
++@media (max-width: 600px) {
++  .drive-share-heading { padding: 22px 20px 10px; }
++  .drive-share-body { padding: 8px 20px 16px; }
++  .drive-share-footer { padding: 12px 20px 22px; }
++}
+diff --git a/src/pages/home/file/File.tsx b/src/pages/home/file/File.tsx
+index 83f5780..17b1ac9 100644
+--- a/src/pages/home/file/File.tsx
++++ b/src/pages/home/file/File.tsx
+@@ -2,6 +2,7 @@ import { HStack, VStack } from "@hope-ui/solid"
+ import { createMemo, ErrorBoundary, Show, Suspense } from "solid-js"
+ import { Dynamic } from "solid-js/web"
+ import { Error, FullLoading, SelectWrapper } from "~/components"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
+ import { objStore } from "~/store"
+ import { useRouter } from "~/hooks"
+ import { Download } from "../previews/download"
+@@ -38,7 +39,7 @@ const File = () => {
+           />
+           <OpenWith />
+         </HStack>
+-        <ErrorBoundary fallback={(err) => <Error msg={String(err)} />}>
++        <ErrorBoundary fallback={(err) => <ModuleLoadError error={err} />}>
+           <Suspense fallback={<FullLoading />}>
+             <Dynamic component={cur()?.component} />
+           </Suspense>
+diff --git a/src/pages/home/folder/Folder.tsx b/src/pages/home/folder/Folder.tsx
+index ce15e4c..1d60ab0 100644
+--- a/src/pages/home/folder/Folder.tsx
++++ b/src/pages/home/folder/Folder.tsx
+@@ -74,7 +74,7 @@ const Folder = () => {
+         <Match when={layout() === "list"}>
+           <ListLayout />
+         </Match>
+-        <Match when={layout() === "grid"}>
++        <Match when={layout() === "grid" || layout() === "large_grid"}>
+           <GridLayout />
+         </Match>
+         <Match when={layout() === "image"}>
+diff --git a/src/pages/home/folder/Grid.tsx b/src/pages/home/folder/Grid.tsx
+index 32045d4..2116692 100644
+--- a/src/pages/home/folder/Grid.tsx
++++ b/src/pages/home/folder/Grid.tsx
+@@ -1,35 +1,30 @@
+-import { Box, Grid, Text } from "@hope-ui/solid"
+-import { For, Show } from "solid-js"
++import { Grid } from "@hope-ui/solid"
++import { For } from "solid-js"
+ import { GridItem } from "./GridItem"
+ import "lightgallery/css/lightgallery-bundle.css"
+-import { smartCountMsg, local, objStore } from "~/store"
++import { layout, local, objStore } from "~/store"
+ import { useSelectWithMouse } from "./helper"
+ 
+ const GridLayout = () => {
++  const itemSize = () =>
++    parseInt(local["grid_item_size"]) * (layout() === "large_grid" ? 1.7 : 1)
+   const { isMouseSupported, registerSelectContainer, captureContentMenu } =
+     useSelectWithMouse()
+   registerSelectContainer()
+   return (
+     <>
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Box w="100%" textAlign="left" pl="$2">
+-          <Text size="sm" color="$neutral11">
+-            {smartCountMsg()}
+-          </Text>
+-        </Box>
+-      </Show>
+       <Grid
+         oncapture:contextmenu={captureContentMenu}
+         class="viselect-container"
+         w="$full"
+         gap="$1"
+         templateColumns={`repeat(auto-fill, minmax(${
+-          parseInt(local["grid_item_size"]) + 20
++          itemSize() + 20
+         }px,1fr))`}
+       >
+         <For each={objStore.objs}>
+           {(obj, i) => {
+-            return <GridItem obj={obj} index={i()} />
++            return <GridItem obj={obj} index={i()} size={itemSize()} />
+           }}
+         </For>
+       </Grid>
+diff --git a/src/pages/home/folder/GridItem.tsx b/src/pages/home/folder/GridItem.tsx
+index abaa550..4d7c3d9 100644
+--- a/src/pages/home/folder/GridItem.tsx
++++ b/src/pages/home/folder/GridItem.tsx
+@@ -9,8 +9,9 @@ import { ObjType, StoreObj } from "~/types"
+ import { bus, hoverColor } from "~/utils"
+ import { getIconByObj } from "~/utils/icon"
+ import { ItemCheckbox, useSelectWithMouse } from "./helper"
++import { openItem } from "./open-item"
+ 
+-export const GridItem = (props: { obj: StoreObj; index: number }) => {
++export const GridItem = (props: { obj: StoreObj; index: number; size?: number }) => {
+   const { isHide } = useUtil()
+   if (isHide(props.obj)) {
+     return null
+@@ -19,7 +20,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+   const objIcon = (
+     <Icon
+       color={getMainColor()}
+-      boxSize={`${parseInt(local["grid_item_size"]) - 30}px`}
++      boxSize={`${(props.size ?? parseInt(local["grid_item_size"])) - 30}px`}
+       as={getIconByObj(props.obj)}
+     />
+   )
+@@ -51,6 +52,8 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+         }}
+         as={LinkWithPush}
+         href={props.obj.name}
++        target={props.obj.is_dir ? undefined : "_blank"}
++        rel={props.obj.is_dir ? undefined : "noopener noreferrer"}
+         cursor={
+           openWithDoubleClick() || toggleWithClick() ? "default" : "pointer"
+         }
+@@ -58,7 +61,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+         on:dblclick={() => {
+           if (!openWithDoubleClick()) return
+           selectIndex(props.index, true, true)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         on:click={(e: MouseEvent) => {
+           e.preventDefault()
+@@ -67,7 +70,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+           if (!restoreSelectionCache()) return
+           if (toggleWithClick())
+             return selectIndex(props.index, !props.obj.selected)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         onMouseEnter={() => {
+           setPathAs(props.obj.name, props.obj.is_dir, true)
+@@ -84,7 +87,7 @@ export const GridItem = (props: { obj: StoreObj; index: number }) => {
+       >
+         <Center
+           class="item-thumbnail"
+-          h={`${parseInt(local["grid_item_size"])}px`}
++          h={`${props.size ?? parseInt(local["grid_item_size"])}px`}
+           w="$full"
+           cursor={props.obj.type !== ObjType.IMAGE ? "inherit" : "pointer"}
+           on:click={(e: MouseEvent) => {
+diff --git a/src/pages/home/folder/Images.tsx b/src/pages/home/folder/Images.tsx
+index c19a217..a97bd09 100644
+--- a/src/pages/home/folder/Images.tsx
++++ b/src/pages/home/folder/Images.tsx
+@@ -1,7 +1,7 @@
+-import { Box, Flex, Grid, Heading, Text, VStack } from "@hope-ui/solid"
++import { Flex, Grid, Heading, VStack } from "@hope-ui/solid"
+ import { For, Show, createMemo } from "solid-js"
+ import { ImageItem } from "./ImageItem"
+-import { smartCountMsg, local, objStore } from "~/store"
++import { local, objStore } from "~/store"
+ import { GridItem } from "./GridItem"
+ import { ObjType, StoreObj } from "~/types"
+ import { useT } from "~/hooks"
+@@ -33,13 +33,6 @@ const ImageLayout = (props: { images: StoreObj[] }) => {
+       spacing="$2"
+       w="$full"
+     >
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Box w="100%" textAlign="left" pl="$2">
+-          <Text size="sm" color="$neutral11">
+-            {smartCountMsg(ObjType.IMAGE)}
+-          </Text>
+-        </Box>
+-      </Show>
+       <Show when={local["show_folder_in_image_view"] === "top"}>
+         {folders()}
+       </Show>
+diff --git a/src/pages/home/folder/List.tsx b/src/pages/home/folder/List.tsx
+index 6ee0dd9..0d26504 100644
+--- a/src/pages/home/folder/List.tsx
++++ b/src/pages/home/folder/List.tsx
+@@ -1,15 +1,13 @@
++import { currentLang } from "~/app/i18n"
+ import { HStack, VStack, Text } from "@hope-ui/solid"
+ import { batch, createEffect, createSignal, For, Show, onMount } from "solid-js"
+ import { useT, useRouter } from "~/hooks"
+ import {
+   allChecked,
+-  checkboxOpen,
+-  countMsg,
+   isIndeterminate,
+   local,
+   objStore,
+   selectAll,
+-  selectedMsg,
+   sortObjs,
+ } from "~/store"
+ import { OrderBy } from "~/store"
+@@ -91,34 +89,41 @@ export const ListTitle = (props: {
+     }
+   }
+   return (
+-    <HStack class="title" w="$full" p="$2">
+-      <HStack w={cols[0].w} spacing="$1">
+-        <Show when={!props.disableCheckbox && checkboxOpen()}>
++    <div
++      class="drive-list-title"
++      classList={{ "drive-list-title-no-checkbox": !!props.disableCheckbox }}
++    >
++      <Show when={!props.disableCheckbox}>
++        <div class="drive-row-check">
+           <ItemCheckbox
+-            checked={allChecked()}
++            aria-label={
++              String(currentLang()).startsWith("zh") ? "选择全部" : "Select all"
++            }
++            checked={objStore.objs.length > 0 && allChecked()}
+             indeterminate={isIndeterminate()}
+-            onChange={(e: any) => {
+-              selectAll(e.target.checked as boolean)
+-            }}
++            onChange={(e: any) => selectAll(e.target.checked as boolean)}
+           />
+-        </Show>
+-        {selectedMsg() ? (
+-          <Text {...itemProps(cols[0])}>{selectedMsg()}</Text>
+-        ) : (
+-          <Text {...itemProps(cols[0])}>{t(`home.obj.${cols[0].name}`)}</Text>
+-        )}
++        </div>
++      </Show>
++      <HStack class="title" w="$full" p="$2">
++        <Text w={cols[0].w} {...itemProps(cols[0])}>
++          {t(`home.obj.${cols[0].name}`)}
++        </Text>
++        <Text w={cols[1].w} {...itemProps(cols[1])}>
++          {t(`home.obj.${cols[1].name}`)}
++        </Text>
++        <Text
++          w={cols[2].w}
++          {...itemProps(cols[2])}
++          display={{ "@initial": "none", "@md": "inline" }}
++        >
++          {t(`home.obj.${cols[2].name}`)}
++        </Text>
+       </HStack>
+-      <Text w={cols[1].w} {...itemProps(cols[1])}>
+-        {t(`home.obj.${cols[1].name}`)}
+-      </Text>
+-      <Text
+-        w={cols[2].w}
+-        {...itemProps(cols[2])}
+-        display={{ "@initial": "none", "@md": "inline" }}
+-      >
+-        {t(`home.obj.${cols[2].name}`)}
+-      </Text>
+-    </HStack>
++      <Show when={!props.disableCheckbox}>
++        <span class="drive-title-actions-space" aria-hidden="true" />
++      </Show>
++    </div>
+   )
+ }
+ 
+@@ -170,11 +175,6 @@ const ListLayout = () => {
+           return <ListItem obj={obj} index={i()} />
+         }}
+       </For>
+-      <Show when={local["show_count_msg"] === "visible"}>
+-        <Text size="sm" color="$neutral11">
+-          {countMsg()}
+-        </Text>
+-      </Show>
+     </VStack>
+   )
+ }
+diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
+index 4893a59..a155607 100644
+--- a/src/pages/home/folder/ListItem.tsx
++++ b/src/pages/home/folder/ListItem.tsx
+@@ -6,13 +6,13 @@ import {
+   ProgressLabel,
+   Text,
+ } from "@hope-ui/solid"
+-import { Motion } from "solid-motionone"
++import { currentLang } from "~/app/i18n"
++import { notify, r } from "~/utils"
+ import { useContextMenu } from "solid-contextmenu"
+ import { batch, Show } from "solid-js"
+ import { LinkWithPush } from "~/components"
+ import { usePath, useRouter, useUtil } from "~/hooks"
+ import {
+-  checkboxOpen,
+   getMainColor,
+   getSettingBool,
+   local,
+@@ -31,6 +31,10 @@ import {
+   nearlyFull,
+ } from "~/utils"
+ import { getIconByObj } from "~/utils/icon"
++import { inlineRename } from "~/store/inline_rename"
++import { InlineRename } from "./InlineRename"
++import { RowActions } from "./RowActions"
++import { openItem } from "./open-item"
+ import { ItemCheckbox, useSelectWithMouse } from "./helper"
+ 
+ export interface Col {
+@@ -55,16 +59,36 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+   const { pushHref, to } = useRouter()
+   const { openWithDoubleClick, toggleWithClick, restoreSelectionCache } =
+     useSelectWithMouse()
++  const { pathname } = useRouter()
++  const { refresh } = usePath()
++  const editing = () =>
++    inlineRename()?.directory === pathname() &&
++    inlineRename()?.name === props.obj.name
+   const filenameStyle = () => local["list_item_filename_overflow"]
+   return (
+-    <Motion.div
+-      initial={{ opacity: 0, scale: 0.95 }}
+-      animate={{ opacity: 1, scale: 1 }}
+-      transition={{ duration: 0.2 }}
+-      style={{
+-        width: "100%",
++    <div
++      class="drive-file-row"
++      classList={{
++        "drive-file-row-selected": !!props.obj.selected,
++        "drive-file-row-renaming": editing(),
+       }}
++      style={{ width: "100%" }}
+     >
++      <div class="drive-row-check">
++        <ItemCheckbox
++          aria-label={`${String(currentLang()).startsWith("zh") ? "选择" : "Select"} ${props.obj.name}`}
++          on:mousedown={(e: MouseEvent) => {
++            e.stopPropagation()
++          }}
++          on:click={(e: MouseEvent) => {
++            e.stopPropagation()
++          }}
++          checked={props.obj.selected}
++          onChange={(e: any) => {
++            selectIndex(props.index, e.target.checked)
++          }}
++        />
++      </div>
+       <HStack
+         classList={{ selected: !!props.obj.selected }}
+         class="list-item viselect-item"
+@@ -77,25 +101,29 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+           transform: "scale(1.01)",
+           bgColor: hoverColor(),
+         }}
+-        as={LinkWithPush}
++        as={(editing() ? "div" : LinkWithPush) as typeof LinkWithPush}
+         href={props.obj.name}
++        target={props.obj.is_dir ? undefined : "_blank"}
++        rel={props.obj.is_dir ? undefined : "noopener noreferrer"}
+         cursor={
+           openWithDoubleClick() || toggleWithClick() ? "default" : "pointer"
+         }
+         bgColor={props.obj.selected ? hoverColor() : undefined}
+         on:dblclick={() => {
++          if (editing()) return
+           if (!openWithDoubleClick()) return
+           selectIndex(props.index, true, true)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         on:click={(e: MouseEvent) => {
++          if (editing()) return
+           e.preventDefault()
+           if (openWithDoubleClick()) return
+           if (e.ctrlKey || e.metaKey || e.shiftKey) return
+           if (!restoreSelectionCache()) return
+           if (toggleWithClick())
+             return selectIndex(props.index, !props.obj.selected)
+-          to(pushHref(props.obj.name))
++          openItem(props.obj, pushHref(props.obj.name), to)
+         }}
+         onMouseEnter={() => {
+           setPathAs(props.obj.name, props.obj.is_dir, true)
+@@ -111,21 +139,6 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+         }}
+       >
+         <HStack class="name-box" spacing="$1" w={cols[0].w}>
+-          <Show when={checkboxOpen()}>
+-            <ItemCheckbox
+-              // colorScheme="neutral"
+-              on:mousedown={(e: MouseEvent) => {
+-                e.stopPropagation()
+-              }}
+-              on:click={(e: MouseEvent) => {
+-                e.stopPropagation()
+-              }}
+-              checked={props.obj.selected}
+-              onChange={(e: any) => {
+-                selectIndex(props.index, e.target.checked)
+-              }}
+-            />
+-          </Show>
+           <Icon
+             class="icon"
+             boxSize="$6"
+@@ -142,25 +155,55 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+               e.stopPropagation()
+             }}
+           />
+-          <Text
+-            class="name"
+-            css={{
+-              wordBreak: "break-all",
+-              whiteSpace: filenameStyle() === "multi_line" ? "unset" : "nowrap",
+-              "overflow-x":
+-                filenameStyle() === "scrollable" ? "auto" : "hidden",
+-              textOverflow:
+-                filenameStyle() === "ellipsis" ? "ellipsis" : "unset",
+-              "scrollbar-width": "none", // firefox
+-              "&::-webkit-scrollbar": {
+-                // webkit
+-                display: "none",
+-              },
+-            }}
+-            title={props.obj.name}
++          <Show
++            when={editing()}
++            fallback={
++              <Text
++                class="name"
++                css={{
++                  wordBreak: "break-all",
++                  whiteSpace:
++                    filenameStyle() === "multi_line" ? "unset" : "nowrap",
++                  "overflow-x":
++                    filenameStyle() === "scrollable" ? "auto" : "hidden",
++                  textOverflow:
++                    filenameStyle() === "ellipsis" ? "ellipsis" : "unset",
++                  "scrollbar-width": "none", // firefox
++                  "&::-webkit-scrollbar": {
++                    // webkit
++                    display: "none",
++                  },
++                }}
++                title={props.obj.name}
++              >
++                {props.obj.name}
++                <Show when={(props.obj as any).migration}>
++                  <span style={{ "font-size": "11px", "margin-left": "8px", opacity: 0.7 }}>
++                    {(props.obj as any).migration.state === "paused"
++                      ? String(currentLang()).startsWith("zh") ? "B2 同步已暂停" : "B2 sync paused"
++                      : `${String(currentLang()).startsWith("zh") ? "B2 同步" : "B2 syncing"} ${(props.obj as any).migration.processed}/${(props.obj as any).migration.discovered}`}
++                  </span>
++                </Show>
++                <Show when={(props.obj as any).migration?.state === "paused"}>
++                  <button type="button" on:click={async (event: MouseEvent) => {
++                    event.preventDefault()
++                    event.stopPropagation()
++                    const result: any = await r.post("/fs/rename/b2/resume", {
++                      path: (props.obj as any).migration.source_path,
++                    })
++                    if (result.code === 200) {
++                      notify.success(String(currentLang()).startsWith("zh") ? "B2 同步已继续" : "B2 sync resumed")
++                      refresh(undefined, true)
++                    } else notify.error(result.message)
++                  }}>
++                    {String(currentLang()).startsWith("zh") ? "继续" : "Resume"}
++                  </button>
++                </Show>
++              </Text>
++            }
+           >
+-            {props.obj.name}
+-          </Text>
++            <InlineRename obj={props.obj} />
++          </Show>
+         </HStack>
+         <Show
+           fallback={
+@@ -215,6 +258,7 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+           {formatDate(props.obj.modified)}
+         </Text>
+       </HStack>
+-    </Motion.div>
++      <RowActions obj={props.obj} index={props.index} />
++    </div>
+   )
+ }
+diff --git a/src/pages/home/folder/Search.tsx b/src/pages/home/folder/Search.tsx
+index b92ff0f..9a56b10 100644
+--- a/src/pages/home/folder/Search.tsx
++++ b/src/pages/home/folder/Search.tsx
+@@ -139,6 +139,8 @@ const SearchResult = (props: { node: SearchNode; keywords: string }) => {
+       px="$2"
+       as={LinkWithBase}
+       href={`${props.node.path}?from=search`}
++      target={props.node.is_dir ? undefined : "_blank"}
++      rel={props.node.is_dir ? undefined : "noopener noreferrer"}
+       // encode
+       onMouseEnter={() => {
+         setPathAs(props.node.path, props.node.is_dir)
+diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
+index 8f552da..6a35d8e 100644
+--- a/src/pages/home/header/Header.tsx
++++ b/src/pages/home/header/Header.tsx
+@@ -1,90 +1,136 @@
+ import {
+   HStack,
+-  useColorModeValue,
+-  Image,
+-  Center,
+   Icon,
+   Kbd,
+-  CenterProps,
++  Menu,
++  MenuContent,
++  MenuItem,
++  MenuTrigger,
+ } from "@hope-ui/solid"
+-import { changeColor } from "seemly"
+-import { Show, createMemo } from "solid-js"
+-import { getMainColor, getSetting, local, objStore, State } from "~/store"
+-import { BsSearch } from "solid-icons/bs"
+-import { CenterLoading } from "~/components"
++import { currentLang } from "~/app/i18n"
++import { Show } from "solid-js"
++import { getSetting, local, objStore, State, me, userCan } from "~/store"
++import {
++  BsSearch,
++  BsList,
++  BsPlusLg,
++  BsFolderPlus,
++  BsArrowUp,
++  BsArrowClockwise,
++} from "solid-icons/bs"
++import { useT, useRouter, usePath } from "~/hooks"
+ import { Container } from "../Container"
++import { DriveAccount, driveText } from "../DriveChrome"
++import { UserMethods } from "~/types"
+ import { bus } from "~/utils"
+-import { Layout } from "./layout"
+ import { isMac } from "~/utils/compatibility"
+ 
+ export const Header = () => {
+-  const logos = getSetting("logo").split("\n")
+-  const logo = useColorModeValue(logos[0], logos.pop())
+-
+-  const stickyProps = createMemo<CenterProps>(() => {
+-    switch (local["position_of_header_navbar"]) {
+-      case "sticky":
+-        return { position: "sticky", zIndex: "$sticky", top: 0 }
+-      default:
+-        return { position: undefined, zIndex: undefined, top: undefined }
+-    }
+-  })
+-
++  const t = useT()
++  const { to, isShare } = useRouter()
++  const { refresh } = usePath()
++  const canWrite = () =>
++    objStore.state === State.Folder &&
++    !isShare() &&
++    (userCan("write_content") || objStore.write_content_bypass) &&
++    objStore.write
+   return (
+-    <Center
+-      {...stickyProps}
+-      bgColor="$background"
+-      class="header"
+-      w="$full"
+-      // shadow="$md"
++    <header
++      class="header drive-header"
++      style={{
++        position:
++          local["position_of_header_navbar"] === "sticky"
++            ? "sticky"
++            : undefined,
++        top: "0",
++        "z-index": "100",
++      }}
+     >
+       <Container>
+-        <HStack
+-          px="calc(2% + 0.5rem)"
+-          py="$2"
+-          w="$full"
+-          justifyContent="space-between"
+-        >
+-          <HStack class="header-left" h="44px">
+-            <Image
+-              src={logo()!}
+-              h="$full"
+-              w="auto"
+-              fallback={<CenterLoading />}
+-            />
+-          </HStack>
+-          <HStack class="header-right" spacing="$2">
+-            <Show when={objStore.state === State.Folder}>
+-              <Show when={getSetting("search_index") !== "none"}>
+-                <HStack
+-                  bg="$neutral4"
+-                  w="$32"
+-                  p="$1"
+-                  rounded="$md"
+-                  justifyContent="space-between"
+-                  border="2px solid transparent"
+-                  cursor="pointer"
+-                  color={getMainColor()}
+-                  bgColor={changeColor(getMainColor(), { alpha: 0.15 })}
+-                  _hover={{
+-                    bgColor: changeColor(getMainColor(), { alpha: 0.2 }),
+-                  }}
+-                  onClick={() => {
+-                    bus.emit("tool", "search")
+-                  }}
++        <div class="drive-header-inner">
++          <div class="drive-mobile-nav">
++            <Menu placement="bottom-start">
++              <MenuTrigger
++                as="button"
++                class="drive-icon-button drive-menu-button"
++                aria-label={String(t("home.toolbar.more"))}
++              >
++                <Icon as={BsList} />
++              </MenuTrigger>
++              <MenuContent>
++                <Show when={!isShare()}>
++                  <MenuItem onSelect={() => to("/")}>
++                    {driveText("files")}
++                  </MenuItem>
++                </Show>
++                <MenuItem onSelect={() => refresh(undefined, true)}>
++                  <Icon as={BsArrowClockwise} />
++                  {t("home.toolbar.refresh")}
++                </MenuItem>
++                <MenuItem onSelect={() => bus.emit("tool", "local_settings")}>
++                  {t("home.toolbar.local_settings")}
++                </MenuItem>
++              </MenuContent>
++            </Menu>
++          </div>
++          <Show when={canWrite()}>
++            <div class="drive-mobile-create">
++              <Menu placement="bottom-start">
++                <MenuTrigger
++                  as="button"
++                  class="drive-button drive-create-button"
+                 >
+-                  <Icon as={BsSearch} />
+-                  <HStack>
+-                    {isMac ? <Kbd>Cmd</Kbd> : <Kbd>Ctrl</Kbd>}
+-                    <Kbd>K</Kbd>
+-                  </HStack>
+-                </HStack>
+-              </Show>
+-              <Layout />
+-            </Show>
+-          </HStack>
+-        </HStack>
++                  <Icon as={BsPlusLg} />
++                  <span>
++                    {String(currentLang()).startsWith("zh") ? "新建" : "New"}
++                  </span>
++                </MenuTrigger>
++                <MenuContent>
++                  <MenuItem onSelect={() => bus.emit("tool", "mkdir")}>
++                    <Icon as={BsFolderPlus} />
++                    {t("home.toolbar.mkdir")}
++                  </MenuItem>
++                  <MenuItem onSelect={() => bus.emit("tool", "upload")}>
++                    <Icon as={BsArrowUp} />
++                    {t("home.toolbar.upload")}
++                  </MenuItem>
++                </MenuContent>
++              </Menu>
++            </div>
++          </Show>
++          <Show
++            when={
++              objStore.state === State.Folder &&
++              getSetting("search_index") !== "none"
++            }
++          >
++            <button
++              aria-label={t("home.search.search")}
++              class="drive-search"
++              onClick={() => bus.emit("tool", "search")}
++            >
++              <Icon as={BsSearch} />
++              <span>{t("home.search.search")}</span>
++              <HStack class="drive-search-shortcut">
++                <Kbd>{isMac ? "Cmd" : "Ctrl"}</Kbd>
++                <Kbd>K</Kbd>
++              </HStack>
++            </button>
++          </Show>
++          <div class="drive-header-tools">
++            <DriveAccount />
++            <button
++              class="drive-mobile-account drive-avatar"
++              aria-label={`${me().username || "OpenList"} ${t(UserMethods.is_guest(me()) ? "login.login" : "home.footer.manage")}`}
++              onClick={() =>
++                to(UserMethods.is_guest(me()) ? "/@login" : "/@manage")
++              }
++            >
++              {(me().username || "O").slice(0, 1).toUpperCase()}
++            </button>
++          </div>
++        </div>
+       </Container>
+-    </Center>
++    </header>
+   )
+ }
+diff --git a/src/pages/home/header/layout.tsx b/src/pages/home/header/layout.tsx
+index 9dc6cdf..75d2a49 100644
+--- a/src/pages/home/header/layout.tsx
++++ b/src/pages/home/header/layout.tsx
+@@ -6,16 +6,18 @@ import {
+   MenuTrigger,
+ } from "@hope-ui/solid"
+ import { changeColor } from "seemly"
+-import { BsGridFill, BsCardImage } from "solid-icons/bs"
++import { BsGrid3x3Gap, BsGridFill, BsCardImage } from "solid-icons/bs"
+ import { FaSolidListUl } from "solid-icons/fa"
+ import { Switch, Match, For } from "solid-js"
+ import { Dynamic } from "solid-js/web"
+ import { useT } from "~/hooks"
++import { currentLang } from "~/app/i18n"
+ import { getMainColor, LayoutType, layout, setLayout } from "~/store"
+ 
+ const layouts = {
++  grid: BsGrid3x3Gap,
++  large_grid: BsGridFill,
+   list: FaSolidListUl,
+-  grid: BsGridFill,
+   image: BsCardImage,
+ } as const
+ 
+@@ -39,6 +41,9 @@ export const Layout = () => {
+               <FaSolidListUl />
+             </Match>
+             <Match when={layout() === "grid"}>
++              <BsGrid3x3Gap />
++            </Match>
++            <Match when={layout() === "large_grid"}>
+               <BsGridFill />
+             </Match>
+             <Match when={layout() === "image"}>
+@@ -47,7 +52,10 @@ export const Layout = () => {
+           </Switch>
+         }
+       ></MenuTrigger>
+-      <MenuContent>
++      <MenuContent class="drive-layout-menu">
++        <div class="drive-layout-label">
++          {String(currentLang()).startsWith("zh") ? "布局" : "Layout"}
++        </div>
+         <For each={Object.entries(layouts)}>
+           {(item) => (
+             <MenuItem
+@@ -56,7 +64,12 @@ export const Layout = () => {
+                 setLayout(item[0] as LayoutType)
+               }}
+             >
+-              {t(`home.layouts.${item[0]}`)}
++              <span class="drive-layout-choice">
++                <span>{layout() === item[0] ? "✓" : ""}</span>
++                {item[0] === "large_grid"
++                  ? String(currentLang()).startsWith("zh") ? "大型网格" : "Large grid"
++                  : t(`home.layouts.${item[0]}`)}
++              </span>
+             </MenuItem>
+           )}
+         </For>
+diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
+index e55e19b..d38471c 100644
+--- a/src/pages/home/toolbar/Toolbar.tsx
++++ b/src/pages/home/toolbar/Toolbar.tsx
+@@ -1,6 +1,4 @@
+ import { Portal } from "solid-js/web"
+-import { Center } from "./Center"
+-import { Right } from "./Right"
+ import { Copy, Move } from "./CopyMove"
+ import { Delete } from "./Delete"
+ import { Rename } from "./Rename"
+@@ -11,14 +9,11 @@ import { RemoveEmptyDirectory } from "./RemoveEmptyDirectory"
+ import { BatchRename } from "./BatchRename"
+ import { OfflineDownloadEnhanced } from "./OfflineDownloadEnhanced"
+ import { PackageDownloadModal } from "./Download"
+-import { lazy } from "solid-js"
+-import { ModalWrapper } from "./ModalWrapper"
+ import { LocalSettings } from "./LocalSettings"
+ import { BackTop } from "./BackTop"
+ import { Decompress } from "./Decompress"
+ import { Share } from "./Share"
+ 
+-const Upload = lazy(() => import("../uploads/Upload"))
+ 
+ export const Modal = () => {
+   return (
+@@ -36,9 +31,6 @@ export const Modal = () => {
+       <BatchRename />
+       <OfflineDownloadEnhanced />
+       <PackageDownloadModal />
+-      <ModalWrapper name="upload" title="home.toolbar.upload">
+-        <Upload />
+-      </ModalWrapper>
+       <LocalSettings />
+     </>
+   )
+@@ -47,8 +39,6 @@ export const Modal = () => {
+ export const Toolbar = () => {
+   return (
+     <Portal>
+-      <Right />
+-      <Center />
+       <Modal />
+       <BackTop />
+     </Portal>
+diff --git a/src/store/obj.ts b/src/store/obj.ts
+index cfcd500..d74c3e3 100644
+--- a/src/store/obj.ts
++++ b/src/store/obj.ts
+@@ -195,7 +195,7 @@ export const isIndeterminate = () => {
+ 
+ const selectedNum = createMemo(() => selectedObjs().length)
+ 
+-export type LayoutType = "list" | "grid" | "image"
++export type LayoutType = "list" | "grid" | "large_grid" | "image"
+ const [pathname, setPathname] = createSignal<string>(location.pathname)
+ const layoutRecord: Record<string, LayoutType> = (() => {
+   try {

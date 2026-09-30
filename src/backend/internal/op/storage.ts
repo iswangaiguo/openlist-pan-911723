@@ -58,6 +58,8 @@ import { MoPanDriver } from "../../drivers/mopan/driver"
 import { S3Driver, normalizeS3Addition } from "../../drivers/s3/driver"
 import {
   getB2RenameJob,
+  readB2RenameJob,
+  type B2RenameReadContext,
   isB2Storage,
   b2ReadPaths,
   b2OverlayNames,
@@ -152,7 +154,8 @@ function setDriverCache(key: string, driver: StorageDriver): void {
   driverCache.set(key, driver)
 }
 
-export interface StorageRequestContext extends DirectoryCacheContext {
+export interface StorageRequestContext
+  extends DirectoryCacheContext, B2RenameReadContext {
   waitUntil?: (promise: Promise<unknown>) => void
   env?: any // ESA/Cloudflare env，用于请求级缓存复用
 }
@@ -1370,9 +1373,7 @@ export async function listItems(
     driverName = resolved.storage.driver
     try {
       const driver = await getDriver(driverName, resolved.storage)
-      const renameJob = isB2Storage(resolved.storage)
-        ? await getB2RenameJob(requestContext?.env, resolved.storage.id)
-        : null
+      const renameJob = await readB2RenameJob(resolved.storage, requestContext)
       // Get raw items from driver
       try {
         const paths = b2ReadPaths(renameJob, virtualPath, resolved.physical!)
@@ -1574,9 +1575,7 @@ export async function getItem(
 
   const driverName = resolved.storage ? resolved.storage.driver : "Local"
   const driver = await getDriver(driverName, resolved.storage)
-  const renameJob = isB2Storage(resolved.storage)
-    ? await getB2RenameJob(requestContext?.env, resolved.storage.id)
-    : null
+  const renameJob = await readB2RenameJob(resolved.storage, requestContext)
   let item: FileItem
   try {
     const paths = b2ReadPaths(renameJob, virtualPath, resolved.physical!)
