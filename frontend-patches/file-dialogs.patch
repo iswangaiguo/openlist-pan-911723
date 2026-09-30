@@ -1,0 +1,866 @@
+diff --git a/src/components/DriveDialog.tsx b/src/components/DriveDialog.tsx
+new file mode 100644
+index 0000000..f38b2cc
+--- /dev/null
++++ b/src/components/DriveDialog.tsx
+@@ -0,0 +1,65 @@
++import {
++  Button as HopeButton,
++  Modal as HopeModal,
++  ModalContent as HopeModalContent,
++  ModalOverlay as HopeModalOverlay,
++  useColorMode,
++} from "@hope-ui/solid"
++import { ComponentProps, createContext, JSX, useContext } from "solid-js"
++import "./drive-dialog.css"
++
++// Solid context follows both toolbar and nested folder-picker portals.
++// Shared inputs keep their original appearance outside the file browser.
++const DriveDialogContext = createContext(false)
++
++export const DriveDialogScope = (props: { children: JSX.Element }) => (
++  <DriveDialogContext.Provider value={true}>
++    {props.children}
++  </DriveDialogContext.Provider>
++)
++
++export const useDriveDialog = () => useContext(DriveDialogContext)
++
++export const Modal = (props: ComponentProps<typeof HopeModal>) => {
++  const drive = useDriveDialog()
++  return <HopeModal {...props} centered={drive ? true : props.centered} />
++}
++
++export const ModalContent = (
++  props: ComponentProps<typeof HopeModalContent>,
++) => {
++  const drive = useDriveDialog()
++  const { colorMode } = useColorMode()
++  return (
++    <HopeModalContent
++      {...props}
++      class={[props.class, drive && "drive-dialog"].filter(Boolean).join(" ")}
++      data-drive-mode={drive ? colorMode() : undefined}
++    />
++  )
++}
++
++export const ModalOverlay = (
++  props: ComponentProps<typeof HopeModalOverlay>,
++) => {
++  const drive = useDriveDialog()
++  return (
++    <HopeModalOverlay
++      {...props}
++      class={[props.class, drive && "drive-dialog-overlay"]
++        .filter(Boolean)
++        .join(" ")}
++    />
++  )
++}
++
++export const Button = (props: ComponentProps<typeof HopeButton>) => {
++  const drive = useDriveDialog()
++  return (
++    <HopeButton
++      {...props}
++      data-drive-tone={drive ? props.colorScheme || "info" : undefined}
++      data-drive-variant={drive ? props.variant : undefined}
++    />
++  )
++}
+diff --git a/src/components/FolderTree.tsx b/src/components/FolderTree.tsx
+index 915605e..d57ca15 100644
+--- a/src/components/FolderTree.tsx
++++ b/src/components/FolderTree.tsx
+@@ -1,17 +1,20 @@
+ import {
+-  Box,
++  Modal,
+   Button,
++  ModalContent,
++  ModalOverlay,
++  useDriveDialog,
++} from "~/components/DriveDialog"
++import {
++  Box,
+   createDisclosure,
+   HStack,
+   Icon,
+   Input,
+-  Modal,
+   ModalBody,
+   ModalCloseButton,
+-  ModalContent,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+   Spinner,
+   Text,
+   VStack,
+@@ -160,7 +163,7 @@ const FolderTreeNode = (props: { path: string }) => {
+   return (
+     <Show when={showHiddenFolder || !isHiddenFolder()}>
+       <Box>
+-        <HStack spacing="$2">
++        <HStack class="drive-folder-row" data-selected={active()} spacing="$2">
+           <Show
+             when={!loading()}
+             fallback={<Spinner size="sm" color={getMainColor()} />}
+@@ -348,6 +351,7 @@ export type ModalFolderChooseProps = {
+   header: string
+ }
+ export const ModalFolderChoose = (props: ModalFolderChooseProps) => {
++  const drive = useDriveDialog()
+   const t = useT()
+   const [value, setValue] = createSignal("/")
+   const [handler, setHandler] = createSignal<FolderTreeHandler>()
+@@ -370,7 +374,7 @@ export const ModalFolderChoose = (props: ModalFolderChooseProps) => {
+       onClose={props.onClose}
+     >
+       <ModalOverlay />
+-      <ModalContent>
++      <ModalContent data-drive-size="folder">
+         {/* <ModalCloseButton /> */}
+         <ModalHeader w="$full" css={{ overflowWrap: "break-word" }}>
+           <HStack w="$full" justifyContent="space-between" alignItems="center">
+@@ -382,6 +386,15 @@ export const ModalFolderChoose = (props: ModalFolderChooseProps) => {
+         </ModalHeader>
+         <ModalBody>
+           {props.children}
++          <Show when={drive}>
++            <div
++              class="drive-folder-path"
++              aria-label={t("global.choose_folder")}
++              title={value()}
++            >
++              {value()}
++            </div>
++          </Show>
+           <FolderTree
+             onChange={setValue}
+             handle={(h) => setHandler(h)}
+@@ -389,6 +402,7 @@ export const ModalFolderChoose = (props: ModalFolderChooseProps) => {
+           />
+         </ModalBody>
+         <ModalFooter
++          class="drive-folder-footer"
+           display="flex"
+           w="$full"
+           gap="$4"
+@@ -396,9 +410,11 @@ export const ModalFolderChoose = (props: ModalFolderChooseProps) => {
+           justifyContent="flex-end"
+         >
+           <Show when={props.footerSlot}>
+-            <Box mr="auto">{props.footerSlot}</Box>
++            <Box class="drive-folder-options" mr="auto">
++              {props.footerSlot}
++            </Box>
+           </Show>
+-          <HStack spacing="$2">
++          <HStack class="drive-folder-buttons" spacing="$2">
+             <Button onClick={props.onClose} colorScheme="neutral">
+               {t("global.cancel")}
+             </Button>
+diff --git a/src/components/ModalInput.tsx b/src/components/ModalInput.tsx
+index fd6ede9..5d1ba90 100644
+--- a/src/components/ModalInput.tsx
++++ b/src/components/ModalInput.tsx
+@@ -2,10 +2,12 @@ import {
+   Modal,
+   ModalOverlay,
+   ModalContent,
++  Button,
++} from "~/components/DriveDialog"
++import {
+   ModalHeader,
+   ModalBody,
+   ModalFooter,
+-  Button,
+   Input,
+   Textarea,
+   FormHelperText,
+diff --git a/src/components/drive-dialog.css b/src/components/drive-dialog.css
+new file mode 100644
+index 0000000..d9e3bd8
+--- /dev/null
++++ b/src/components/drive-dialog.css
+@@ -0,0 +1,318 @@
++/* File-action dialogs are portaled outside .drive-shell. */
++.drive-dialog.hope-modal__content {
++  --drive-bg: #fff;
++  --drive-text: #1e1919;
++  --drive-muted: #706b67;
++  --drive-line: #e8e6e3;
++  --drive-hover: #f7f8fa;
++  --drive-blue: #0061ff;
++  --drive-selected: #eaf1ff;
++  --drive-dialog-width: 560px;
++  color-scheme: light;
++  width: calc(100vw - 32px);
++  max-width: var(--drive-dialog-width);
++  max-height: calc(100dvh - 48px);
++  margin-block: 24px;
++  display: flex;
++  flex-direction: column;
++  overflow: hidden;
++  border: 1px solid var(--drive-line);
++  border-radius: 12px;
++  background: var(--drive-bg);
++  color: var(--drive-text);
++  box-shadow: 0 20px 64px rgb(30 25 25 / 20%);
++  font-size: 14px;
++  line-height: 1.5;
++}
++.drive-dialog[data-drive-mode="dark"] {
++  --drive-bg: #181a1e;
++  --drive-text: #f1f1f1;
++  --drive-muted: #adafb5;
++  --drive-line: #34373e;
++  --drive-hover: #24272e;
++  --drive-blue: #79abff;
++  --drive-selected: #183354;
++  color-scheme: dark;
++}
++.drive-dialog[data-drive-size="folder"] {
++  --drive-dialog-width: 640px;
++}
++.drive-dialog[data-drive-size="wide"] {
++  --drive-dialog-width: 800px;
++}
++.drive-dialog-overlay.hope-modal__overlay {
++  background: rgb(30 25 25 / 42%);
++  backdrop-filter: blur(2px);
++}
++.drive-dialog .hope-modal__header {
++  flex-shrink: 0;
++  padding: 24px 28px 20px;
++  border-bottom: 1px solid var(--drive-line);
++  color: var(--drive-text);
++  font-size: 21px;
++  font-weight: 600;
++  line-height: 1.35;
++  overflow-wrap: anywhere;
++}
++.drive-dialog .hope-modal__body {
++  min-height: 0;
++  padding: 24px 28px;
++  overflow-y: auto;
++  overscroll-behavior: contain;
++}
++.drive-dialog .hope-modal__footer {
++  flex-shrink: 0;
++  display: flex;
++  flex-wrap: wrap;
++  justify-content: flex-end;
++  gap: 10px;
++  padding: 20px 28px;
++  border-top: 1px solid var(--drive-line);
++  background: var(--drive-bg);
++}
++.drive-dialog .hope-modal__close-button {
++  top: 20px;
++  right: 20px;
++  border-radius: 4px;
++  color: var(--drive-muted);
++}
++.drive-dialog .hope-modal__close-button:hover {
++  background: var(--drive-hover);
++  color: var(--drive-text);
++}
++.drive-dialog .hope-button {
++  min-height: 36px;
++  border-radius: 4px;
++  font-size: 14px;
++  font-weight: 600;
++}
++.drive-dialog .hope-button[data-drive-tone] {
++  padding-inline: 16px;
++  border: 1px solid transparent;
++  background: #0061ff;
++  color: #fff;
++}
++.drive-dialog .hope-button[data-drive-tone]:hover:not(:disabled) {
++  background: #0052d9;
++}
++.drive-dialog .hope-button[data-drive-tone="neutral"],
++.drive-dialog .hope-button[data-drive-variant="outline"],
++.drive-dialog .hope-button[data-drive-variant="ghost"] {
++  border-color: var(--drive-line);
++  background: var(--drive-bg);
++  color: var(--drive-text);
++}
++.drive-dialog .hope-button[data-drive-tone="neutral"]:hover:not(:disabled),
++.drive-dialog .hope-button[data-drive-variant="outline"]:hover:not(:disabled),
++.drive-dialog .hope-button[data-drive-variant="ghost"]:hover:not(:disabled) {
++  background: var(--drive-hover);
++}
++.drive-dialog .hope-button[data-drive-tone="danger"] {
++  background: #c92a2a;
++}
++.drive-dialog .hope-button[data-drive-tone="danger"]:hover:not(:disabled) {
++  background: #ad2020;
++}
++.drive-dialog .hope-button:disabled {
++  opacity: 0.5;
++  cursor: not-allowed;
++}
++.drive-dialog :is(button, input, textarea, [tabindex]):focus-visible {
++  outline: 2px solid var(--drive-blue);
++  outline-offset: 3px;
++}
++.drive-dialog
++  :is(.hope-input, .hope-textarea, .hope-select__trigger, .drive-share-input) {
++  min-height: 40px;
++  padding: 9px 12px;
++  border: 1px solid var(--drive-line);
++  border-radius: 4px;
++  background: var(--drive-bg);
++  color: var(--drive-text);
++  font-size: 14px;
++}
++.drive-dialog
++  :is(
++    .hope-input,
++    .hope-textarea,
++    .hope-select__trigger,
++    .drive-share-input
++  ):focus {
++  border-color: var(--drive-blue);
++}
++.drive-dialog :is(.hope-input, .hope-textarea)[aria-invalid="true"] {
++  border-color: #c92a2a;
++}
++.drive-dialog :is(.hope-input, .hope-textarea)::placeholder {
++  color: var(--drive-muted);
++}
++.drive-dialog
++  :is(.hope-checkbox__label, .hope-radio__label, .hope-form-helper-text) {
++  font-size: 13px;
++}
++.drive-dialog :is(.hope-checkbox__control, .hope-radio__control)[data-checked] {
++  background: #0061ff;
++  border-color: #0061ff;
++  color: #fff;
++}
++.drive-dialog .drive-folder-path {
++  display: block;
++  margin-bottom: 16px;
++  padding: 10px 12px;
++  border: 1px solid var(--drive-line);
++  border-radius: 4px;
++  background: var(--drive-hover);
++  color: var(--drive-muted);
++  overflow-wrap: anywhere;
++  font-size: 13px;
++}
++.drive-dialog .folder-tree-box {
++  min-height: 180px;
++  max-height: 300px;
++  padding: 8px;
++  border: 1px solid var(--drive-line);
++  border-radius: 4px;
++  overflow: auto;
++}
++.drive-dialog .drive-folder-row {
++  min-height: 36px;
++  padding-inline: 8px;
++  border-radius: 4px;
++}
++.drive-dialog .drive-folder-row:hover {
++  background: var(--drive-hover);
++}
++.drive-dialog .drive-folder-row[data-selected="true"] {
++  background: var(--drive-selected);
++  color: var(--drive-blue);
++}
++.drive-dialog .drive-folder-row .hope-text,
++.drive-dialog .drive-folder-row .hope-text:hover {
++  padding-block: 4px;
++  background: transparent;
++  color: inherit;
++  font-size: 14px;
++}
++.drive-dialog .drive-folder-row .hope-icon {
++  color: var(--drive-blue);
++}
++.drive-dialog .drive-folder-footer {
++  align-items: stretch;
++}
++.drive-dialog .drive-folder-options {
++  flex-basis: 100%;
++  margin: 0 0 6px;
++  padding-bottom: 16px;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-dialog .drive-folder-buttons {
++  margin-left: auto;
++}
++.drive-dialog .drive-share-target {
++  display: flex;
++  align-items: center;
++  gap: 14px;
++  min-width: 0;
++  padding-bottom: 24px;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-dialog .drive-share-target-icon {
++  display: grid;
++  place-items: center;
++  width: 42px;
++  height: 42px;
++  flex: 0 0 42px;
++  color: var(--drive-blue);
++  background: var(--drive-selected);
++  border-radius: 4px;
++  font-size: 24px;
++}
++.drive-dialog .drive-share-target > div {
++  display: flex;
++  flex-direction: column;
++  min-width: 0;
++  gap: 3px;
++}
++.drive-dialog .drive-share-target strong {
++  overflow: hidden;
++  white-space: nowrap;
++  text-overflow: ellipsis;
++  font-size: 15px;
++}
++.drive-dialog
++  :is(
++    .drive-share-target span:last-child,
++    .drive-share-setting span,
++    .drive-share-result p
++  ) {
++  color: var(--drive-muted);
++  font-size: 13px;
++}
++.drive-dialog .drive-share-section-title {
++  font-size: 14px;
++  font-weight: 600;
++  margin: 22px 0 4px;
++}
++.drive-dialog .drive-share-setting {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++  min-height: 68px;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-dialog .drive-share-setting > div {
++  display: flex;
++  flex-direction: column;
++  gap: 3px;
++}
++.drive-dialog .drive-share-setting strong {
++  font-size: 14px;
++  font-weight: 550;
++}
++.drive-dialog .drive-share-setting input[type="checkbox"] {
++  width: 19px;
++  height: 19px;
++  accent-color: #0061ff;
++  cursor: pointer;
++  flex: none;
++}
++.drive-dialog .drive-share-input {
++  width: 100%;
++  margin: 10px 0;
++}
++.drive-dialog .drive-share-setting + input:not([type="checkbox"]) {
++  margin-top: 10px;
++}
++.drive-dialog .drive-share-result {
++  padding: 24px 0 4px;
++}
++.drive-dialog .drive-share-result label {
++  display: block;
++  margin-bottom: 9px;
++  font-weight: 600;
++}
++.drive-dialog .drive-share-result p {
++  margin: 10px 0 0;
++}
++@media (max-width: 600px) {
++  .drive-dialog.hope-modal__content {
++    width: calc(100vw - 24px);
++    max-height: calc(100dvh - 24px);
++    margin-block: 12px;
++  }
++  .drive-dialog .hope-modal__header {
++    padding: 20px;
++    font-size: 19px;
++  }
++  .drive-dialog .hope-modal__body {
++    padding: 20px;
++  }
++  .drive-dialog .hope-modal__footer {
++    padding: 16px 20px;
++  }
++  .drive-dialog .hope-modal__header > .hope-stack {
++    flex-wrap: wrap;
++    gap: 12px;
++  }
++}
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index adbd207..c527b1c 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -922,63 +922,3 @@
+ }
+ 
+ .drive-rename-progress { position: absolute; top: calc(100% + 2px); left: 0; z-index: 2; background: var(--drive-bg); color: var(--drive-muted); font-size: 12px; padding: 2px 6px; border-radius: 4px; }
+-
+-/* Share links use the same restrained settings layout as the file browser. */
+-.drive-share-dialog {
+-  border-radius: 22px;
+-  overflow: hidden;
+-  max-width: min(520px, calc(100vw - 24px));
+-}
+-.drive-share-heading {
+-  font-size: 22px;
+-  font-weight: 650;
+-  padding: 28px 30px 12px;
+-}
+-.drive-share-body { padding: 8px 30px 20px; }
+-.drive-share-target {
+-  display: flex;
+-  align-items: center;
+-  gap: 14px;
+-  min-width: 0;
+-  padding: 14px 0 24px;
+-  border-bottom: 1px solid rgba(128, 128, 128, .24);
+-}
+-.drive-share-target-icon {
+-  display: grid;
+-  place-items: center;
+-  width: 42px;
+-  height: 42px;
+-  flex: 0 0 42px;
+-  border-radius: 9px;
+-  color: #0061ff;
+-  background: #eaf1ff;
+-  font-size: 24px;
+-}
+-.drive-share-target > div { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
+-.drive-share-target strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 15px; }
+-.drive-share-target span:last-child,
+-.drive-share-setting span,
+-.drive-share-result p { color: #75716e; font-size: 13px; }
+-.drive-share-section-title { font-size: 14px; font-weight: 650; margin: 22px 0 4px; }
+-.drive-share-setting {
+-  display: flex;
+-  align-items: center;
+-  justify-content: space-between;
+-  gap: 16px;
+-  min-height: 68px;
+-  border-bottom: 1px solid rgba(128, 128, 128, .2);
+-}
+-.drive-share-setting > div { display: flex; flex-direction: column; gap: 3px; }
+-.drive-share-setting strong { font-size: 14px; font-weight: 550; }
+-.drive-share-setting input[type="checkbox"] { width: 19px; height: 19px; accent-color: #0061ff; cursor: pointer; flex: none; }
+-.drive-share-input { width: 100%; margin: 10px 0; padding: 10px 12px; border: 1px solid rgba(128,128,128,.4); border-radius: 7px; color: inherit; background: transparent; }
+-.drive-share-setting + input:not([type="checkbox"]) { margin-top: 10px; }
+-.drive-share-result { padding: 24px 0 4px; }
+-.drive-share-result label { display: block; margin-bottom: 9px; font-weight: 600; }
+-.drive-share-result p { margin: 10px 0 0; }
+-.drive-share-footer { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 30px 28px; }
+-@media (max-width: 600px) {
+-  .drive-share-heading { padding: 22px 20px 10px; }
+-  .drive-share-body { padding: 8px 20px 16px; }
+-  .drive-share-footer { padding: 12px 20px 22px; }
+-}
+diff --git a/src/pages/home/toolbar/BatchRename.tsx b/src/pages/home/toolbar/BatchRename.tsx
+index 31b8682..8216308 100644
+--- a/src/pages/home/toolbar/BatchRename.tsx
++++ b/src/pages/home/toolbar/BatchRename.tsx
+@@ -1,13 +1,15 @@
+ import {
++  Modal,
+   Button,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import {
+   createDisclosure,
+   HStack,
+-  Modal,
+   ModalBody,
+-  ModalContent,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+   Text,
+   VStack,
+   Radio,
+@@ -246,7 +248,7 @@ export const BatchRename = () => {
+         }}
+       >
+         <ModalOverlay />
+-        <ModalContent>
++        <ModalContent data-drive-size="wide">
+           {/* <ModalCloseButton /> */}
+           <ModalHeader>{t("home.toolbar.batch_rename")}</ModalHeader>
+           <ModalBody>
+@@ -379,7 +381,7 @@ export const BatchRename = () => {
+         onClose={closePreviewModal}
+       >
+         <ModalOverlay />
+-        <ModalContent>
++        <ModalContent data-drive-size="wide">
+           <ModalHeader>{t("home.toolbar.regex_rename_preview")}</ModalHeader>
+           <ModalBody>
+             <VStack class="list" w="$full" spacing="$1">
+diff --git a/src/pages/home/toolbar/CopyMove.tsx b/src/pages/home/toolbar/CopyMove.tsx
+index 771e76c..5afb8ac 100644
+--- a/src/pages/home/toolbar/CopyMove.tsx
++++ b/src/pages/home/toolbar/CopyMove.tsx
+@@ -1,4 +1,5 @@
+-import { Checkbox, createDisclosure, VStack, Button } from "@hope-ui/solid"
++import { Button } from "~/components/DriveDialog"
++import { Checkbox, createDisclosure, VStack } from "@hope-ui/solid"
+ import { createSignal, onCleanup } from "solid-js"
+ import { ModalFolderChoose, FolderTreeHandler } from "~/components"
+ import { useFetch, usePath, useRouter, useT } from "~/hooks"
+@@ -13,6 +14,7 @@ export const CreateFolderButton = (props: { handler?: FolderTreeHandler }) => {
+   const t = useT()
+   return (
+     <Button
++      colorScheme="neutral"
+       leftIcon={<CgFolderAdd />}
+       size="sm"
+       onClick={() => props.handler?.startCreateFolder()}
+diff --git a/src/pages/home/toolbar/Delete.tsx b/src/pages/home/toolbar/Delete.tsx
+index 6666dca..316a76f 100644
+--- a/src/pages/home/toolbar/Delete.tsx
++++ b/src/pages/home/toolbar/Delete.tsx
+@@ -2,10 +2,12 @@ import {
+   Modal,
+   ModalOverlay,
+   ModalContent,
++  Button,
++} from "~/components/DriveDialog"
++import {
+   ModalHeader,
+   ModalBody,
+   ModalFooter,
+-  Button,
+   createDisclosure,
+ } from "@hope-ui/solid"
+ import { onCleanup } from "solid-js"
+diff --git a/src/pages/home/toolbar/Download.tsx b/src/pages/home/toolbar/Download.tsx
+index 745b2a6..b6cf77a 100644
+--- a/src/pages/home/toolbar/Download.tsx
++++ b/src/pages/home/toolbar/Download.tsx
+@@ -1,15 +1,17 @@
++import {
++  Modal,
++  Button,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
+ import {
+   Menu,
+   MenuTrigger,
+   MenuContent,
+   MenuItem,
+-  Button,
+-  Modal,
+   ModalBody,
+-  ModalContent,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+   createDisclosure,
+ } from "@hope-ui/solid"
+ import { createSignal, lazy, onCleanup, Show, Suspense } from "solid-js"
+diff --git a/src/pages/home/toolbar/ModalWrapper.tsx b/src/pages/home/toolbar/ModalWrapper.tsx
+index 19b91ef..7816eb3 100644
+--- a/src/pages/home/toolbar/ModalWrapper.tsx
++++ b/src/pages/home/toolbar/ModalWrapper.tsx
+@@ -1,9 +1,7 @@
++import { Modal, ModalContent, ModalOverlay } from "~/components/DriveDialog"
+ import {
+-  Modal,
+-  ModalContent,
+   ModalHeader,
+   ModalBody,
+-  ModalOverlay,
+   createDisclosure,
+   ModalCloseButton,
+ } from "@hope-ui/solid"
+diff --git a/src/pages/home/toolbar/OfflineDownloadEnhanced.tsx b/src/pages/home/toolbar/OfflineDownloadEnhanced.tsx
+index c333362..655d46d 100644
+--- a/src/pages/home/toolbar/OfflineDownloadEnhanced.tsx
++++ b/src/pages/home/toolbar/OfflineDownloadEnhanced.tsx
+@@ -2,10 +2,12 @@ import {
+   Modal,
+   ModalOverlay,
+   ModalContent,
++  Button,
++} from "~/components/DriveDialog"
++import {
+   ModalHeader,
+   ModalBody,
+   ModalFooter,
+-  Button,
+   Textarea,
+   Box,
+   HStack,
+@@ -526,6 +528,7 @@ export const OfflineDownloadEnhanced = () => {
+     >
+       <ModalOverlay />
+       <ModalContent
++        data-drive-size="wide"
+         onDragOver={(e: DragEvent) => {
+           e.preventDefault()
+           e.stopPropagation()
+diff --git a/src/pages/home/toolbar/PackageDownload.tsx b/src/pages/home/toolbar/PackageDownload.tsx
+index d2ba4fb..6795f0f 100644
+--- a/src/pages/home/toolbar/PackageDownload.tsx
++++ b/src/pages/home/toolbar/PackageDownload.tsx
+@@ -1,17 +1,11 @@
++import { Button } from "~/components/DriveDialog"
+ import "~/utils/zip-stream.js"
+ import streamSaver from "streamsaver"
+ import { getLinkByDirAndObj, useRouter, useT } from "~/hooks"
+ import { fsList, joinBase, pathBase, pathJoin } from "~/utils"
+ import { password, selectedObjs as _selectedObjs } from "~/store"
+ import { createSignal, For, Show } from "solid-js"
+-import {
+-  Button,
+-  Heading,
+-  ModalBody,
+-  ModalFooter,
+-  Text,
+-  VStack,
+-} from "@hope-ui/solid"
++import { Heading, ModalBody, ModalFooter, Text, VStack } from "@hope-ui/solid"
+ import { Obj } from "~/types"
+ 
+ streamSaver.mitm = joinBase("streamer", "mitm.html")
+diff --git a/src/pages/home/toolbar/RecursiveMove.tsx b/src/pages/home/toolbar/RecursiveMove.tsx
+index 5a880e2..2389caa 100644
+--- a/src/pages/home/toolbar/RecursiveMove.tsx
++++ b/src/pages/home/toolbar/RecursiveMove.tsx
+@@ -1,13 +1,15 @@
+ import {
++  Modal,
+   Button,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import {
+   createDisclosure,
+   HStack,
+-  Modal,
+   ModalBody,
+-  ModalContent,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+   SimpleOption,
+   SimpleSelect,
+ } from "@hope-ui/solid"
+diff --git a/src/pages/home/toolbar/RemoveEmptyDirectory.tsx b/src/pages/home/toolbar/RemoveEmptyDirectory.tsx
+index 82bc3ce..0c4a6c2 100644
+--- a/src/pages/home/toolbar/RemoveEmptyDirectory.tsx
++++ b/src/pages/home/toolbar/RemoveEmptyDirectory.tsx
+@@ -1,11 +1,13 @@
+ import {
+-  Button,
+   Modal,
+-  ModalBody,
++  Button,
+   ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import {
++  ModalBody,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+   createDisclosure,
+ } from "@hope-ui/solid"
+ import { useFetch, usePath, useRouter, useT } from "~/hooks"
+diff --git a/src/pages/home/toolbar/Share.tsx b/src/pages/home/toolbar/Share.tsx
+index 14b0d34..580dd8f 100644
+--- a/src/pages/home/toolbar/Share.tsx
++++ b/src/pages/home/toolbar/Share.tsx
+@@ -1,16 +1,18 @@
++import {
++  Modal,
++  ModalContent,
++  ModalOverlay,
++  Button,
++} from "~/components/DriveDialog"
+ import { useRouter, useT, useUtil } from "~/hooks"
+ import { bus, handleResp, joinBase, notify, r } from "~/utils"
+ import { batch, createSignal, onCleanup, Show } from "solid-js"
+ import {
+-  Button,
+   createDisclosure,
+   Input,
+-  Modal,
+   ModalBody,
+-  ModalContent,
+   ModalFooter,
+   ModalHeader,
+-  ModalOverlay,
+ } from "@hope-ui/solid"
+ import { Resp, ShareInfo } from "~/types"
+ import { me, selectedObjs } from "~/store"
+@@ -128,11 +130,9 @@ export const Share = () => {
+       size="md"
+     >
+       <ModalOverlay />
+-      <ModalContent class="drive-share-dialog">
+-        <ModalHeader class="drive-share-heading">
+-          {t("home.toolbar.share")}
+-        </ModalHeader>
+-        <ModalBody class="drive-share-body">
++      <ModalContent>
++        <ModalHeader>{t("home.toolbar.share")}</ModalHeader>
++        <ModalBody>
+           <div class="drive-share-target" title={names().join(", ")}>
+             <span class="drive-share-target-icon" aria-hidden="true">
+               ↗
+@@ -228,7 +228,7 @@ export const Share = () => {
+             </Show>
+           </Show>
+         </ModalBody>
+-        <ModalFooter class="drive-share-footer">
++        <ModalFooter>
+           <Button colorScheme="neutral" onClick={onClose}>
+             {link() ? t("global.confirm") : t("global.cancel")}
+           </Button>
+diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
+index d38471c..7b188d1 100644
+--- a/src/pages/home/toolbar/Toolbar.tsx
++++ b/src/pages/home/toolbar/Toolbar.tsx
+@@ -1,3 +1,4 @@
++import { DriveDialogScope } from "~/components/DriveDialog"
+ import { Portal } from "solid-js/web"
+ import { Copy, Move } from "./CopyMove"
+ import { Delete } from "./Delete"
+@@ -14,7 +15,6 @@ import { BackTop } from "./BackTop"
+ import { Decompress } from "./Decompress"
+ import { Share } from "./Share"
+ 
+-
+ export const Modal = () => {
+   return (
+     <>
+@@ -39,7 +39,9 @@ export const Modal = () => {
+ export const Toolbar = () => {
+   return (
+     <Portal>
+-      <Modal />
++      <DriveDialogScope>
++        <Modal />
++      </DriveDialogScope>
+       <BackTop />
+     </Portal>
+   )
