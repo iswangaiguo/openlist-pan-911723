@@ -6,7 +6,9 @@
   "workers_dev": false,
   "keep_vars": true,
   "preview_urls": false,
-  "triggers": { "crons": ["* * * * *"] },
+  // Preserve existing Cron schedules during routine deployments. Register the
+  // one-minute rename trigger separately after ensuring account quota is free.
+  // Do not use crons: [] here: that would delete the existing schedules.
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
