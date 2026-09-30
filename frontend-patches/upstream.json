@@ -13,6 +13,7 @@
     "module-recovery.patch",
     "video-buffer.patch",
     "video-recovery.patch",
-    "pdf-range.patch"
+    "pdf-range.patch",
+    "file-type-icons.patch"
   ]
 }
