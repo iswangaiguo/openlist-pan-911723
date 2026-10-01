@@ -29,6 +29,15 @@ try {
   const { PDFViewerApplication: app } = await import("./viewer.mjs")
   await app.initializedPromise
   cleanup()
+  const { installPdfPrintPreparation } = await import("./openlist-print.mjs")
+  const cleanupPrint = installPdfPrintPreparation(app)
+  window.addEventListener("pagehide", cleanupPrint, { once: true })
+  const printAfterOpen = query.get("openlistPrint") === "1"
+  if (printAfterOpen) {
+    const viewerUrl = new URL(location.href)
+    viewerUrl.searchParams.delete("openlistPrint")
+    history.replaceState(null, "", viewerUrl.href)
+  }
   let opened = false
   window.addEventListener("message", (event) => {
     if (event.origin !== origin || event.source !== parent) return
@@ -55,6 +64,11 @@ try {
     // generic demo's ?file= origin restriction does not apply to this embed.
     app
       .open({ url: url.href, originalUrl: event.data.filename || url.href })
+      .then(async () => {
+        if (!printAfterOpen) return
+        await app.pdfViewer.pagesPromise
+        await app.triggerPrinting()
+      })
       .catch(() => send("openlist:pdf:error"))
   })
   send("openlist:pdf:ready")

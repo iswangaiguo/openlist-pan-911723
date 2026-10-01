@@ -19,6 +19,7 @@ async function harness({
   failBoot = false,
   failOpen = false,
   cancelBoot = false,
+  autoPrint = false,
 } = {}) {
   const documentEvents = new Map(),
     messages = [],
@@ -26,6 +27,9 @@ async function harness({
     options = {}
   let receive
   let pagehide
+  let printInstalled = 0
+  let prints = 0
+  const historyUrls = []
   const document = { documentElement: { style: {} } }
   const parent = {
     document: {
@@ -47,6 +51,8 @@ async function harness({
   }
   const app = {
     initializedPromise: Promise.resolve(),
+    pdfViewer: { pagesPromise: Promise.resolve() },
+    triggerPrinting: async () => prints++,
     open: async (args) => {
       opens.push(args)
       if (failOpen) throw new Error("bad PDF")
@@ -58,10 +64,19 @@ async function harness({
     document,
     location: {
       origin: "https://drive.example",
-      search: "?locale=zh-CN&theme=dark",
+      search: `?locale=zh-CN&theme=dark${autoPrint ? "&openlistPrint=1" : ""}`,
+      href: "https://drive.example/static/pdfjs/web/viewer.html?locale=zh-CN&theme=dark&openlistPrint=1",
     },
+    history: { replaceState: (_state, _title, url) => historyUrls.push(url) },
     URL,
     URLSearchParams,
+    loadPrint: async () => ({
+      installPdfPrintPreparation: (viewer) => {
+        assert.equal(viewer, app)
+        printInstalled++
+        return () => printInstalled--
+      },
+    }),
     loadViewer: async () => {
       if (cancelBoot) {
         pagehide()
@@ -83,7 +98,9 @@ async function harness({
     },
   })
   await vm.runInContext(
-    `(async () => {${source.replace('import("./viewer.mjs")', "loadViewer()")}})()`,
+    `(async () => {${source
+      .replace('import("./viewer.mjs")', "loadViewer()")
+      .replace('import("./openlist-print.mjs")', "loadPrint()")}})()`,
     context,
   )
   return {
@@ -94,14 +111,17 @@ async function harness({
     window,
     parent,
     documentEvents,
+    printInstalled: () => printInstalled,
+    pagehide: () => pagehide?.(),
+    prints: () => prints,
+    historyUrls,
     message: async (
       data,
       origin = "https://drive.example",
       sender = parent,
     ) => {
       receive?.({ data, origin, source: sender })
-      await Promise.resolve()
-      await Promise.resolve()
+      await new Promise(setImmediate)
     },
   }
 }
@@ -117,6 +137,28 @@ test("viewer initializes lazy loading, locale and theme before accepting a file"
     { type: "openlist:pdf:ready", origin: "https://drive.example" },
   ])
   assert.equal(h.opens.length, 0)
+  assert.equal(h.printInstalled(), 1)
+  h.pagehide()
+  assert.equal(h.printInstalled(), 0)
+})
+test("retry consumes its one-shot print flag and prints only after a trusted open", async () => {
+  const h = await harness({ autoPrint: true })
+  assert.equal(h.historyUrls.length, 1)
+  assert.equal(
+    new URL(h.historyUrls[0]).searchParams.has("openlistPrint"),
+    false,
+  )
+  assert.equal(h.prints(), 0)
+  await h.message(
+    { type: "openlist:pdf:open", url: "/a.pdf?sign=secret" },
+    "https://other.example",
+  )
+  assert.equal(h.prints(), 0)
+  await h.message({ type: "openlist:pdf:open", url: "/a.pdf?sign=secret" })
+  assert.equal(h.prints(), 1)
+  await h.message({ type: "openlist:pdf:open", url: "/a.pdf?sign=secret" })
+  assert.equal(h.prints(), 1)
+  assert.ok(h.historyUrls.every((url) => !url.includes("secret")))
 })
 test("signed cross-origin storage URLs keep their full signature and file name", async () => {
   const h = await harness()

@@ -77,6 +77,7 @@ jobs:
         run: |
           pnpm exec playwright install --with-deps chromium --only-shell
           node --test scripts/tests/pdf-browser-cache.test.mjs
+          node --test scripts/tests/pdf-print-browser.test.mjs
 
       - name: Verify fork multipart and rename regressions
         run: |
@@ -93,9 +94,10 @@ jobs:
         run: |
           set -e
           test -f dist/index.html
-          test -f dist/static/pdfjs/6.3.289-openlist3/web/viewer.html
-          test -f dist/static/pdfjs/6.3.289-openlist3/web/openlist.mjs
-          test -f dist/static/pdfjs/6.3.289-openlist3/build/pdf.worker.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist4/web/viewer.html
+          test -f dist/static/pdfjs/6.3.289-openlist4/web/openlist.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist4/web/openlist-print.mjs
+          test -f dist/static/pdfjs/6.3.289-openlist4/build/pdf.worker.mjs
           test -f "dist-server/api/[...route].js"
           test -f "cloud-functions/[[default]].js"
           echo "OK: dist/index.html、dist-server/api/[...route].js、cloud-functions/[[default]].js 均已生成"
