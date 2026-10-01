@@ -14,7 +14,7 @@ async function load(relative, adapter, preamble = "") {
         preamble +
         readFileSync(path.join(root, relative), "utf8") +
         '\nexport {h} from "test:adapter";',
-      resolveDir: root,
+      resolveDir: path.dirname(path.join(root, relative)),
       loader: "ts",
     },
     bundle: true,

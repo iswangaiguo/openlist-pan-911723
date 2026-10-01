@@ -73,9 +73,11 @@ jobs:
       - name: Fetch official frontend dist
         run: node scripts/fetch-frontend.mjs
 
-      - name: Verify PDF ranges with browser caching enabled
+      - name: Verify PDF ranges and video wake recovery in Chromium
         run: |
           pnpm exec playwright install --with-deps chromium --only-shell
+          command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          node --test scripts/tests/frontend-wake-browser.test.mjs
           node --test scripts/tests/pdf-browser-cache.test.mjs
           node --test scripts/tests/pdf-viewer.test.mjs scripts/tests/pdf-print-range.test.mjs
           node --test scripts/tests/pdf-print-browser.test.mjs

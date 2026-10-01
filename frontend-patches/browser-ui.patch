@@ -1,3 +1,18 @@
+diff --git a/index.html b/index.html
+index 8723989..b8c3743 100644
+--- a/index.html
++++ b/index.html
+@@ -9,8 +9,9 @@
+     <meta name="generator" content="OpenList" />
+     <meta name="theme-color" content="#000000" />
+     <meta name="google" content="notranslate" />
+-    <link href="/manifest.json" rel="manifest" />
++    <link href="/static/manifest.json" rel="manifest" />
+     <meta name="apple-mobile-web-app-capable" content="yes" />
++    <meta name="mobile-web-app-capable" content="yes" />
+     <meta name="apple-mobile-web-app-title" content="OpenList" />
+     <link rel="apple-touch-icon" href="https://res.oplist.org/logo/logo.png" />
+     <link
 diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
 index a8d032d..c8f0892 100644
 --- a/src/pages/home/Body.tsx

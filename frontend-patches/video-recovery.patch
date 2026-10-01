@@ -172,7 +172,7 @@ index 7aece62..730dbdc 100644
      hlsPlayer?.destroy()
      if (player) {
 diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
-index 8025a86..2f6e773 100644
+index 8025a86..18e618f 100644
 --- a/src/pages/home/previews/video.tsx
 +++ b/src/pages/home/previews/video.tsx
 @@ -11,11 +11,13 @@ import { useRouter, useLink } from "~/hooks"
@@ -190,7 +190,15 @@ index 8025a86..2f6e773 100644
  import Artplayer from "artplayer"
  import { type Option } from "artplayer"
  import { type Setting } from "artplayer"
-@@ -62,6 +64,12 @@ const Preview = () => {
+@@ -28,6 +30,7 @@ import Hls from "hls.js"
+ import { currentLang } from "~/app/i18n"
+ import { AutoHeightPlugin, VideoBox } from "./video_box"
+ import { hlsBufferConfig, mpegtsBufferConfig } from "./video_buffer"
++import { installVideoWakeRecovery } from "./video_wake"
+ import { ArtPlayerIconsSubtitle } from "~/components/icons"
+ import { useNavigate } from "@solidjs/router"
+ import "./artplayer.css"
+@@ -62,6 +65,12 @@ const Preview = () => {
    let player: Artplayer
    let flvPlayer: mpegts.Player
    let hlsPlayer: Hls
@@ -203,7 +211,7 @@ index 8025a86..2f6e773 100644
    let option: Option = {
      container: "#video-player",
      volume: 1.0,
-@@ -118,6 +126,7 @@ const Preview = () => {
+@@ -118,6 +127,7 @@ const Preview = () => {
        // @ts-ignore
        "webkit-playsinline": true,
        playsInline: true,
@@ -211,7 +219,7 @@ index 8025a86..2f6e773 100644
        crossOrigin: "anonymous",
      },
      customType: {
-@@ -131,6 +140,7 @@ const Preview = () => {
+@@ -131,6 +141,7 @@ const Preview = () => {
            mpegtsBufferConfig,
          )
          flvPlayer.attachMediaElement(video)
@@ -219,7 +227,7 @@ index 8025a86..2f6e773 100644
          flvPlayer.load()
        },
        m2ts: function (video: HTMLMediaElement, url: string) {
-@@ -143,11 +153,15 @@ const Preview = () => {
+@@ -143,11 +154,15 @@ const Preview = () => {
            mpegtsBufferConfig,
          )
          flvPlayer.attachMediaElement(video)
@@ -235,7 +243,7 @@ index 8025a86..2f6e773 100644
          hlsPlayer.loadSource(url)
          hlsPlayer.attachMedia(video)
          if (!video.src) {
-@@ -186,12 +200,16 @@ const Preview = () => {
+@@ -186,12 +201,16 @@ const Preview = () => {
    const enableEnhanceAss = true
  
    const switchUrl = (url: string) => {
@@ -252,7 +260,7 @@ index 8025a86..2f6e773 100644
      const { subtitle, danmu } = subtitleAndDanmu()
      let isEnhanceAssMode = false
      const setSubtitleVisible = (visible: boolean) => {
-@@ -349,6 +367,81 @@ const Preview = () => {
+@@ -349,8 +368,102 @@ const Preview = () => {
      }
    }
  
@@ -333,8 +341,29 @@ index 8025a86..2f6e773 100644
 +
    onMount(() => {
      player = new Artplayer(option)
++    onCleanup(
++      installVideoWakeRecovery(player.video, (resume) => {
++        void refreshSource(resume)
++      }),
++    )
++    player.controls.add({
++      name: "reconnect",
++      position: "right",
++      index: 5,
++      html: '<span aria-label="Reconnect">↻</span>',
++      tooltip: currentLang().startsWith("zh")
++        ? "重新连接视频"
++        : "Reconnect video",
++      click: () => {
++        recoveryAttempts = 0
++        lastRecoveryAttempt = 0
++        void refreshSource(!player.video.paused)
++      },
++    })
      createEffect(on(() => objStore.raw_url, switchUrl))
-@@ -372,7 +465,39 @@ const Preview = () => {
+     let auto_fullscreen: boolean
+     switch (searchParams["auto_fullscreen"]) {
+@@ -372,7 +485,39 @@ const Preview = () => {
        if (!autoNext()) return
        next_video()
      })
@@ -374,7 +403,7 @@ index 8025a86..2f6e773 100644
        if (player.video.crossOrigin) {
          console.log(
            "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
-@@ -382,6 +507,7 @@ const Preview = () => {
+@@ -382,6 +527,7 @@ const Preview = () => {
      })
    })
    onCleanup(() => {
@@ -382,3 +411,118 @@ index 8025a86..2f6e773 100644
      setShouldKeepState(false)
      if (player) {
        player.fullscreenWeb = false
+diff --git a/src/pages/home/previews/video_wake.ts b/src/pages/home/previews/video_wake.ts
+new file mode 100644
+index 0000000..364abeb
+--- /dev/null
++++ b/src/pages/home/previews/video_wake.ts
+@@ -0,0 +1,109 @@
++// A background/suspended page may keep a dead media request without emitting an
++// error. Allow one recovery only after a real resume/long interruption and a
++// further 15 seconds without playback/seek progress. Ordinary buffering and
++// focus changes never reload the source.
++export function installVideoWakeRecovery(
++  video: HTMLVideoElement,
++  recover: (resume: boolean) => void,
++) {
++  let disposed = false,
++    wakeAt = 0,
++    blockedAt = 0
++  let hiddenAt: number | undefined = document.hidden ? Date.now() : undefined
++  let frozen = false,
++    offline = false,
++    lastTick = Date.now(),
++    position = video.currentTime
++  let timer: ReturnType<typeof setTimeout>
++  const arm = () => {
++    if (!wakeAt || Date.now() - wakeAt > 120_000) {
++      wakeAt = Date.now()
++      blockedAt = 0
++      position = video.currentTime
++    }
++    lastTick = Date.now()
++  }
++  const clear = () => {
++    wakeAt = blockedAt = 0
++    position = video.currentTime
++  }
++  const visibility = () => {
++    if (document.hidden) {
++      hiddenAt = Date.now()
++      clear()
++    } else if (hiddenAt !== undefined) {
++      if (Date.now() - hiddenAt >= 60_000) arm()
++      hiddenAt = undefined
++    }
++  }
++  const freeze = () => {
++    frozen = true
++    clear()
++  }
++  const resume = () => {
++    if (frozen) {
++      frozen = false
++      arm()
++    }
++  }
++  const pageShow = (event: PageTransitionEvent) => {
++    if (event.persisted) arm()
++  }
++  const focus = () => {
++    if (Date.now() - lastTick >= 60_000) arm()
++  }
++  const wentOffline = () => {
++    offline = true
++  }
++  const online = () => {
++    if (offline) {
++      offline = false
++      arm()
++    }
++  }
++  const tick = () => {
++    if (disposed) return
++    const now = Date.now()
++    if (!document.hidden && now - lastTick >= 60_000) arm()
++    lastTick = now
++    if (!document.hidden && wakeAt) {
++      if (now - wakeAt > 120_000 || video.ended) clear()
++      else if (video.paused && !video.seeking) {
++        blockedAt = 0
++        position = video.currentTime
++      } else if (
++        !video.seeking &&
++        Math.abs(video.currentTime - position) > 0.05
++      )
++        clear()
++      else {
++        blockedAt ||= now
++        if (now - blockedAt >= 15_000) {
++          const shouldPlay = !video.paused
++          clear()
++          recover(shouldPlay)
++        }
++      }
++    }
++    timer = setTimeout(tick, 1000)
++  }
++  document.addEventListener("visibilitychange", visibility)
++  document.addEventListener("freeze", freeze)
++  document.addEventListener("resume", resume)
++  window.addEventListener("pageshow", pageShow)
++  window.addEventListener("focus", focus)
++  window.addEventListener("offline", wentOffline)
++  window.addEventListener("online", online)
++  timer = setTimeout(tick, 1000)
++  return () => {
++    disposed = true
++    clearTimeout(timer)
++    document.removeEventListener("visibilitychange", visibility)
++    document.removeEventListener("freeze", freeze)
++    document.removeEventListener("resume", resume)
++    window.removeEventListener("pageshow", pageShow)
++    window.removeEventListener("focus", focus)
++    window.removeEventListener("offline", wentOffline)
++    window.removeEventListener("online", online)
++  }
++}

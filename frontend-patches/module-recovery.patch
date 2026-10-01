@@ -1,8 +1,10 @@
 diff --git a/src/app/App.tsx b/src/app/App.tsx
-index 19cc318..e9b147b 100644
+index 19cc318..39f00c5 100644
 --- a/src/app/App.tsx
 +++ b/src/app/App.tsx
-@@ -2,6 +2,7 @@ import { Progress, ProgressIndicator } from "@hope-ui/solid"
+@@ -1,7 +1,8 @@
+-import { Progress, ProgressIndicator } from "@hope-ui/solid"
++import { Button, Progress, ProgressIndicator } from "@hope-ui/solid"
  import { Route, Routes, useIsRouting } from "@solidjs/router"
  import {
    Component,
@@ -18,7 +20,7 @@ index 19cc318..e9b147b 100644
  import { MustUser, UserOrGuest } from "./MustUser"
  import "./index.css"
  import { globalStyles } from "./theme"
-@@ -129,54 +131,56 @@ const App: Component = () => {
+@@ -129,54 +131,66 @@ const App: Component = () => {
            <Upload />
          </Suspense>
        </Show>
@@ -42,14 +44,6 @@ index 19cc318..e9b147b 100644
 -                <UserOrGuest>
 -                  <Home />
 -                </UserOrGuest>
--              }
--            />
--            <Route
--              path="*"
--              element={
--                <MustUser>
--                  <Home />
--                </MustUser>
 +      <ErrorBoundary fallback={(error) => <ModuleLoadError error={error} />}>
 +        <Switch
 +          fallback={
@@ -90,8 +84,25 @@ index 19cc318..e9b147b 100644
 +              msg={
 +                t("home.fetching_settings_failed") +
 +                err()
-+                  .map((e) => t("home." + e))
++                  .map((e) => t("home." + e, undefined, e))
 +                  .join(", ")
+               }
+-            />
+-            <Route
+-              path="*"
+-              element={
+-                <MustUser>
+-                  <Home />
+-                </MustUser>
++              actions={
++                <Button
++                  onClick={() => {
++                    setErr([])
++                    void data()
++                  }}
++                >
++                  {t("home.toolbar.refresh")}
++                </Button>
                }
              />
 -          </Routes>
@@ -407,3 +418,158 @@ index 0000000..ab2558f
 +    return false
 +  }
 +}
+diff --git a/src/utils/read_deadline.ts b/src/utils/read_deadline.ts
+new file mode 100644
+index 0000000..49661f0
+--- /dev/null
++++ b/src/utils/read_deadline.ts
+@@ -0,0 +1,72 @@
++import type { InternalAxiosRequestConfig } from "axios"
++
++const READ_DEADLINE_MS = 30_000
++const reads = new WeakMap<object, { expired: boolean; finish: () => void }>()
++const isBoundedRead = (config: InternalAxiosRequestConfig) => {
++  const method = (config.method || "get").toLowerCase()
++  const path = (config.url || "").split("?")[0]
++  return (
++    (method === "get" &&
++      [
++        "/public/settings",
++        "/public/init_status",
++        "/public/archive_extensions",
++        "/me",
++      ].includes(path)) ||
++    (method === "post" && ["/fs/get", "/fs/list"].includes(path))
++  )
++}
++
++// Limit page-startup and file metadata reads only. Uploads, downloads and file
++// mutations retain their original timing and are never automatically replayed.
++export function boundReadRequest(config: InternalAxiosRequestConfig) {
++  if (!isBoundedRead(config)) return config
++  const previous = config.signal,
++    controller = new AbortController()
++  const timeout =
++    config.timeout && config.timeout > 0 ? config.timeout : READ_DEADLINE_MS
++  const deadline = Date.now() + timeout
++  const expire = () => {
++    state.expired = true
++    controller.abort(new DOMException("Read request timed out", "TimeoutError"))
++  }
++  const check = () => {
++    if (Date.now() >= deadline) expire()
++  }
++  const visibility = () => {
++    if (!document.hidden) check()
++  }
++  const cancel = () => controller.abort()
++  const timer = window.setTimeout(expire, timeout)
++  const state = {
++    expired: false,
++    finish: () => {
++      window.clearTimeout(timer)
++      window.removeEventListener("focus", check)
++      window.removeEventListener("online", check)
++      window.removeEventListener("pageshow", check)
++      document.removeEventListener("resume", check)
++      document.removeEventListener("visibilitychange", visibility)
++      previous?.removeEventListener?.("abort", cancel)
++    },
++  }
++  reads.set(controller.signal, state)
++  controller.signal.addEventListener("abort", state.finish, { once: true })
++  window.addEventListener("focus", check)
++  window.addEventListener("online", check)
++  window.addEventListener("pageshow", check)
++  document.addEventListener("resume", check)
++  document.addEventListener("visibilitychange", visibility)
++  previous?.addEventListener?.("abort", cancel, { once: true })
++  if (previous?.aborted) cancel()
++  config.signal = controller.signal
++  config.timeout = timeout
++  return config
++}
++
++export function finishReadRequest(config?: InternalAxiosRequestConfig) {
++  if (config?.signal) reads.get(config.signal)?.finish()
++}
++export function didReadExpire(config?: InternalAxiosRequestConfig) {
++  return !!(config?.signal && reads.get(config.signal)?.expired)
++}
+diff --git a/src/utils/request.ts b/src/utils/request.ts
+index c4b11b9..cceae9e 100644
+--- a/src/utils/request.ts
++++ b/src/utils/request.ts
+@@ -3,6 +3,11 @@ import {
+   isDirectoryMutation,
+ } from "./directory_snapshot"
+ import axios from "axios"
++import {
++  boundReadRequest,
++  didReadExpire,
++  finishReadRequest,
++} from "./read_deadline"
+ import { api, log } from "."
+ 
+ const instance = axios.create({
+@@ -20,7 +25,7 @@ instance.interceptors.request.use(
+     if (isDirectoryMutation(config.method || "get", config.url || ""))
+       invalidateDirectories()
+     // do something before request is sent
+-    return config
++    return boundReadRequest(config)
+   },
+   (error) => {
+     // do something with request error
+@@ -32,6 +37,7 @@ instance.interceptors.request.use(
+ // response interceptor
+ instance.interceptors.response.use(
+   (response) => {
++    finishReadRequest(response.config)
+     const resp = response.data
+     if (
+       isDirectoryMutation(
+@@ -45,6 +51,8 @@ instance.interceptors.response.use(
+     return resp
+   },
+   (error) => {
++    const expired = didReadExpire(error.config)
++    finishReadRequest(error.config)
+     if (
+       isDirectoryMutation(
+         error.config?.method || "get",
+@@ -75,22 +83,27 @@ instance.interceptors.response.use(
+     // undefined）也会变成"信封"，流控与重试分支会被误判。故仅在 data != null
+     // 时附加。
+     const body = error.response?.data as
+-      { message?: string; data?: unknown; error_code?: number } | undefined
++      | { message?: string; data?: unknown; error_code?: number }
++      | undefined
+     const result: {
+       code: number | undefined
+       message: string
+       data?: unknown
+       workerResourceLimit?: boolean
+     } = {
+-      code: axios.isCancel(error) ? -1 : error.response?.status,
+-      message: body?.message || error.message,
++      code: expired ? 408 : axios.isCancel(error) ? -1 : error.response?.status,
++      message: expired
++        ? "Request timed out. Please retry."
++        : body?.message || error.message,
+     }
+     // Cloudflare 1102 is permanent until the Worker code/limits change.
+     // Preserve it for MultipartUpload instead of treating it as a network hiccup.
+-    if (error.response?.status === 503 && (
+-      body?.error_code === 1102 ||
+-      (typeof body === "string" && /(?:Error\s*1102|Worker exceeded resource limits)/i.test(body))
+-    )) {
++    if (
++      error.response?.status === 503 &&
++      (body?.error_code === 1102 ||
++        (typeof body === "string" &&
++          /(?:Error\s*1102|Worker exceeded resource limits)/i.test(body)))
++    ) {
+       result.workerResourceLimit = true
+     }
+     if (body && typeof body === "object" && body.data != null) {
