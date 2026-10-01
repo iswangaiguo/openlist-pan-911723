@@ -20,6 +20,7 @@ async function harness({
   failOpen = false,
   cancelBoot = false,
   autoPrint = false,
+  retryPages = null,
 } = {}) {
   const documentEvents = new Map(),
     messages = [],
@@ -30,6 +31,7 @@ async function harness({
   let printInstalled = 0
   let prints = 0
   const historyUrls = []
+  let installedRetryPages
   const document = { documentElement: { style: {} } }
   const parent = {
     document: {
@@ -64,14 +66,16 @@ async function harness({
     document,
     location: {
       origin: "https://drive.example",
-      search: `?locale=zh-CN&theme=dark${autoPrint ? "&openlistPrint=1" : ""}`,
-      href: "https://drive.example/static/pdfjs/web/viewer.html?locale=zh-CN&theme=dark&openlistPrint=1",
+      search: `?locale=zh-CN&theme=dark${autoPrint ? `&openlistPrint=1${retryPages ? `&openlistPrintPages=${encodeURIComponent(retryPages)}` : ""}` : ""}`,
+      href: `https://drive.example/static/pdfjs/web/viewer.html?locale=zh-CN&theme=dark&openlistPrint=1${retryPages ? `&openlistPrintPages=${encodeURIComponent(retryPages)}` : ""}`,
     },
     history: { replaceState: (_state, _title, url) => historyUrls.push(url) },
     URL,
     URLSearchParams,
     loadPrint: async () => ({
-      installPdfPrintPreparation: (viewer) => {
+      installPdfPrintPreparation: (viewer, target, options) => {
+        assert.equal(target, window)
+        installedRetryPages = options.retryPages
         assert.equal(viewer, app)
         printInstalled++
         return () => printInstalled--
@@ -115,6 +119,7 @@ async function harness({
     pagehide: () => pagehide?.(),
     prints: () => prints,
     historyUrls,
+    retryPages: () => installedRetryPages,
     message: async (
       data,
       origin = "https://drive.example",
@@ -142,10 +147,15 @@ test("viewer initializes lazy loading, locale and theme before accepting a file"
   assert.equal(h.printInstalled(), 0)
 })
 test("retry consumes its one-shot print flag and prints only after a trusted open", async () => {
-  const h = await harness({ autoPrint: true })
+  const h = await harness({ autoPrint: true, retryPages: "5,7-9" })
+  assert.equal(h.retryPages(), "5,7-9")
   assert.equal(h.historyUrls.length, 1)
   assert.equal(
     new URL(h.historyUrls[0]).searchParams.has("openlistPrint"),
+    false,
+  )
+  assert.equal(
+    new URL(h.historyUrls[0]).searchParams.has("openlistPrintPages"),
     false,
   )
   assert.equal(h.prints(), 0)

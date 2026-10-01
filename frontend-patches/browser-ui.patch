@@ -47,15 +47,14 @@ index bd2219d..6c92b35 100644
    )
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
 new file mode 100644
-index 0000000..6b496bb
+index 0000000..45946ba
 --- /dev/null
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -0,0 +1,172 @@
+@@ -0,0 +1,155 @@
 +import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import {
 +  BsFolder2,
-+  BsGear,
 +  BsArrowClockwise,
 +  BsFolderPlus,
 +  BsArrowUp,
@@ -102,7 +101,6 @@ index 0000000..6b496bb
 +}
 +
 +export const DriveRail = () => {
-+  const t = useT()
 +  const { to, isShare } = useRouter()
 +  return (
 +    <aside class="drive-rail" aria-label={driveText("workspace")}>
@@ -118,13 +116,6 @@ index 0000000..6b496bb
 +            <span>{driveText("files")}</span>
 +          </button>
 +        </Show>
-+        <button
-+          class="drive-nav-item"
-+          onClick={() => bus.emit("tool", "local_settings")}
-+        >
-+          <Icon as={BsGear} />
-+          <span>{t("home.toolbar.local_settings")}</span>
-+        </button>
 +      </nav>
 +    </aside>
 +  )
@@ -176,14 +167,6 @@ index 0000000..6b496bb
 +            ? driveText("files")
 +            : pathname().split("/").filter(Boolean).pop()}
 +        </h1>
-+        <button
-+          class="drive-icon-button drive-heading-settings"
-+          aria-label={t("home.toolbar.local_settings")}
-+          title={t("home.toolbar.local_settings")}
-+          onClick={() => bus.emit("tool", "local_settings")}
-+        >
-+          <Icon as={BsGear} />
-+        </button>
 +      </div>
 +      <div class="drive-actions">
 +        <button
@@ -474,10 +457,10 @@ index 0d0ed69..e9e28d3 100644
                </BreadcrumbLink>
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
 new file mode 100644
-index 0000000..83edaa5
+index 0000000..827b66f
 --- /dev/null
 +++ b/src/pages/home/drive.css
-@@ -0,0 +1,953 @@
+@@ -0,0 +1,944 @@
 +/* File browser skin, scoped so management and login keep their own layouts. */
 +.drive-shell {
 +  --drive-bg: #fff;
@@ -965,7 +948,6 @@ index 0000000..83edaa5
 +.drive-mobile-nav,
 +.drive-mobile-create,
 +.drive-mobile-account,
-+.drive-heading-settings,
 +.drive-heading-layout {
 +  display: none;
 +}
@@ -1177,14 +1159,6 @@ index 0000000..83edaa5
 +    overflow: hidden;
 +    white-space: nowrap;
 +    text-overflow: ellipsis;
-+  }
-+  .drive-heading-settings {
-+    display: inline-flex;
-+    flex-shrink: 0;
-+    width: 32px;
-+    min-height: 36px;
-+    border: 0;
-+    background: transparent;
 +  }
 +  .drive-heading-refresh {
 +    display: none;
@@ -1925,10 +1899,10 @@ index b92ff0f..9a56b10 100644
        onMouseEnter={() => {
          setPathAs(props.node.path, props.node.is_dir)
 diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
-index 8f552da..6a35d8e 100644
+index 8f552da..55e74d9 100644
 --- a/src/pages/home/header/Header.tsx
 +++ b/src/pages/home/header/Header.tsx
-@@ -1,90 +1,136 @@
+@@ -1,90 +1,133 @@
  import {
    HStack,
 -  useColorModeValue,
@@ -2058,9 +2032,6 @@ index 8f552da..6a35d8e 100644
 +                <MenuItem onSelect={() => refresh(undefined, true)}>
 +                  <Icon as={BsArrowClockwise} />
 +                  {t("home.toolbar.refresh")}
-+                </MenuItem>
-+                <MenuItem onSelect={() => bus.emit("tool", "local_settings")}>
-+                  {t("home.toolbar.local_settings")}
 +                </MenuItem>
 +              </MenuContent>
 +            </Menu>
@@ -2200,7 +2171,7 @@ index 9dc6cdf..75d2a49 100644
            )}
          </For>
 diff --git a/src/pages/home/toolbar/Toolbar.tsx b/src/pages/home/toolbar/Toolbar.tsx
-index e55e19b..d38471c 100644
+index e55e19b..ef15caf 100644
 --- a/src/pages/home/toolbar/Toolbar.tsx
 +++ b/src/pages/home/toolbar/Toolbar.tsx
 @@ -1,6 +1,4 @@
@@ -2210,13 +2181,13 @@ index e55e19b..d38471c 100644
  import { Copy, Move } from "./CopyMove"
  import { Delete } from "./Delete"
  import { Rename } from "./Rename"
-@@ -11,14 +9,11 @@ import { RemoveEmptyDirectory } from "./RemoveEmptyDirectory"
+@@ -11,14 +9,10 @@ import { RemoveEmptyDirectory } from "./RemoveEmptyDirectory"
  import { BatchRename } from "./BatchRename"
  import { OfflineDownloadEnhanced } from "./OfflineDownloadEnhanced"
  import { PackageDownloadModal } from "./Download"
 -import { lazy } from "solid-js"
 -import { ModalWrapper } from "./ModalWrapper"
- import { LocalSettings } from "./LocalSettings"
+-import { LocalSettings } from "./LocalSettings"
  import { BackTop } from "./BackTop"
  import { Decompress } from "./Decompress"
  import { Share } from "./Share"
@@ -2225,17 +2196,18 @@ index e55e19b..d38471c 100644
  
  export const Modal = () => {
    return (
-@@ -36,9 +31,6 @@ export const Modal = () => {
+@@ -36,10 +30,6 @@ export const Modal = () => {
        <BatchRename />
        <OfflineDownloadEnhanced />
        <PackageDownloadModal />
 -      <ModalWrapper name="upload" title="home.toolbar.upload">
 -        <Upload />
 -      </ModalWrapper>
-       <LocalSettings />
+-      <LocalSettings />
      </>
    )
-@@ -47,8 +39,6 @@ export const Modal = () => {
+ }
+@@ -47,8 +37,6 @@ export const Modal = () => {
  export const Toolbar = () => {
    return (
      <Portal>

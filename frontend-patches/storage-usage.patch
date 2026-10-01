@@ -1,8 +1,8 @@
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
-index 6b496bb..c169972 100644
+index 45946ba..364fa26 100644
 --- a/src/pages/home/DriveChrome.tsx
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -13,6 +13,7 @@ import { getSetting, me, objStore, State, userCan } from "~/store"
+@@ -12,6 +12,7 @@ import { getSetting, me, objStore, State, userCan } from "~/store"
  import { UserMethods } from "~/types"
  import { Layout } from "./header/layout"
  import { bus } from "~/utils"
@@ -10,9 +10,9 @@ index 6b496bb..c169972 100644
  
  export const driveText = (key: "files" | "workspace" | "waiting") => {
    const zh = String(currentLang()).startsWith("zh")
-@@ -73,6 +74,7 @@ export const DriveRail = () => {
-           <span>{t("home.toolbar.local_settings")}</span>
-         </button>
+@@ -64,6 +65,7 @@ export const DriveRail = () => {
+           </button>
+         </Show>
        </nav>
 +      <DriveUsage />
      </aside>
@@ -246,10 +246,10 @@ index 0000000..26a4bdc
 +  )
 +}
 diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
-index 83edaa5..adbd207 100644
+index 03a89ba..83ce6e6 100644
 --- a/src/pages/home/drive.css
 +++ b/src/pages/home/drive.css
-@@ -842,6 +842,37 @@
+@@ -833,6 +833,37 @@
    }
  }
  
