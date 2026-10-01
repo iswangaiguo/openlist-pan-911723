@@ -116,6 +116,13 @@ test("B2 video/PDF previews bypass cold cache while preserving ranges and authen
       env,
     )
     assert.equal(res.status, range ? 206 : 200)
+    if (host !== "s3.us-west-004.backblazeb2.com") {
+      assert.equal(
+        res.headers.get("Cache-Control"),
+        null,
+        "unrelated storage responses retain their cache policy",
+      )
+    }
     assert.equal(res.headers.get("X-OpenList-Range-Cache"), null)
     assert.equal(res.headers.get("X-OpenList-Origin-Ms"), null)
     assert.equal(await res.text(), range ? "abcd" : "full")
@@ -128,5 +135,86 @@ test("B2 video/PDF previews bypass cold cache while preserving ranges and authen
     assert.equal(reads[0].range, range || null)
     assert.equal(reads[0].cache, expectedCache, `${host}/${filename}`)
     assert.equal(calls.find((c) => c.method === "HEAD")?.cache, "no-store")
+  }
+})
+
+test("B2 preview responses prevent browser caching for initial and partial reads", async (t) => {
+  const originalFetch = globalThis.fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+  const env = { DB_DRIVER: "memory", JWT_SECRET: "browser-cache-test-only" }
+  const app = new Hono()
+  app.route("/api/p", rawRouter)
+  await saveDb(
+    {
+      settings: [{ key: "sign_all", value: "true" }],
+      users: [],
+      shares: [],
+      metas: [],
+      storages: [
+        {
+          id: 101,
+          mount_path: "/test",
+          driver: "S3",
+          web_proxy: true,
+          addition: JSON.stringify({
+            endpoint: "https://s3.us-west-004.backblazeb2.com",
+            bucket: "test",
+            region: "us-west-004",
+            access_key_id: "test-only",
+            secret_access_key: "test-only",
+            force_path_style: true,
+          }),
+        },
+      ],
+    },
+    env,
+  )
+  for (const originPolicy of [null, "public, max-age=86400"]) {
+    globalThis.fetch = async (_input, init = {}) => {
+      if (init.method === "HEAD")
+        return new Response(null, { headers: { "Content-Length": "4" } })
+      const headers = new Headers({
+        "Content-Length": "4",
+        "Accept-Ranges": "bytes",
+        ETag: '"version"',
+      })
+      if (originPolicy) headers.set("Cache-Control", originPolicy)
+      const range = new Headers(init.headers).has("Range")
+      if (range) headers.set("Content-Range", "bytes 0-3/4")
+      return new Response("data", { status: range ? 206 : 200, headers })
+    }
+    for (const [filename, preview] of [
+      ["movie.mp4", true],
+      ["book.pdf", true],
+      ["image.png", false],
+    ] as const) {
+      const path = `/test/${filename}`
+      const sign = await signDownloadPath({ env }, path, 60)
+      for (const range of [undefined, "bytes=0-"]) {
+        const response = await app.request(
+          `/api/p${path}?sign=${sign}`,
+          {
+            headers: range ? { Range: range } : {},
+          },
+          env,
+        )
+        assert.equal(response.status, range ? 206 : 200)
+        assert.equal(
+          response.headers.get("Cache-Control"),
+          preview ? "private, no-store" : originPolicy,
+          `${filename}, Range=${range}, upstream cache=${originPolicy}`,
+        )
+        assert.equal(response.headers.get("ETag"), '"version"')
+        assert.equal(response.headers.get("Accept-Ranges"), "bytes")
+        assert.equal(response.headers.get("Content-Length"), "4")
+        assert.equal(
+          response.headers.get("Content-Range"),
+          range ? "bytes 0-3/4" : null,
+        )
+        assert.equal(await response.text(), "data")
+      }
+    }
   }
 })

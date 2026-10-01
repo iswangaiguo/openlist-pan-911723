@@ -319,7 +319,15 @@ async function proxyUpstream(
   const lastModified = upstreamRes.headers.get("last-modified")
   if (lastModified) c.header("Last-Modified", lastModified)
   const cacheControl = upstreamRes.headers.get("cache-control")
-  if (cacheControl) c.header("Cache-Control", cacheControl)
+  // The fetch cache option above only affects Worker -> B2. Chrome otherwise
+  // stores these signed preview responses in its HTTP cache and may reuse an
+  // unfinished partial response on seek/reload. Cover initial 200 reads too;
+  // video/PDF buffers in the running player remain available in memory.
+  if (isRangePreview && isB2Storage(opts.storage)) {
+    c.header("Cache-Control", "private, no-store")
+  } else if (cacheControl) {
+    c.header("Cache-Control", cacheControl)
+  }
   // FIX(H-3): 上游响应头已按白名单回显，但对 Content-Disposition 额外
   // 清洗 CR/LF 与控制字符，防止恶意上游注入额外响应头（Set-Cookie/Location）。
   const contentDisposition = upstreamRes.headers.get("content-disposition")
