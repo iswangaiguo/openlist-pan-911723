@@ -237,12 +237,22 @@ function patchFrontend(repo) {
   const probe = fs.mkdtempSync(path.join(os.tmpdir(), "openlist-patch-probe-"))
   let fullyPatched = false
   try {
-    fs.cpSync(path.join(repo, "src"), path.join(probe, "src"), { recursive: true })
+    fs.cpSync(path.join(repo, "src"), path.join(probe, "src"), {
+      recursive: true,
+    })
+    fs.copyFileSync(
+      path.join(repo, "index.html"),
+      path.join(probe, "index.html"),
+    )
     for (const patch of [...frontendPin.patches].reverse()) {
-      execFileSync("git", ["apply", "--reverse", path.join(ROOT, "frontend-patches", patch)], {
-        cwd: probe,
-        stdio: "pipe",
-      })
+      execFileSync(
+        "git",
+        ["apply", "--reverse", path.join(ROOT, "frontend-patches", patch)],
+        {
+          cwd: probe,
+          stdio: "pipe",
+        },
+      )
     }
     fullyPatched = true
   } catch {
@@ -307,6 +317,7 @@ function buildLocalRepo(repo) {
       path.join(ROOT, "scripts/tests/frontend-upload-queue.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-module-recovery.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-video-recovery.test.mjs"),
+      path.join(ROOT, "scripts/tests/frontend-wake.test.mjs"),
       path.join(ROOT, "scripts/tests/frontend-storage-usage.test.mjs"),
       path.join(ROOT, "scripts/tests/pdf-viewer.test.mjs"),
     ],

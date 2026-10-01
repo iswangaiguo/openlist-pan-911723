@@ -102,6 +102,7 @@ function harness(filename) {
     switchUrl: async () => {},
     play: async () => {},
     template: { $container: target(clicks) },
+    controls: { add: () => {} },
     on: (key, fn) => events.set(key, fn),
   }
   const hls = new Map(),
@@ -151,9 +152,21 @@ function harness(filename) {
     console,
   })
   vm.runInContext(
-    ts.transpile((mount ?? bindings) + "\n" + fatalBindings.join("\n"), {
-      target: ts.ScriptTarget.ES2022,
-    }),
+    ts.transpile(
+      (filename === "video.tsx"
+        ? readFileSync(
+            path.join(root, "src/pages/home/previews/video_wake.ts"),
+            "utf8",
+          ).replace("export function", "function")
+        : "") +
+        "\n" +
+        (mount ?? bindings) +
+        "\n" +
+        fatalBindings.join("\n"),
+      {
+        target: ts.ScriptTarget.ES2022,
+      },
+    ),
     context,
   )
   return {
