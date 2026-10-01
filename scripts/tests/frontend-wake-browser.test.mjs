@@ -209,7 +209,7 @@ test(
         null,
         { timeout: 12000 },
       )
-      assert.equal(await page.locator(".art-control-reconnect").count(), 1)
+      assert.equal(await page.locator(".art-control-reconnect").count(), 0)
     }
     await t.test(
       "hung startup exits loading after 30 seconds and retries in place",
@@ -295,7 +295,7 @@ test(
     await t.test(
       "dragging previews the destination and performs only one media seek on release",
       async () => {
-        const { page, state } = await open("drag", { block: true })
+        const { page, state } = await open("drag")
         await ready(page)
         await page.evaluate(() => {
           window.seekCount = 0
@@ -335,7 +335,6 @@ test(
         )
         await page.waitForTimeout(100)
         assert.ok(state.ranges.length <= initialRequests + 3)
-        await page.locator(".art-control-reconnect").click()
         await page.waitForFunction(() => {
           const v = document.querySelector("video")
           return (
@@ -393,9 +392,9 @@ test(
       },
     )
     await t.test(
-      "ordinary stalled seek does not reload; explicit reconnect restores position",
+      "ordinary stalled seek retains its source and paused state",
       async () => {
-        const { page, state } = await open("manual", { block: true })
+        const { page, state } = await open("paused", { block: true })
         await ready(page)
         await page.evaluate(() => {
           const video = document.querySelector(".art-video")
@@ -407,16 +406,6 @@ test(
         )
         await page.clock.runFor(20000)
         assert.equal(state.gets, 1, "normal buffering retains the source")
-        await page.locator(".art-control-reconnect").click()
-        await page.waitForFunction(
-          () => {
-            const v = document.querySelector(".art-video")
-            return v.currentTime >= 79.5 && !v.seeking && v.readyState >= 2
-          },
-          null,
-          { timeout: 18000 },
-        )
-        assert.equal(state.gets, 2)
         assert.equal(
           await page.evaluate(
             () => document.querySelector(".art-video").paused,

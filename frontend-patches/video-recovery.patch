@@ -261,7 +261,7 @@ index 8025a86..38a8def 100644
      const { subtitle, danmu } = subtitleAndDanmu()
      let isEnhanceAssMode = false
      const setSubtitleVisible = (visible: boolean) => {
-@@ -349,8 +369,103 @@ const Preview = () => {
+@@ -349,8 +369,89 @@ const Preview = () => {
      }
    }
  
@@ -348,24 +348,10 @@ index 8025a86..38a8def 100644
 +        void refreshSource(resume)
 +      }),
 +    )
-+    player.controls.add({
-+      name: "reconnect",
-+      position: "right",
-+      index: 5,
-+      html: '<span aria-label="Reconnect">↻</span>',
-+      tooltip: currentLang().startsWith("zh")
-+        ? "重新连接视频"
-+        : "Reconnect video",
-+      click: () => {
-+        recoveryAttempts = 0
-+        lastRecoveryAttempt = 0
-+        void refreshSource(!player.video.paused)
-+      },
-+    })
      createEffect(on(() => objStore.raw_url, switchUrl))
      let auto_fullscreen: boolean
      switch (searchParams["auto_fullscreen"]) {
-@@ -372,7 +487,39 @@ const Preview = () => {
+@@ -372,7 +473,39 @@ const Preview = () => {
        if (!autoNext()) return
        next_video()
      })
@@ -405,7 +391,7 @@ index 8025a86..38a8def 100644
        if (player.video.crossOrigin) {
          console.log(
            "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
-@@ -382,6 +529,7 @@ const Preview = () => {
+@@ -382,6 +515,7 @@ const Preview = () => {
      })
    })
    onCleanup(() => {
