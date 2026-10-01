@@ -30,12 +30,15 @@ try {
   await app.initializedPromise
   cleanup()
   const { installPdfPrintPreparation } = await import("./openlist-print.mjs")
-  const cleanupPrint = installPdfPrintPreparation(app)
-  window.addEventListener("pagehide", cleanupPrint, { once: true })
   const printAfterOpen = query.get("openlistPrint") === "1"
+  const cleanupPrint = installPdfPrintPreparation(app, window, {
+    retryPages: printAfterOpen ? query.get("openlistPrintPages") : null,
+  })
+  window.addEventListener("pagehide", cleanupPrint, { once: true })
   if (printAfterOpen) {
     const viewerUrl = new URL(location.href)
     viewerUrl.searchParams.delete("openlistPrint")
+    viewerUrl.searchParams.delete("openlistPrintPages")
     history.replaceState(null, "", viewerUrl.href)
   }
   let opened = false

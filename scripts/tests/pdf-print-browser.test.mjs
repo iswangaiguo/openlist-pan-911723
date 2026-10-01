@@ -28,7 +28,7 @@ function fixture() {
   for (let i = 0; i < pages; i++) {
     object(
       4 + i,
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 300] /Resources << /Font << /F1 3 0 R >> >> /Contents ${4 + pages + i} 0 R >>`,
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${i === 6 ? "420 300" : "300 420"}] /Resources << /Font << /F1 3 0 R >> >> /Contents ${4 + pages + i} 0 R >>`,
     )
   }
   // Page dictionaries fit in the header; page contents occupy distinct ranges.
@@ -41,6 +41,9 @@ function fixture() {
       4 + pages + i,
       `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`,
     )
+    // A short next-object token avoids the PDF lexer reading through the huge
+    // padding comment after a selected stream just for parser lookahead.
+    object(4 + pages * 2 + i, "<< >>")
   }
   const xref = Buffer.byteLength(source)
   source += `xref\n0 ${offsets.length}\n0000000000 65535 f \n`
@@ -52,7 +55,7 @@ function fixture() {
 
 test(
   "actual lazy PDF viewer prepares and prints with cancellation and retry",
-  { timeout: 90000 },
+  { timeout: 120000 },
   async (t) => {
     const pdf = fixture(),
       requests = [],
@@ -184,6 +187,12 @@ test(
         window.print = () => {
           const record = {
             pages: document.querySelectorAll(".printedPage img").length,
+            numbers: window.PDFViewerApplication.printService.pagesOverview.map(
+              (page) => page.pageNumber,
+            ),
+            sizes: window.PDFViewerApplication.printService.pagesOverview.map(
+              ({ width, height, rotation }) => ({ width, height, rotation }),
+            ),
             loaded: [...document.querySelectorAll(".printedPage img")].every(
               (img) => img.complete && img.naturalWidth > 0,
             ),
@@ -215,13 +224,22 @@ test(
       await frame.evaluate(
         () => window.PDFViewerApplication.pdfViewer.pagesPromise,
       )
-      // Let adjacent visible-page rendering finish before spying on print reads.
-      await frame.evaluate(
-        () => new Promise((resolve) => setTimeout(resolve, 100)),
-      )
+      // Wait for the preview's own outstanding resources before measuring reads
+      // caused by selection/printing. Keep the real HTTP cache enabled.
+      await page.waitForLoadState("networkidle")
       return { page, frame }
     }
-    async function printed(frame, count = 1) {
+    async function selectPages(frame, range) {
+      await frame.locator('[data-openlist-print="select"]').waitFor()
+      if (range === "current") await frame.locator('[value="current"]').check()
+      else if (range) await frame.locator("[data-range]").fill(range)
+      await frame.locator("[data-submit]").click()
+    }
+    async function printed(
+      frame,
+      count = 1,
+      numbers = Array.from({ length: pdf.pages }, (_, i) => i + 1),
+    ) {
       try {
         await frame.waitForFunction(
           (count) => window.__nativePrints.length === count,
@@ -246,10 +264,10 @@ test(
         )
         throw error
       }
-      assert.deepEqual(
-        await frame.evaluate(() => window.__nativePrints.at(-1)),
-        { pages: pdf.pages, loaded: true },
-      )
+      const record = await frame.evaluate(() => window.__nativePrints.at(-1))
+      assert.equal(record.pages, numbers.length)
+      assert.equal(record.loaded, true)
+      assert.deepEqual(record.numbers, numbers)
       await frame.waitForFunction(
         () => !window.PDFViewerApplication.printService,
       )
@@ -271,6 +289,7 @@ test(
             pdf.bytes.length / 3,
         )
         await frame.locator("#printButton").click()
+        await selectPages(frame)
         await printed(frame)
         assert.equal(
           await frame.evaluate(
@@ -280,8 +299,148 @@ test(
         )
         const count = requests.length
         await frame.locator("#printButton").click()
+        await selectPages(frame)
         await printed(frame, 2)
         assert.equal(requests.length, count, "PDF.js reuses loaded ranges")
+        await page.close()
+      },
+    )
+    await t.test(
+      "a custom range fetches and renders only chosen original pages",
+      async () => {
+        const { page, frame } = await open("selected")
+        await frame.evaluate(() => {
+          const doc = window.PDFViewerApplication.pdfDocument,
+            getPage = doc.getPage.bind(doc)
+          window.__printReads = []
+          window.__renderedNumbers = []
+          const wrapped = new WeakSet()
+          doc.getPage = async (number) => {
+            window.__printReads.push(number)
+            const pdfPage = await getPage(number)
+            if (!wrapped.has(pdfPage)) {
+              wrapped.add(pdfPage)
+              const render = pdfPage.render.bind(pdfPage)
+              pdfPage.render = (options) => {
+                if (options.intent === "print")
+                  window.__renderedNumbers.push(number)
+                return render(options)
+              }
+            }
+            return pdfPage
+          }
+        })
+        const before = requests.length
+        await frame.locator("#printButton").click()
+        await frame.locator('[data-openlist-print="select"]').waitFor()
+        await frame.locator("[data-range]").fill("0,13")
+        await frame.locator("[data-submit]").click()
+        await frame.locator("#openlist-print-error:not([hidden])").waitFor()
+        assert.equal(await frame.evaluate(() => window.__printReads.length), 0)
+        assert.equal(
+          requests.length,
+          before,
+          "choosing or rejecting a range must not read PDF data",
+        )
+        await selectPages(frame, "9,5,7,7")
+        await printed(frame, 1, [5, 7, 9])
+        assert.deepEqual(
+          await frame.evaluate(() => window.__renderedNumbers),
+          [5, 7, 9],
+        )
+        assert.deepEqual(
+          await frame.evaluate(() =>
+            [...new Set(window.__printReads)].sort((a, b) => a - b),
+          ),
+          [5, 7, 9],
+        )
+        assert.equal(
+          await frame.evaluate(
+            () => window.PDFViewerApplication.pdfViewer.pageViewsReady,
+          ),
+          false,
+        )
+        assert.equal(
+          await frame.evaluate(
+            () => window.PDFViewerApplication.pdfViewer.openListPrintPages,
+          ),
+          undefined,
+        )
+        const ranges = requests.slice(before)
+        for (const number of [3, 4, 6, 8, 10, 11]) {
+          assert.ok(
+            !ranges.some((request) => {
+              const match = /^bytes=(\d+)-(\d+)$/.exec(request.range || "")
+              return (
+                match &&
+                Number(match[1]) <= pdf.contentOffsets[number - 1] &&
+                Number(match[2]) >= pdf.contentOffsets[number - 1]
+              )
+            }),
+            `unselected page ${number} content was not requested`,
+          )
+        }
+        const bytes = ranges.reduce((n, r) => n + r.bytes, 0)
+        console.log(
+          `Selected 3/${pdf.pages} pages: ${bytes} additional bytes; fixture ${pdf.bytes.length} bytes`,
+        )
+        assert.ok(bytes < pdf.bytes.length / 4)
+        const count = requests.length
+        await frame.locator("#printButton").click()
+        await selectPages(frame, "7,9")
+        await printed(frame, 2, [7, 9])
+        assert.equal(
+          requests.length,
+          count,
+          "reprinting selected pages reuses Range data",
+        )
+        assert.deepEqual(
+          await frame.evaluate(() => window.__nativePrints.at(-1).sizes),
+          [
+            { width: 420, height: 300, rotation: 0 },
+            { width: 420, height: 300, rotation: -90 },
+          ],
+          "auto-rotation uses the first selected page",
+        )
+        await page.close()
+      },
+    )
+    await t.test(
+      "current-page printing and cancelling the chooser keep other pages lazy",
+      async () => {
+        const { page, frame } = await open("current", {
+          viewport: { width: 390, height: 750 },
+          theme: "dark",
+        })
+        const before = requests.length
+        await frame.evaluate(() => {
+          window.print()
+          window.print()
+        })
+        await frame.locator('[data-openlist-print="select"]').waitFor()
+        assert.equal(await frame.locator("[data-openlist-print]").count(), 1)
+        const bounds = await frame
+          .locator("[data-openlist-print]")
+          .boundingBox()
+        assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= 390)
+        if (process.env.PDF_PRINT_SCREENSHOT_DIR)
+          await page.screenshot({
+            path: path.join(
+              process.env.PDF_PRINT_SCREENSHOT_DIR,
+              "pdf-print-range-dark-mobile.png",
+            ),
+          })
+        await frame.locator("[data-cancel]").click()
+        assert.equal(requests.length, before)
+        await frame.evaluate(() => window.print())
+        await selectPages(frame, "current")
+        await printed(frame, 1, [1])
+        assert.equal(
+          await frame.evaluate(
+            () => window.PDFViewerApplication.pdfViewer.pageViewsReady,
+          ),
+          false,
+        )
         await page.close()
       },
     )
@@ -307,6 +466,7 @@ test(
           window.print()
           window.print()
         })
+        await selectPages(frame)
         await frame.locator('[data-openlist-print="loading"]').waitFor()
         assert.ok((await frame.evaluate(() => window.__reads)) <= 6)
         assert.equal(await frame.locator("[data-openlist-print]").count(), 1)
@@ -339,6 +499,7 @@ test(
           window.PDFViewerApplication.pdfDocument.getPage = window.__getPage
           window.print()
         })
+        await selectPages(frame)
         await printed(frame)
         await page.close()
       },
@@ -348,6 +509,7 @@ test(
       async () => {
         const { page, frame } = await open("render-cancel")
         await frame.locator("#printButton").click()
+        await selectPages(frame)
         await frame.locator("#printServiceDialog[open]").waitFor()
         await frame.locator("#printCancel").click()
         await frame.waitForFunction(
@@ -359,6 +521,7 @@ test(
         )
         assert.equal(await frame.locator("[data-openlist-print]").count(), 0)
         await frame.locator("#printButton").click()
+        await selectPages(frame)
         await printed(frame)
         await page.close()
       },
@@ -380,13 +543,14 @@ test(
           }
           window.print()
         })
+        await selectPages(frame, "7-8")
         await frame.locator('[data-openlist-print="error"]').waitFor()
         assert.equal(
           await frame.evaluate(() => window.__nativePrints.length),
           0,
         )
         await frame.locator("[data-retry]").click()
-        await printed(frame)
+        await printed(frame, 1, [7, 8])
         await page.close()
       },
     )
@@ -396,6 +560,7 @@ test(
         const { page, frame } = await open("range-failure")
         failOffset = pdf.contentOffsets[5]
         await frame.locator("#printButton").click()
+        await selectPages(frame, "6,8")
         await frame
           .locator('[data-openlist-print="error"]')
           .waitFor({ timeout: 12000 })
@@ -405,7 +570,7 @@ test(
           0,
         )
         await frame.locator("[data-retry]").click()
-        await printed(frame)
+        await printed(frame, 1, [6, 8])
         await page.close()
       },
     )
@@ -425,6 +590,7 @@ test(
           }
           window.print()
         })
+        await selectPages(frame)
         await frame.locator('[data-openlist-print="loading"]').waitFor()
         await page.evaluate(() => {
           window.__fileUrl =
@@ -447,6 +613,7 @@ test(
         await frame.evaluate(() => {
           window.print()
         })
+        await selectPages(frame)
         await printed(frame)
         await page.close()
       },

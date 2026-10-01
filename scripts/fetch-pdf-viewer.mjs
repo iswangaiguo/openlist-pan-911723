@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 
 // Keep the frontend URL and integration revision in sync with pdf-range.patch.
 // Bump the revision whenever the viewer/bridge changes, so caches never mix.
-export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist4"
+export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist5"
 const ARCHIVE_URL =
   "https://github.com/mozilla/pdf.js/releases/download/v6.3.289/pdfjs-6.3.289-legacy-dist.zip"
 const ARCHIVE_SHA256 =
@@ -63,6 +63,53 @@ export function patchPdfPageTree(source) {
   )
 }
 
+export function patchPdfPrintRange(source) {
+  // Keep the stock annotation handling, progress, cancellation and native print
+  // service. Restrict readiness, page sizes and rendering to the chosen pages.
+  const replacements = [
+    [
+      "if (!this.pdfViewer.pageViewsReady) {",
+      "if (!(this.pdfViewer.openListPrintPages ? this.pdfViewer.openListPrintPages.every(pageNumber => this.pdfViewer.getPageView(pageNumber - 1)?.pdfPage) : this.pdfViewer.pageViewsReady)) {",
+    ],
+    [
+      "getPagesOverview() {\n    let initialOrientation;\n    return this._pages.map(pageView => {",
+      "getPagesOverview() {\n    let initialOrientation;\n    const pageNumbers = this.openListPrintPages;\n    const pages = pageNumbers ? pageNumbers.map(pageNumber => this._pages[pageNumber - 1]) : this._pages;\n    return pages.map((pageView, index) => {\n      const pageNumber = pageNumbers?.[index] ?? index + 1;",
+    ],
+    [
+      "width: viewport.height,\n          height: viewport.width,",
+      "pageNumber,\n          width: viewport.height,\n          height: viewport.width,",
+    ],
+    [
+      "width: viewport.width,\n        height: viewport.height,\n        rotation: viewport.rotation",
+      "pageNumber,\n        width: viewport.width,\n        height: viewport.height,\n        rotation: viewport.rotation",
+    ],
+    [
+      "renderPage(this, this.pdfDocument, index + 1, this.pagesOverview[index],",
+      "renderPage(this, this.pdfDocument, this.pagesOverview[index].pageNumber ?? index + 1, this.pagesOverview[index],",
+    ],
+    [
+      "function getXfaHtmlForPrinting(printContainer, pdfDocument) {",
+      "function getXfaHtmlForPrinting(printContainer, pdfDocument, pageNumbers = null) {",
+    ],
+    [
+      "for (const xfaPage of xfaHtml.children) {",
+      "for (const xfaPage of pageNumbers ? pageNumbers.map(pageNumber => xfaHtml.children[pageNumber - 1]) : xfaHtml.children) {",
+    ],
+    [
+      "getXfaHtmlForPrinting(this.printContainer, this.pdfDocument);",
+      "getXfaHtmlForPrinting(this.printContainer, this.pdfDocument, this.pagesOverview.map(page => page.pageNumber));",
+    ],
+  ]
+  for (const [before, after] of replacements) {
+    if (source.split(before).length !== 2)
+      throw new Error("Unexpected PDF.js print range code")
+    source = source.replace(before, after)
+  }
+  return (
+    "/* OpenList customization: print only selected PDF pages. */\n" + source
+  )
+}
+
 export function installPdfViewer(dist, archive) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "openlist-pdfjs-"))
   try {
@@ -82,6 +129,11 @@ export function installPdfViewer(dist, archive) {
     fs.writeFileSync(worker, patchPdfPageTree(fs.readFileSync(worker, "utf8")))
     const api = path.join(extracted, "build/pdf.mjs")
     fs.writeFileSync(api, patchPdfRangeFetch(fs.readFileSync(api, "utf8")))
+    const viewer = path.join(extracted, "web/viewer.mjs")
+    fs.writeFileSync(
+      viewer,
+      patchPdfPrintRange(fs.readFileSync(viewer, "utf8")),
+    )
     const entry = path.join(extracted, "web/viewer.html")
     const html = fs.readFileSync(entry, "utf8")
     if (!html.includes('<script src="viewer.mjs" type="module"></script>'))
