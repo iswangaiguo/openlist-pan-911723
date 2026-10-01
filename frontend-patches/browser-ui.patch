@@ -62,14 +62,15 @@ index bd2219d..6c92b35 100644
    )
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
 new file mode 100644
-index 0000000..45946ba
+index 0000000..089bb4f
 --- /dev/null
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -0,0 +1,155 @@
+@@ -0,0 +1,167 @@
 +import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
 +import { Show } from "solid-js"
 +import {
 +  BsFolder2,
++  BsShare,
 +  BsArrowClockwise,
 +  BsFolderPlus,
 +  BsArrowUp,
@@ -81,10 +82,11 @@ index 0000000..45946ba
 +import { Layout } from "./header/layout"
 +import { bus } from "~/utils"
 +
-+export const driveText = (key: "files" | "workspace" | "waiting") => {
++export const driveText = (key: "files" | "shares" | "workspace" | "waiting") => {
 +  const zh = String(currentLang()).startsWith("zh")
 +  return {
 +    files: zh ? "所有文件" : "All files",
++    shares: zh ? "分享管理" : "Share management",
 +    workspace: zh ? "文件空间" : "Workspace",
 +    waiting: zh ? "等待传输" : "Waiting for transfer",
 +  }[key]
@@ -129,6 +131,16 @@ index 0000000..45946ba
 +          >
 +            <Icon as={BsFolder2} />
 +            <span>{driveText("files")}</span>
++          </button>
++        </Show>
++        <Show when={!isShare() && UserMethods.is_admin(me())}>
++          <button
++            type="button"
++            class="drive-nav-item"
++            onClick={() => to("/@manage/shares")}
++          >
++            <Icon as={BsShare} />
++            <span>{driveText("shares")}</span>
 +          </button>
 +        </Show>
 +      </nav>

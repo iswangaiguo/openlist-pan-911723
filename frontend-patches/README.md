@@ -10,7 +10,7 @@
 | `directory-navigation.patch` | 目录快照、导航请求协调、列表状态与签名更新                                |
 | `multipart-resources.patch`  | 分段上传协议与资源清理                                                    |
 | `upload-defaults.patch`      | 默认上传设置                                                              |
-| `browser-ui.patch`           | 网盘布局、列表和选择界面、公共样式、Manifest 路径；首页不提供本地设置入口 |
+| `browser-ui.patch`           | 网盘布局、列表和选择界面、公共样式、Manifest 路径；首页提供管理员分享管理入口；不提供本地设置入口 |
 | `file-actions.patch`         | 行内改名、文件菜单、分享界面和权限设置                                    |
 | `file-dialogs.patch`         | 文件操作弹窗的公共样式、主题、窄屏布局和目录选择界面                      |
 | `upload-panel.patch`         | 全局上传面板、队列、持久恢复、上传后的目录刷新                            |

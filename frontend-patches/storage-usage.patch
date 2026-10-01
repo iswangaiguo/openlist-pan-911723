@@ -1,16 +1,16 @@
 diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
-index 45946ba..364fa26 100644
+index 089bb4f..5ed1831 100644
 --- a/src/pages/home/DriveChrome.tsx
 +++ b/src/pages/home/DriveChrome.tsx
-@@ -12,6 +12,7 @@ import { getSetting, me, objStore, State, userCan } from "~/store"
+@@ -13,6 +13,7 @@ import { getSetting, me, objStore, State, userCan } from "~/store"
  import { UserMethods } from "~/types"
  import { Layout } from "./header/layout"
  import { bus } from "~/utils"
 +import { DriveUsage } from "./DriveUsage"
  
- export const driveText = (key: "files" | "workspace" | "waiting") => {
+ export const driveText = (key: "files" | "shares" | "workspace" | "waiting") => {
    const zh = String(currentLang()).startsWith("zh")
-@@ -64,6 +65,7 @@ export const DriveRail = () => {
+@@ -76,6 +77,7 @@ export const DriveRail = () => {
            </button>
          </Show>
        </nav>
