@@ -293,6 +293,106 @@ test(
       },
     )
     await t.test(
+      "dragging previews the destination and performs only one media seek on release",
+      async () => {
+        const { page, state } = await open("drag", { block: true })
+        await ready(page)
+        await page.evaluate(() => {
+          window.seekCount = 0
+          document
+            .querySelector("video")
+            .addEventListener("seeking", () => window.seekCount++)
+        })
+        const rect = await page.locator(".art-progress").boundingBox()
+        const initialRequests = state.ranges.length
+        await page.mouse.move(rect.x + 1, rect.y + rect.height / 2)
+        await page.mouse.down()
+        await page.mouse.move(
+          rect.x + rect.width * 0.8,
+          rect.y + rect.height / 2,
+          { steps: 30 },
+        )
+        t.diagnostic(
+          `drag while held: ${await page.evaluate(() => window.seekCount)} media seeks; ${state.ranges.length - initialRequests} additional media requests`,
+        )
+        assert.equal(
+          await page.evaluate(
+            () => document.querySelector("video").currentTime,
+          ),
+          0,
+          "dragging must not read every intermediate file position",
+        )
+        assert.equal(await page.evaluate(() => window.seekCount), 0)
+        assert.equal(state.ranges.length, initialRequests)
+        await page.mouse.up()
+        await page.waitForFunction(() => window.seekCount === 1)
+        assert.ok(
+          Math.abs(
+            (await page.evaluate(
+              () => document.querySelector("video").currentTime,
+            )) - 96,
+          ) < 0.2,
+        )
+        await page.waitForTimeout(100)
+        assert.ok(state.ranges.length <= initialRequests + 3)
+        await page.locator(".art-control-reconnect").click()
+        await page.waitForFunction(() => {
+          const v = document.querySelector("video")
+          return (
+            v.currentTime >= 95.5 && !v.seeking && v.readyState >= 2 && v.paused
+          )
+        })
+        await page.evaluate(() => {
+          window.seekCount = 0
+        })
+        await page.mouse.click(
+          rect.x + rect.width * 0.4,
+          rect.y + rect.height / 2,
+        )
+        await page.waitForFunction(() => window.seekCount === 1)
+        assert.ok(
+          Math.abs(
+            (await page.evaluate(
+              () => document.querySelector("video").currentTime,
+            )) - 48,
+          ) < 0.2,
+        )
+        await page.keyboard.press("ArrowRight")
+        await page.waitForFunction(() => window.seekCount === 2)
+        const beforeCancel = await page.evaluate(
+          () => document.querySelector("video").currentTime,
+        )
+        assert.ok(
+          Math.abs(beforeCancel - 53) < 0.2,
+          "progress clicks preserve keyboard focus",
+        )
+        await page.mouse.move(
+          rect.x + rect.width * 0.4,
+          rect.y + rect.height / 2,
+        )
+        await page.mouse.down()
+        await page.mouse.move(
+          rect.x + rect.width * 0.7,
+          rect.y + rect.height / 2,
+          { steps: 10 },
+        )
+        await page.evaluate(() => window.dispatchEvent(new Event("blur")))
+        await page.mouse.up()
+        assert.equal(
+          await page.evaluate(
+            () => document.querySelector("video").currentTime,
+          ),
+          beforeCancel,
+        )
+        assert.equal(
+          await page.evaluate(() => window.seekCount),
+          2,
+          "cancelled drag performs no seek",
+        )
+        await page.close()
+      },
+    )
+    await t.test(
       "ordinary stalled seek does not reload; explicit reconnect restores position",
       async () => {
         const { page, state } = await open("manual", { block: true })

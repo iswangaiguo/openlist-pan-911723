@@ -172,7 +172,7 @@ index 7aece62..730dbdc 100644
      hlsPlayer?.destroy()
      if (player) {
 diff --git a/src/pages/home/previews/video.tsx b/src/pages/home/previews/video.tsx
-index 8025a86..18e618f 100644
+index 8025a86..38a8def 100644
 --- a/src/pages/home/previews/video.tsx
 +++ b/src/pages/home/previews/video.tsx
 @@ -11,11 +11,13 @@ import { useRouter, useLink } from "~/hooks"
@@ -190,15 +190,16 @@ index 8025a86..18e618f 100644
  import Artplayer from "artplayer"
  import { type Option } from "artplayer"
  import { type Setting } from "artplayer"
-@@ -28,6 +30,7 @@ import Hls from "hls.js"
+@@ -28,6 +30,8 @@ import Hls from "hls.js"
  import { currentLang } from "~/app/i18n"
  import { AutoHeightPlugin, VideoBox } from "./video_box"
  import { hlsBufferConfig, mpegtsBufferConfig } from "./video_buffer"
 +import { installVideoWakeRecovery } from "./video_wake"
++import { installCommittedVideoSeek } from "./video_seek"
  import { ArtPlayerIconsSubtitle } from "~/components/icons"
  import { useNavigate } from "@solidjs/router"
  import "./artplayer.css"
-@@ -62,6 +65,12 @@ const Preview = () => {
+@@ -62,6 +66,12 @@ const Preview = () => {
    let player: Artplayer
    let flvPlayer: mpegts.Player
    let hlsPlayer: Hls
@@ -211,7 +212,7 @@ index 8025a86..18e618f 100644
    let option: Option = {
      container: "#video-player",
      volume: 1.0,
-@@ -118,6 +127,7 @@ const Preview = () => {
+@@ -118,6 +128,7 @@ const Preview = () => {
        // @ts-ignore
        "webkit-playsinline": true,
        playsInline: true,
@@ -219,7 +220,7 @@ index 8025a86..18e618f 100644
        crossOrigin: "anonymous",
      },
      customType: {
-@@ -131,6 +141,7 @@ const Preview = () => {
+@@ -131,6 +142,7 @@ const Preview = () => {
            mpegtsBufferConfig,
          )
          flvPlayer.attachMediaElement(video)
@@ -227,7 +228,7 @@ index 8025a86..18e618f 100644
          flvPlayer.load()
        },
        m2ts: function (video: HTMLMediaElement, url: string) {
-@@ -143,11 +154,15 @@ const Preview = () => {
+@@ -143,11 +155,15 @@ const Preview = () => {
            mpegtsBufferConfig,
          )
          flvPlayer.attachMediaElement(video)
@@ -243,7 +244,7 @@ index 8025a86..18e618f 100644
          hlsPlayer.loadSource(url)
          hlsPlayer.attachMedia(video)
          if (!video.src) {
-@@ -186,12 +201,16 @@ const Preview = () => {
+@@ -186,12 +202,16 @@ const Preview = () => {
    const enableEnhanceAss = true
  
    const switchUrl = (url: string) => {
@@ -260,7 +261,7 @@ index 8025a86..18e618f 100644
      const { subtitle, danmu } = subtitleAndDanmu()
      let isEnhanceAssMode = false
      const setSubtitleVisible = (visible: boolean) => {
-@@ -349,8 +368,102 @@ const Preview = () => {
+@@ -349,8 +369,103 @@ const Preview = () => {
      }
    }
  
@@ -341,6 +342,7 @@ index 8025a86..18e618f 100644
 +
    onMount(() => {
      player = new Artplayer(option)
++    onCleanup(installCommittedVideoSeek(player))
 +    onCleanup(
 +      installVideoWakeRecovery(player.video, (resume) => {
 +        void refreshSource(resume)
@@ -363,7 +365,7 @@ index 8025a86..18e618f 100644
      createEffect(on(() => objStore.raw_url, switchUrl))
      let auto_fullscreen: boolean
      switch (searchParams["auto_fullscreen"]) {
-@@ -372,7 +485,39 @@ const Preview = () => {
+@@ -372,7 +487,39 @@ const Preview = () => {
        if (!autoNext()) return
        next_video()
      })
@@ -403,7 +405,7 @@ index 8025a86..18e618f 100644
        if (player.video.crossOrigin) {
          console.log(
            "Error detected. Trying to remove Cross-Origin attribute. Screenshot may not be available.",
-@@ -382,6 +527,7 @@ const Preview = () => {
+@@ -382,6 +529,7 @@ const Preview = () => {
      })
    })
    onCleanup(() => {
@@ -411,6 +413,124 @@ index 8025a86..18e618f 100644
      setShouldKeepState(false)
      if (player) {
        player.fullscreenWeb = false
+diff --git a/src/pages/home/previews/video_seek.ts b/src/pages/home/previews/video_seek.ts
+new file mode 100644
+index 0000000..b428f89
+--- /dev/null
++++ b/src/pages/home/previews/video_seek.ts
+@@ -0,0 +1,112 @@
++type ProgressPlayer = {
++  duration: number
++  played: number
++  seek: number
++  isFocus: boolean
++  isInput: boolean
++  template: { $progress: HTMLElement; $player: HTMLElement }
++  emit: {
++    (
++      name: "setBar",
++      type: "played" | "hover",
++      value: number,
++      event?: MouseEvent,
++    ): void
++    (name: "focus", event: MouseEvent): void
++  }
++  on: (
++    name: "setBar",
++    callback: (type: string, value: number, event?: Event) => void,
++  ) => void
++  off: (
++    name: "setBar",
++    callback: (type: string, value: number, event?: Event) => void,
++  ) => void
++}
++
++// ArtPlayer seeks on every mousemove. For remote files, preview the destination
++// while dragging and commit once on release to avoid reading intermediate ranges.
++export function installCommittedVideoSeek(player: ProgressPlayer) {
++  const { $progress, $player } = player.template
++  if ($player.classList.contains("art-mobile")) return () => {}
++  let dragging = false,
++    suppressClick = false
++  let destination = 0,
++    lastEvent: MouseEvent | undefined
++  const preview = (event: MouseEvent) => {
++    const rect = $progress.getBoundingClientRect()
++    if (
++      !rect.width ||
++      !Number.isFinite(player.duration) ||
++      player.duration <= 0
++    )
++      return
++    const fraction = Math.min(
++      1,
++      Math.max(0, (event.clientX - rect.left) / rect.width),
++    )
++    destination = fraction * player.duration
++    lastEvent = event
++    player.emit("setBar", "played", fraction, event)
++    player.emit("setBar", "hover", fraction, event)
++  }
++  const begin = (event: MouseEvent) => {
++    if (
++      event.button !== 0 ||
++      !Number.isFinite(player.duration) ||
++      player.duration <= 0
++    )
++      return
++    // Prevent the built-in progress handler from arming its repeated seeks.
++    event.stopImmediatePropagation()
++    event.preventDefault()
++    dragging = true
++    suppressClick = false
++    player.isFocus = true
++    player.isInput = false
++    player.emit("focus", event)
++    preview(event)
++  }
++  const move = (event: MouseEvent) => {
++    if (dragging) preview(event)
++  }
++  const release = (event: MouseEvent) => {
++    if (!dragging || event.button !== 0) return
++    preview(event)
++    dragging = false
++    suppressClick = true
++    player.seek = destination
++  }
++  const click = (event: MouseEvent) => {
++    if (!suppressClick || event.button !== 0) return
++    suppressClick = false
++    event.stopImmediatePropagation()
++    event.preventDefault()
++  }
++  const repaint = (type: string, _value: number, event?: Event) => {
++    // Playback can continue while dragging; its timeupdate must not move the
++    // preview back to the old position. The event guard avoids recursive emits.
++    if (dragging && type === "played" && !event && lastEvent)
++      player.emit("setBar", "played", destination / player.duration, lastEvent)
++  }
++  const cancel = () => {
++    suppressClick ||= dragging
++    dragging = false
++    player.emit("setBar", "played", player.played)
++  }
++  $progress.addEventListener("mousedown", begin, true)
++  $progress.addEventListener("click", click, true)
++  document.addEventListener("mousemove", move, true)
++  document.addEventListener("mouseup", release, true)
++  window.addEventListener("blur", cancel)
++  player.on("setBar", repaint)
++  return () => {
++    dragging = suppressClick = false
++    $progress.removeEventListener("mousedown", begin, true)
++    $progress.removeEventListener("click", click, true)
++    document.removeEventListener("mousemove", move, true)
++    document.removeEventListener("mouseup", release, true)
++    window.removeEventListener("blur", cancel)
++    player.off("setBar", repaint)
++  }
++}
 diff --git a/src/pages/home/previews/video_wake.ts b/src/pages/home/previews/video_wake.ts
 new file mode 100644
 index 0000000..364abeb

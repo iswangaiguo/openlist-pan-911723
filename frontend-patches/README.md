@@ -17,7 +17,7 @@
 | `storage-usage.patch`        | 用量统计、侧栏入口与相关样式                                              |
 | `module-recovery.patch`      | 模块加载错误识别、页面错误边界、初始化与文件信息读取超时及重试            |
 | `video-buffer.patch`         | HLS/mpegts 缓冲配置                                                       |
-| `video-recovery.patch`       | 视频错误恢复、普通视频中断后无进展恢复及手动重新连接                      |
+| `video-recovery.patch`       | 视频错误恢复、普通视频中断后无进展恢复、手动重新连接与拖动松手提交        |
 | `pdf-range.patch`            | 本地 PDF.js 预览入口、主题、语言和重试                                    |
 | `file-type-icons.patch`      | 文件类型配色、折角 SVG 图标、扩展名识别和目录选择图标                     |
 

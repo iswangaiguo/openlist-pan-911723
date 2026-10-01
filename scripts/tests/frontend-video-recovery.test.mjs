@@ -101,9 +101,15 @@ function harness(filename) {
     },
     switchUrl: async () => {},
     play: async () => {},
-    template: { $container: target(clicks) },
+    template: {
+      $container: target(clicks),
+      $progress: target(new Map()),
+      $player: { classList: { contains: () => false } },
+    },
     controls: { add: () => {} },
     on: (key, fn) => events.set(key, fn),
+    off: (key) => events.delete(key),
+    emit: () => {},
   }
   const hls = new Map(),
     flv = new Map()
@@ -155,6 +161,11 @@ function harness(filename) {
     ts.transpile(
       (filename === "video.tsx"
         ? readFileSync(
+            path.join(root, "src/pages/home/previews/video_seek.ts"),
+            "utf8",
+          ).replace("export function", "function") +
+          "\n" +
+          readFileSync(
             path.join(root, "src/pages/home/previews/video_wake.ts"),
             "utf8",
           ).replace("export function", "function")
