@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 
 // Keep the frontend URL and integration revision in sync with pdf-range.patch.
 // Bump the revision whenever the viewer/bridge changes, so caches never mix.
-export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist3"
+export const PDF_VIEWER_PATH = "static/pdfjs/6.3.289-openlist4"
 const ARCHIVE_URL =
   "https://github.com/mozilla/pdf.js/releases/download/v6.3.289/pdfjs-6.3.289-legacy-dist.zip"
 const ARCHIVE_SHA256 =
@@ -98,6 +98,10 @@ export function installPdfViewer(dist, archive) {
     fs.copyFileSync(
       path.join(scripts, "pdf-viewer-bridge.mjs"),
       path.join(extracted, "web/openlist.mjs"),
+    )
+    fs.copyFileSync(
+      path.join(scripts, "pdf-print-preparation.mjs"),
+      path.join(extracted, "web/openlist-print.mjs"),
     )
     // Retain LICENSE, fonts, CMaps, WASM and locales. Demo PDFs/maps aren't used.
     function prune(dir) {
