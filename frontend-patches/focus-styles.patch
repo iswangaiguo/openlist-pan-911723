@@ -1,0 +1,168 @@
+diff --git a/src/app/index.css b/src/app/index.css
+index 0698907..5bb17a3 100644
+--- a/src/app/index.css
++++ b/src/app/index.css
+@@ -53,3 +53,39 @@
+ .hope-notification__list {
+   width: unset;
+ }
++
++/* Keep focus on the control without browser or Hope UI focus frames. */
++:is(
++  button,
++  a,
++  input,
++  textarea,
++  select,
++  summary,
++  [tabindex],
++  [contenteditable="true"]
++):focus,
++:is(
++  .hope-checkbox__control,
++  .hope-radio__control,
++  .hope-switch__control
++)[data-focus] {
++  outline: none !important;
++  box-shadow: none !important;
++}
++
++:is(
++    .hope-checkbox__control,
++    .hope-radio__control,
++    .hope-switch__control
++  )[data-focus]:not([data-checked]):not([data-indeterminate]):not(
++    [data-invalid]
++  ) {
++  border-color: var(--hope-colors-neutral7) !important;
++}
++
++/* Text decoration provides a keyboard cue without adding a border. */
++:is(button, a, summary, [role="tab"], [role="menuitem"]):focus-visible {
++  text-decoration: underline;
++  text-underline-offset: 4px;
++}
+diff --git a/src/app/theme.ts b/src/app/theme.ts
+index a46121c..60a3045 100644
+--- a/src/app/theme.ts
++++ b/src/app/theme.ts
+@@ -42,7 +42,7 @@ const theme: HopeThemeConfig = {
+           rounded: "$lg",
+           _focus: {
+             boxShadow: "unset",
+-            borderColor: "$info8",
++            borderColor: "$neutral7",
+           },
+         },
+       },
+@@ -57,7 +57,7 @@ const theme: HopeThemeConfig = {
+         rounded: "$lg",
+         _focus: {
+           boxShadow: "unset",
+-          borderColor: "$info8",
++          borderColor: "$neutral7",
+         },
+         resize: "vertical",
+         wordBreak: "break-all",
+@@ -72,7 +72,7 @@ const theme: HopeThemeConfig = {
+           rounded: "$lg",
+           _focus: {
+             boxShadow: "unset",
+-            borderColor: "$info8",
++            borderColor: "$neutral7",
+           },
+         },
+         content: {
+diff --git a/src/components/drive-dialog.css b/src/components/drive-dialog.css
+index d9e3bd8..0ca4b7f 100644
+--- a/src/components/drive-dialog.css
++++ b/src/components/drive-dialog.css
+@@ -117,10 +117,6 @@
+   opacity: 0.5;
+   cursor: not-allowed;
+ }
+-.drive-dialog :is(button, input, textarea, [tabindex]):focus-visible {
+-  outline: 2px solid var(--drive-blue);
+-  outline-offset: 3px;
+-}
+ .drive-dialog
+   :is(.hope-input, .hope-textarea, .hope-select__trigger, .drive-share-input) {
+   min-height: 40px;
+@@ -138,7 +134,7 @@
+     .hope-select__trigger,
+     .drive-share-input
+   ):focus {
+-  border-color: var(--drive-blue);
++  border-color: var(--drive-line);
+ }
+ .drive-dialog :is(.hope-input, .hope-textarea)[aria-invalid="true"] {
+   border-color: #c92a2a;
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index 86df37b..7cea2b4 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -30,10 +30,6 @@
+   font: inherit;
+   cursor: pointer;
+ }
+-.drive-shell button:focus-visible {
+-  outline: 3px solid #6da3ff;
+-  outline-offset: 3px;
+-}
+ .drive-rail {
+   position: sticky;
+   top: 0;
+@@ -872,7 +868,7 @@
+ .drive-file-row-renaming .name-box { width: 100%; min-width: 0; }
+ .drive-file-row-renaming .size, .drive-file-row-renaming .modified, .drive-file-row-renaming .disk-usage-percentage { display: none; }
+ .drive-inline-rename { display: flex; align-items: center; gap: 4px; width: 100%; min-width: 0; position: relative; }
+-.drive-inline-rename > input { flex: 1; min-width: 0; height: 38px; padding: 6px 8px; border: 2px solid #0061ff; border-radius: 5px; background: var(--drive-bg); color: var(--drive-text); outline-offset: 1px; }
++.drive-inline-rename > input { flex: 1; min-width: 0; height: 38px; padding: 6px 8px; border: 1px solid var(--drive-line); border-radius: 5px; background: var(--drive-bg); color: var(--drive-text); }
+ .drive-inline-rename .drive-icon-button { flex-shrink: 0; width: 32px; height: 32px; }
+ 
+ .drive-rename-error { position: absolute; top: 100%; left: 0; z-index: 2; background: var(--drive-bg); padding: 3px 6px; color: #c43a3a; font-size: 12px; }
+diff --git a/src/pages/home/shares/shares.css b/src/pages/home/shares/shares.css
+index 2129a11..5ecb757 100644
+--- a/src/pages/home/shares/shares.css
++++ b/src/pages/home/shares/shares.css
+@@ -17,10 +17,6 @@
+   background: transparent;
+   font: inherit;
+ }
+-.drive-shares-search:focus-within {
+-  outline: 2px solid var(--drive-blue);
+-  outline-offset: 2px;
+-}
+ .drive-shares-search input::placeholder {
+   color: var(--drive-muted);
+ }
+@@ -291,12 +287,6 @@
+ .drive-share-field textarea {
+   resize: vertical;
+ }
+-.drive-share-field input:focus,
+-.drive-share-field textarea:focus,
+-.drive-share-field select:focus {
+-  outline: 2px solid var(--drive-blue);
+-  outline-offset: 1px;
+-}
+ .drive-share-form-grid {
+   display: grid;
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+diff --git a/src/pages/home/uploads/upload-panel.css b/src/pages/home/uploads/upload-panel.css
+index ec51a56..354f64a 100644
+--- a/src/pages/home/uploads/upload-panel.css
++++ b/src/pages/home/uploads/upload-panel.css
+@@ -38,12 +38,6 @@
+ .upload-center button:hover {
+   background: var(--up-soft);
+ }
+-.upload-center button:focus-visible,
+-.upload-center select:focus-visible,
+-.upload-center summary:focus-visible {
+-  outline: 2px solid #0061ff;
+-  outline-offset: 2px;
+-}
+ .upload-center button:disabled {
+   opacity: 0.45;
+   cursor: default;

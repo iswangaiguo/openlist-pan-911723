@@ -15,6 +15,7 @@
     "video-recovery.patch",
     "pdf-range.patch",
     "file-type-icons.patch",
-    "share-management.patch"
+    "share-management.patch",
+    "focus-styles.patch"
   ]
 }
