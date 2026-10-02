@@ -1,4 +1,5 @@
 import type { Driver } from "./store/types"
+import { encodeKeyPart } from "./store/keycodec"
 import type { UserPermissionObj } from "../../pkg/permission"
 
 export interface RecentFile {
@@ -46,11 +47,52 @@ export async function recentRepository(
   if (
     !Number.isSafeInteger(user.id) ||
     !user.id ||
+    user.id < 0 ||
     user.role === 1 ||
     user.disabled
   )
     throw new Error("Login required")
-  const prefix = `openlist:recent:v1:${user.id}:${await digest(user.base_path || "/")}:`
+  const root = await digest(user.base_path || "/")
+  const legacyPrefix = `openlist:recent:v1:${user.id}:${root}:`
+  // The shared codec follows EdgeOne's letters/digits/underscores constraint.
+  const prefix = encodeKeyPart(legacyPrefix)
+  const legacyIndex = `openlist_recent_legacy_v1_${user.id}_${root}`
+  const ownKey = (k: unknown, p: string): k is string =>
+    typeof k === "string" &&
+    k.startsWith(p) &&
+    /^[0-9a-f]{64}$/.test(k.slice(p.length))
+  const legacyKeys = async (): Promise<string[]> => {
+    const stored = await driver.get(legacyIndex, env)
+    if (stored) {
+      try {
+        const keys = JSON.parse(stored)
+        if (Array.isArray(keys))
+          return [
+            ...new Set<string>(
+              keys.filter((k: unknown) => ownKey(k, legacyPrefix)),
+            ),
+          ]
+      } catch {}
+    }
+    // Use a legal prefix even on strict KV providers. Only retain addresses
+    // belonging to this account/root; never read another account's values.
+    const keys = (await driver.list("openlist", env)).filter((k) =>
+      ownKey(k, legacyPrefix),
+    )
+    // This index is a cache, not history data. Concurrent first visits can hit
+    // Cloudflare's per-key write rate; a cache failure must not block records.
+    await driver.put(legacyIndex, JSON.stringify(keys), env).catch(() => {})
+    return keys
+  }
+  const allKeys = async () => {
+    const [current, legacy] = await Promise.all([
+      driver.list(prefix, env),
+      legacyKeys(),
+    ])
+    return [
+      ...new Set([...current.filter((k) => ownKey(k, prefix)), ...legacy]),
+    ]
+  }
   const key = async (path: string) => prefix + (await digest(recentPath(path)))
   const read = async (k: string): Promise<RecentFile | undefined> => {
     const raw = await driver.get(k, env)
@@ -59,7 +101,8 @@ export async function recentRepository(
       const data = JSON.parse(raw)
       const path = recentPath(data.path)
       if (
-        k !== (await key(path)) ||
+        (k !== (await key(path)) &&
+          k !== legacyPrefix + (await digest(path))) ||
         !Number.isFinite(data.opened_at) ||
         !Number.isFinite(data.size) ||
         data.size < 0 ||
@@ -89,19 +132,29 @@ export async function recentRepository(
       )
         throw new Error("Invalid file metadata")
       const k = await key(path)
-      const old = await read(k)
+      const legacy = legacyPrefix + (await digest(path))
+      const [old, oldLegacy] = await Promise.all([
+        read(k),
+        legacyKeys().then((keys) =>
+          keys.includes(legacy) ? read(legacy) : undefined,
+        ),
+      ])
       const entry: RecentFile = {
         path,
         name: path.split("/").pop()!,
         size: body.size,
         type: body.type,
-        opened_at: Math.max(now, old?.opened_at || 0),
+        opened_at: Math.max(
+          now,
+          old?.opened_at || 0,
+          oldLegacy?.opened_at || 0,
+        ),
       }
       await driver.put(k, JSON.stringify(entry), env)
       return entry
     },
     list: async (now = Date.now()) => {
-      const keys = await driver.list(prefix, env)
+      const keys = await allKeys()
       // Bound concurrent remote reads rather than launching every request at once.
       const entries: { key: string; file: RecentFile }[] = []
       const stale: { key: string; opened_at?: number }[] = []
@@ -120,8 +173,16 @@ export async function recentRepository(
           b.file.opened_at - a.file.opened_at ||
           a.file.path.localeCompare(b.file.path),
       )
-      for (const item of entries.slice(LIMIT))
-        stale.push({ key: item.key, opened_at: item.file.opened_at })
+      const seen = new Set<string>()
+      const visible: RecentFile[] = []
+      for (const item of entries) {
+        if (seen.has(item.file.path) || visible.length >= LIMIT)
+          stale.push({ key: item.key, opened_at: item.file.opened_at })
+        else {
+          seen.add(item.file.path)
+          visible.push(item.file)
+        }
+      }
       // Recheck expired and excess records before pruning: another device may
       // have reopened them during this list request. Bound housekeeping calls.
       for (let i = 0; i < stale.length; i += 8)
@@ -132,15 +193,21 @@ export async function recentRepository(
               await driver.delete(item.key, env)
           }),
         )
-      return entries.slice(0, LIMIT).map((e) => e.file)
+      return visible
     },
-    remove: async (path: string) => driver.delete(await key(path), env),
+    remove: async (path: string) => {
+      await driver.delete(await key(path), env)
+      const legacy = legacyPrefix + (await digest(recentPath(path)))
+      if ((await legacyKeys()).includes(legacy))
+        await driver.delete(legacy, env)
+    },
     clear: async () => {
-      const keys = await driver.list(prefix, env)
+      const keys = await allKeys()
       for (let i = 0; i < keys.length; i += 8)
         await Promise.all(
           keys.slice(i, i + 8).map((k) => driver.delete(k, env)),
         )
+      await driver.put(legacyIndex, "[]", env).catch(() => {})
     },
   }
 }

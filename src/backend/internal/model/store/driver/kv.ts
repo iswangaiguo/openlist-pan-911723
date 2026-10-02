@@ -434,9 +434,8 @@ export const kvDriver: Driver = {
 
     // 模式1: Binding 模式
     if (kv) {
-      // EdgeOne KV list() 语义（依据官方 functions-kv 示例）：
-      //   page.keys -> [{ key, ttl, meta }]，page.complete 为 true 表示末页，
-      //   下一页 cursor 需手动取本页最后一个 key。
+      // Cloudflare returns name/list_complete and an opaque cursor; EdgeOne
+      // returns key/complete and uses the last key as the next cursor.
       const keys: string[] = []
       let cursor = ""
       let complete = false
@@ -447,19 +446,28 @@ export const kvDriver: Driver = {
 
         const page = await kv.list({ prefix, cursor, limit: 256 })
         const pageKeys = Array.isArray(page?.keys) ? page.keys : []
+        const cloudflare = typeof page?.list_complete === "boolean"
 
         for (const item of pageKeys) {
-          if (item?.key) keys.push(item.key)
+          const key = cloudflare ? item?.name : item?.key
+          if (typeof key === "string" && key) keys.push(key)
         }
 
-        if (pageKeys.length > 0) {
-          cursor = pageKeys[pageKeys.length - 1].key || ""
+        complete = cloudflare
+          ? page.list_complete
+          : Boolean(page?.complete) || pageKeys.length === 0
+        if (!complete) {
+          const next = cloudflare
+            ? page.cursor
+            : pageKeys[pageKeys.length - 1]?.key
+          if (typeof next !== "string" || !next || next === cursor)
+            throw new Error("KV list pagination did not advance")
+          cursor = next
         }
-
-        complete = Boolean(page?.complete) || pageKeys.length === 0
       }
-
-      return keys
+      if (!complete)
+        throw new Error("KV list pagination exceeded the page limit")
+      return [...new Set(keys)]
     }
 
     // 模式2: HTTP 代理模式
