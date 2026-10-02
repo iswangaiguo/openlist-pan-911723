@@ -1,0 +1,1540 @@
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+index 364fa26..4ab9131 100644
+--- a/src/pages/home/DriveChrome.tsx
++++ b/src/pages/home/DriveChrome.tsx
+@@ -2,6 +2,7 @@ import { Icon, Image, useColorModeValue } from "@hope-ui/solid"
+ import { Show } from "solid-js"
+ import {
+   BsFolder2,
++  BsShare,
+   BsArrowClockwise,
+   BsFolderPlus,
+   BsArrowUp,
+@@ -14,10 +15,13 @@ import { Layout } from "./header/layout"
+ import { bus } from "~/utils"
+ import { DriveUsage } from "./DriveUsage"
+ 
+-export const driveText = (key: "files" | "workspace" | "waiting") => {
++export const driveText = (
++  key: "files" | "shares" | "workspace" | "waiting",
++) => {
+   const zh = String(currentLang()).startsWith("zh")
+   return {
+     files: zh ? "所有文件" : "All files",
++    shares: zh ? "分享" : "Shared",
+     workspace: zh ? "文件空间" : "Workspace",
+     waiting: zh ? "等待传输" : "Waiting for transfer",
+   }[key]
+@@ -31,7 +35,9 @@ export const DriveBrand = () => {
+     <button
+       type="button"
+       class="drive-brand"
+-      aria-label={String(currentLang()).startsWith("zh") ? "返回首页" : "Go home"}
++      aria-label={
++        String(currentLang()).startsWith("zh") ? "返回首页" : "Go home"
++      }
+       onClick={() => to("/")}
+     >
+       <Show when={logo()} fallback={<span class="drive-brand-mark">O</span>}>
+@@ -49,7 +55,7 @@ export const DriveBrand = () => {
+ }
+ 
+ export const DriveRail = () => {
+-  const { to, isShare } = useRouter()
++  const { to, isShare, pathname } = useRouter()
+   return (
+     <aside class="drive-rail" aria-label={driveText("workspace")}>
+       <DriveBrand />
+@@ -57,13 +63,27 @@ export const DriveRail = () => {
+       <nav class="drive-rail-nav">
+         <Show when={!isShare()}>
+           <button
+-            class="drive-nav-item drive-nav-current"
++            class="drive-nav-item"
++            classList={{ "drive-nav-current": pathname() !== "/@links" }}
++            aria-current={pathname() !== "/@links" ? "page" : undefined}
+             onClick={() => to("/")}
+           >
+             <Icon as={BsFolder2} />
+             <span>{driveText("files")}</span>
+           </button>
+         </Show>
++        <Show when={!isShare() && UserMethods.is_admin(me())}>
++          <button
++            type="button"
++            class="drive-nav-item"
++            classList={{ "drive-nav-current": pathname() === "/@links" }}
++            aria-current={pathname() === "/@links" ? "page" : undefined}
++            onClick={() => to("/@links")}
++          >
++            <Icon as={BsShare} />
++            <span>{driveText("shares")}</span>
++          </button>
++        </Show>
+       </nav>
+       <DriveUsage />
+     </aside>
+diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
+index 1cedec6..f22717d 100644
+--- a/src/pages/home/Layout.tsx
++++ b/src/pages/home/Layout.tsx
+@@ -1,6 +1,7 @@
+ import { useColorModeValue } from "@hope-ui/solid"
+ import { Markdown } from "~/components"
+-import { useTitle } from "~/hooks"
++import { useRouter, useTitle } from "~/hooks"
++import { lazy, Match, Switch } from "solid-js"
+ import { getSetting } from "~/store"
+ import { notify } from "~/utils"
+ import { DriveRail } from "./DriveChrome"
+@@ -10,8 +11,11 @@ import { Footer } from "./Footer"
+ import { Header } from "./header/Header"
+ import { Toolbar } from "./toolbar/Toolbar"
+ 
++const Shares = lazy(() => import("./shares/Shares"))
++
+ const Index = () => {
+   const mode = useColorModeValue("light", "dark")
++  const { pathname } = useRouter()
+   useTitle(getSetting("site_title"))
+   const announcement = getSetting("announcement")
+   if (announcement) {
+@@ -21,10 +25,17 @@ const Index = () => {
+     <div class="drive-shell" data-drive-mode={mode()}>
+       <DriveRail />
+       <main class="drive-main">
+-        <Header />
+-        <Toolbar />
+-        <Body />
+-        <Footer />
++        <Switch>
++          <Match when={pathname() === "/@links"}>
++            <Shares />
++          </Match>
++          <Match when={pathname() !== "/@links"}>
++            <Header />
++            <Toolbar />
++            <Body />
++            <Footer />
++          </Match>
++        </Switch>
+       </main>
+     </div>
+   )
+diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
+index 55e74d9..71e7727 100644
+--- a/src/pages/home/header/Header.tsx
++++ b/src/pages/home/header/Header.tsx
+@@ -63,6 +63,11 @@ export const Header = () => {
+                     {driveText("files")}
+                   </MenuItem>
+                 </Show>
++                <Show when={!isShare() && UserMethods.is_admin(me())}>
++                  <MenuItem onSelect={() => to("/@links")}>
++                    {driveText("shares")}
++                  </MenuItem>
++                </Show>
+                 <MenuItem onSelect={() => refresh(undefined, true)}>
+                   <Icon as={BsArrowClockwise} />
+                   {t("home.toolbar.refresh")}
+diff --git a/src/pages/home/shares/ShareEditor.tsx b/src/pages/home/shares/ShareEditor.tsx
+new file mode 100644
+index 0000000..450f002
+--- /dev/null
++++ b/src/pages/home/shares/ShareEditor.tsx
+@@ -0,0 +1,351 @@
++import { Icon, ModalBody, ModalFooter, ModalHeader } from "@hope-ui/solid"
++import { createSignal, Show } from "solid-js"
++import { createStore } from "solid-js/store"
++import { BsFolder2 } from "solid-icons/bs"
++import { EnhancedFolderTree } from "~/components/EnhancedFolderTree"
++import {
++  Button,
++  Modal,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import { useT } from "~/hooks"
++import { me } from "~/store"
++import {
++  ExtractFolder,
++  OrderBy,
++  OrderDirection,
++  Resp,
++  ShareInfo,
++} from "~/types"
++import { notify, pathJoin, r } from "~/utils"
++import { shareText } from "./shared"
++
++export const ShareEditor = (props: {
++  share?: ShareInfo
++  onClose: () => void
++  onSaved: () => void
++}) => {
++  const t = useT()
++  const [draft, setDraft] = createStore({
++    id: props.share?.id || "",
++    files: (props.share?.files || []).join("\n"),
++    remark: props.share?.remark || "",
++    pwd: props.share?.pwd || "",
++    max_accessed: props.share?.max_accessed || 0,
++    order_by: props.share?.order_by || OrderBy.None,
++    order_direction: props.share?.order_direction || OrderDirection.None,
++    extract_folder: props.share?.extract_folder || ExtractFolder.None,
++    readme: props.share?.readme || "",
++    header: props.share?.header || "",
++  })
++  const localDate = (value: string | null | undefined) => {
++    if (!value) return ""
++    const date = new Date(value)
++    if (!Number.isFinite(date.getTime())) return ""
++    date.setMinutes(date.getMinutes() - date.getTimezoneOffset())
++    return date.toISOString().slice(0, 16)
++  }
++  const [expires, setExpires] = createSignal(localDate(props.share?.expires))
++  const [saving, setSaving] = createSignal(false)
++  const [error, setError] = createSignal("")
++  const [picker, setPicker] = createSignal(false)
++  const [selected, setSelected] = createSignal("/")
++  const close = () => {
++    if (!saving()) props.onClose()
++  }
++
++  const save = async (event: SubmitEvent) => {
++    event.preventDefault()
++    if (saving()) return
++    setError("")
++    const files = [
++      ...new Set(
++        draft.files
++          .split("\n")
++          .map((p) => p.trim())
++          .filter(Boolean),
++      ),
++    ]
++    if (!files.length) return setError(shareText("files_required"))
++    const id = draft.id.trim()
++    if (id && !/^[a-zA-Z0-9_-]{1,64}$/.test(id))
++      return setError(shareText("id_invalid"))
++    if (!Number.isSafeInteger(draft.max_accessed) || draft.max_accessed < 0)
++      return setError(shareText("limit_invalid"))
++    const date = expires() ? new Date(expires()) : null
++    if (date && !Number.isFinite(date.getTime()))
++      return setError(shareText("expiry_invalid"))
++    setSaving(true)
++    try {
++      const resp: Resp<ShareInfo> = await r.post(
++        `/share/${props.share ? "update" : "create"}`,
++        {
++          ...draft,
++          id: props.share?.id || id,
++          ...(props.share ? { new_id: id || props.share.id } : {}),
++          files,
++          expires:
++            props.share && expires() === localDate(props.share.expires)
++              ? props.share.expires
++              : date?.toISOString() || null,
++        },
++      )
++      if (resp.code !== 200)
++        throw new Error(resp.message || shareText("save_error"))
++      notify.success(shareText("saved"))
++      props.onSaved()
++    } catch (error) {
++      setError(error instanceof Error ? error.message : shareText("save_error"))
++    } finally {
++      setSaving(false)
++    }
++  }
++
++  return (
++    <>
++      <Modal opened onClose={close} size="lg">
++        <ModalOverlay />
++        <ModalContent class="drive-share-editor" data-drive-size="wide">
++          <ModalHeader>
++            {shareText(props.share ? "edit" : "create")}
++          </ModalHeader>
++          <ModalBody>
++            <form
++              id="drive-share-form"
++              class="drive-share-form"
++              onSubmit={save}
++            >
++              <fieldset disabled={saving()}>
++                <div class="drive-share-field">
++                  <label for="share-files">{shareText("files")} *</label>
++                  <div class="drive-share-path-field">
++                    <textarea
++                      id="share-files"
++                      rows="3"
++                      value={draft.files}
++                      onInput={(e) => setDraft("files", e.currentTarget.value)}
++                      aria-describedby="share-files-hint"
++                    />
++                    <button
++                      type="button"
++                      class="drive-button"
++                      aria-label={t("global.choose_or_input_path")}
++                      onClick={() => setPicker(true)}
++                    >
++                      <Icon as={BsFolder2} />
++                    </button>
++                  </div>
++                  <small id="share-files-hint">{shareText("files_hint")}</small>
++                </div>
++                <div class="drive-share-field">
++                  <label for="share-remark">{shareText("remark")}</label>
++                  <input
++                    id="share-remark"
++                    value={draft.remark}
++                    placeholder={shareText("optional")}
++                    onInput={(e) => setDraft("remark", e.currentTarget.value)}
++                  />
++                </div>
++                <div class="drive-share-form-grid">
++                  <div class="drive-share-field">
++                    <label for="share-password">{shareText("password")}</label>
++                    <input
++                      id="share-password"
++                      type="password"
++                      autocomplete="new-password"
++                      value={draft.pwd}
++                      placeholder={shareText("optional")}
++                      onInput={(e) => setDraft("pwd", e.currentTarget.value)}
++                    />
++                  </div>
++                  <div class="drive-share-field">
++                    <label for="share-expires">{shareText("expires")}</label>
++                    <input
++                      id="share-expires"
++                      type="datetime-local"
++                      value={expires()}
++                      onInput={(e) => setExpires(e.currentTarget.value)}
++                      aria-describedby="share-expiry-hint"
++                    />
++                    <small id="share-expiry-hint">
++                      {shareText("expiry_hint")}
++                    </small>
++                  </div>
++                </div>
++                <div class="drive-share-field">
++                  <label for="share-limit">{shareText("limit")}</label>
++                  <input
++                    id="share-limit"
++                    type="number"
++                    min="0"
++                    step="1"
++                    required
++                    value={draft.max_accessed}
++                    onInput={(e) =>
++                      setDraft("max_accessed", e.currentTarget.valueAsNumber)
++                    }
++                    aria-describedby="share-limit-hint"
++                  />
++                  <small id="share-limit-hint">{shareText("limit_hint")}</small>
++                </div>
++                <details class="drive-share-advanced">
++                  <summary>{shareText("advanced")}</summary>
++                  <div class="drive-share-field">
++                    <label for="share-id">{shareText("id")}</label>
++                    <input
++                      id="share-id"
++                      value={draft.id}
++                      maxlength="64"
++                      onInput={(e) => setDraft("id", e.currentTarget.value)}
++                      aria-describedby="share-id-hint"
++                    />
++                    <small id="share-id-hint">{shareText("id_hint")}</small>
++                  </div>
++                  <div class="drive-share-form-grid">
++                    <div class="drive-share-field">
++                      <label for="share-order">{t("shares.order_by")}</label>
++                      <select
++                        id="share-order"
++                        value={draft.order_by}
++                        onChange={(e) =>
++                          setDraft("order_by", e.currentTarget.value as OrderBy)
++                        }
++                      >
++                        <option value="">{shareText("default")}</option>
++                        <option value="name">
++                          {t("shares.order_bys.name")}
++                        </option>
++                        <option value="size">
++                          {t("shares.order_bys.size")}
++                        </option>
++                        <option value="modified">
++                          {t("shares.order_bys.modified")}
++                        </option>
++                      </select>
++                    </div>
++                    <div class="drive-share-field">
++                      <label for="share-direction">
++                        {t("shares.order_direction")}
++                      </label>
++                      <select
++                        id="share-direction"
++                        value={draft.order_direction}
++                        onChange={(e) =>
++                          setDraft(
++                            "order_direction",
++                            e.currentTarget.value as OrderDirection,
++                          )
++                        }
++                      >
++                        <option value="">{shareText("default")}</option>
++                        <option value="ASC">
++                          {t("shares.order_directions.asc")}
++                        </option>
++                        <option value="DESC">
++                          {t("shares.order_directions.desc")}
++                        </option>
++                      </select>
++                    </div>
++                  </div>
++                  <div class="drive-share-field">
++                    <label for="share-extract">
++                      {t("shares.extract_folder")}
++                    </label>
++                    <select
++                      id="share-extract"
++                      value={draft.extract_folder}
++                      onChange={(e) =>
++                        setDraft(
++                          "extract_folder",
++                          e.currentTarget.value as ExtractFolder,
++                        )
++                      }
++                    >
++                      <option value="">{shareText("default")}</option>
++                      <option value="front">
++                        {t("shares.extract_folders.front")}
++                      </option>
++                      <option value="back">
++                        {t("shares.extract_folders.back")}
++                      </option>
++                    </select>
++                  </div>
++                  <div class="drive-share-field">
++                    <label for="share-readme">{t("shares.readme")}</label>
++                    <textarea
++                      id="share-readme"
++                      rows="3"
++                      value={draft.readme}
++                      onInput={(e) => setDraft("readme", e.currentTarget.value)}
++                    />
++                  </div>
++                  <div class="drive-share-field">
++                    <label for="share-header">{t("shares.header")}</label>
++                    <textarea
++                      id="share-header"
++                      rows="3"
++                      value={draft.header}
++                      onInput={(e) => setDraft("header", e.currentTarget.value)}
++                    />
++                  </div>
++                </details>
++              </fieldset>
++              <Show when={error()}>
++                <p class="drive-share-error" role="alert">
++                  {error()}
++                </p>
++              </Show>
++            </form>
++          </ModalBody>
++          <ModalFooter>
++            <Button colorScheme="neutral" disabled={saving()} onClick={close}>
++              {shareText("cancel")}
++            </Button>
++            <Button
++              type="submit"
++              form="drive-share-form"
++              colorScheme="info"
++              loading={saving()}
++            >
++              {shareText(props.share ? "save" : "create")}
++            </Button>
++          </ModalFooter>
++        </ModalContent>
++      </Modal>
++      <Modal opened={picker()} onClose={() => setPicker(false)} size="lg">
++        <ModalOverlay />
++        <ModalContent data-drive-size="folder">
++          <ModalHeader>{t("global.choose_or_input_path")}</ModalHeader>
++          <ModalBody>
++            <EnhancedFolderTree
++              forceRoot
++              showHiddenFolder
++              onChange={setSelected}
++            />
++          </ModalBody>
++          <ModalFooter>
++            <Button colorScheme="neutral" onClick={() => setPicker(false)}>
++              {shareText("cancel")}
++            </Button>
++            <Button
++              colorScheme="info"
++              onClick={() => {
++                const paths = [
++                  ...new Set([
++                    ...draft.files.split("\n").filter(Boolean),
++                    pathJoin(me().base_path, selected()),
++                  ]),
++                ]
++                setDraft("files", paths.join("\n"))
++                setPicker(false)
++              }}
++            >
++              {t("shares.add_path")}
++            </Button>
++          </ModalFooter>
++        </ModalContent>
++      </Modal>
++    </>
++  )
++}
+diff --git a/src/pages/home/shares/Shares.tsx b/src/pages/home/shares/Shares.tsx
+new file mode 100644
+index 0000000..a5cf810
+--- /dev/null
++++ b/src/pages/home/shares/Shares.tsx
+@@ -0,0 +1,481 @@
++import {
++  Icon,
++  Menu,
++  MenuContent,
++  MenuItem,
++  MenuTrigger,
++  ModalBody,
++  ModalFooter,
++  ModalHeader,
++  useColorModeValue,
++} from "@hope-ui/solid"
++import {
++  createMemo,
++  createSignal,
++  For,
++  onCleanup,
++  onMount,
++  Show,
++} from "solid-js"
++import {
++  BsArrowClockwise,
++  BsArrowLeft,
++  BsLink45deg,
++  BsPlusLg,
++  BsSearch,
++  BsThreeDots,
++} from "solid-icons/bs"
++import {
++  Button,
++  DriveDialogScope,
++  Modal,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import { useRouter, useTitle, useUtil } from "~/hooks"
++import { me } from "~/store"
++import { PageResp, Resp, ShareInfo, UserMethods } from "~/types"
++import { notify, r } from "~/utils"
++import { Container } from "../Container"
++import { DriveAccount, driveText } from "../DriveChrome"
++import { ShareEditor } from "./ShareEditor"
++import { ShareStatus, shareStatus, shareText, shareUrl } from "./shared"
++import "./shares.css"
++
++const Shares = () => {
++  const { to } = useRouter()
++  const { copy } = useUtil()
++  const mode = useColorModeValue("light", "dark")
++  useTitle(shareText("title"))
++  const [shares, setShares] = createSignal<ShareInfo[]>([])
++  const [loading, setLoading] = createSignal(false)
++  const [error, setError] = createSignal("")
++  const [search, setSearch] = createSignal("")
++  const [filter, setFilter] = createSignal<"all" | ShareStatus>("all")
++  const [editor, setEditor] = createSignal<ShareInfo | null>()
++  const [deleting, setDeleting] = createSignal<ShareInfo>()
++  const [busy, setBusy] = createSignal("")
++  const [actionError, setActionError] = createSignal("")
++  const [now, setNow] = createSignal(Date.now())
++  let request: AbortController | undefined
++  let disposed = false
++  const refresh = async () => {
++    if (!UserMethods.is_admin(me())) return
++    request?.abort()
++    const controller = new AbortController()
++    request = controller
++    setLoading(true)
++    setError("")
++    try {
++      const resp: PageResp<ShareInfo> = await r.get("/share/list", {
++        signal: controller.signal,
++        timeout: 30000,
++      })
++      if (resp.code !== 200)
++        throw new Error(resp.message || shareText("load_error"))
++      if (!disposed && !controller.signal.aborted) {
++        setShares(resp.data.content || [])
++        setNow(Date.now())
++      }
++    } catch (error) {
++      if (!disposed && !controller.signal.aborted)
++        setError(
++          error instanceof Error ? error.message : shareText("load_error"),
++        )
++    } finally {
++      if (!disposed && request === controller) setLoading(false)
++    }
++  }
++  onMount(() => {
++    void refresh()
++    const timer = setInterval(() => setNow(Date.now()), 60000)
++    onCleanup(() => clearInterval(timer))
++  })
++  onCleanup(() => {
++    disposed = true
++    request?.abort()
++  })
++  const filtered = createMemo(() => {
++    const query = search().trim().toLocaleLowerCase()
++    return shares().filter(
++      (share) =>
++        (filter() === "all" || shareStatus(share, now()) === filter()) &&
++        (!query ||
++          [share.id, share.remark, share.creator, ...share.files]
++            .join(" ")
++            .toLocaleLowerCase()
++            .includes(query)),
++    )
++  })
++  const name = (share: ShareInfo) =>
++    share.remark || share.files[0]?.split("/").filter(Boolean).pop() || share.id
++  const date = (value: string | null) =>
++    value ? new Date(value).toLocaleString() : shareText("never")
++  const perform = async (
++    share: ShareInfo,
++    action: "enable" | "disable" | "delete",
++  ) => {
++    if (busy()) return
++    setBusy(share.id)
++    setActionError("")
++    try {
++      const resp: Resp<null> = await r.post(
++        `/share/${action}?id=${encodeURIComponent(share.id)}`,
++      )
++      if (resp.code !== 200)
++        throw new Error(resp.message || shareText("save_error"))
++      if (disposed) return
++      setShares((previous) =>
++        action === "delete"
++          ? previous.filter((item) => item.id !== share.id)
++          : previous.map((item) =>
++              item.id === share.id
++                ? { ...item, disabled: action === "disable" }
++                : item,
++            ),
++      )
++      setDeleting(undefined)
++      notify.success(
++        shareText(
++          action === "delete"
++            ? "deleted"
++            : action === "enable"
++              ? "enabled"
++              : "stopped",
++        ),
++      )
++      // Cancel an older list response so it cannot restore a deleted/disabled link.
++      void refresh()
++    } catch (error) {
++      if (!disposed)
++        setActionError(
++          error instanceof Error ? error.message : shareText("save_error"),
++        )
++    } finally {
++      if (!disposed) setBusy("")
++    }
++  }
++
++  return (
++    <DriveDialogScope>
++      <header class="drive-header">
++        <Container>
++          <div class="drive-header-inner">
++            <button
++              type="button"
++              class="drive-icon-button drive-shares-back"
++              aria-label={shareText("back")}
++              onClick={() => to("/")}
++            >
++              <Icon as={BsArrowLeft} />
++            </button>
++            <Show when={UserMethods.is_admin(me())}>
++              <label class="drive-search drive-shares-search">
++                <Icon as={BsSearch} />
++                <input
++                  type="search"
++                  aria-label={shareText("search")}
++                  placeholder={shareText("search")}
++                  value={search()}
++                  onInput={(e) => setSearch(e.currentTarget.value)}
++                />
++              </label>
++            </Show>
++            <div class="drive-header-tools">
++              <DriveAccount />
++            </div>
++          </div>
++        </Container>
++      </header>
++      <Container>
++        <section class="drive-shares" aria-labelledby="drive-shares-title">
++          <Show
++            when={UserMethods.is_admin(me())}
++            fallback={
++              <div class="drive-shares-empty">
++                <h1 id="drive-shares-title">{shareText("title")}</h1>
++                <p>{shareText("forbidden")}</p>
++                <button class="drive-button" onClick={() => to("/")}>
++                  {shareText("back")}
++                </button>
++              </div>
++            }
++          >
++            <div class="drive-heading">
++              <div>
++                <h1 id="drive-shares-title">{driveText("shares")}</h1>
++                <p class="drive-shares-description">
++                  {shareText("description")}
++                </p>
++              </div>
++              <div class="drive-actions">
++                <button
++                  type="button"
++                  class="drive-icon-button"
++                  aria-label={shareText("refresh")}
++                  title={shareText("refresh")}
++                  disabled={loading()}
++                  onClick={() => void refresh()}
++                >
++                  <Icon as={BsArrowClockwise} />
++                </button>
++                <button
++                  type="button"
++                  class="drive-button drive-button-primary"
++                  onClick={() => setEditor(null)}
++                >
++                  <Icon as={BsPlusLg} />
++                  <span>{shareText("create")}</span>
++                </button>
++              </div>
++            </div>
++            <div class="drive-shares-filters">
++              <nav aria-label={shareText("status")}>
++                <For each={["all", "active", "invalid", "disabled"] as const}>
++                  {(value) => (
++                    <button
++                      type="button"
++                      aria-pressed={filter() === value}
++                      classList={{ "is-current": filter() === value }}
++                      onClick={() => setFilter(value)}
++                    >
++                      {shareText(value)}
++                    </button>
++                  )}
++                </For>
++              </nav>
++              <span aria-live="polite">
++                {filtered().length} / {shares().length}
++              </span>
++            </div>
++            <Show when={error()}>
++              <div class="drive-share-error" role="alert">
++                {error()}{" "}
++                <button
++                  class="drive-button"
++                  disabled={loading()}
++                  onClick={() => void refresh()}
++                >
++                  {shareText("refresh")}
++                </button>
++              </div>
++            </Show>
++            <Show when={actionError() && !deleting()}>
++              <p class="drive-share-error" role="alert">
++                {actionError()}
++              </p>
++            </Show>
++            <Show
++              when={!loading() || shares().length}
++              fallback={
++                <p class="drive-shares-empty" role="status">
++                  {shareText("loading")}
++                </p>
++              }
++            >
++              <Show
++                when={filtered().length}
++                fallback={
++                  <Show when={!error()}>
++                    <div class="drive-shares-empty">
++                      <span class="drive-shares-empty-icon">
++                        <Icon as={BsLink45deg} />
++                      </span>
++                      <h2>
++                        {shareText(shares().length ? "no_matches" : "empty")}
++                      </h2>
++                      <Show
++                        when={search() || filter() !== "all"}
++                        fallback={<p>{shareText("empty_hint")}</p>}
++                      >
++                        <button
++                          class="drive-button"
++                          onClick={() => {
++                            setSearch("")
++                            setFilter("all")
++                          }}
++                        >
++                          {shareText("clear")}
++                        </button>
++                      </Show>
++                    </div>
++                  </Show>
++                }
++              >
++                <div class="drive-shares-table-wrap">
++                  <table
++                    class="drive-shares-table"
++                    aria-label={shareText("link")}
++                    aria-busy={loading()}
++                  >
++                    <thead>
++                      <tr>
++                        <th scope="col">{shareText("link")}</th>
++                        <th scope="col">{shareText("status")}</th>
++                        <th scope="col">{shareText("expires")}</th>
++                        <th scope="col">{shareText("accesses")}</th>
++                        <th scope="col">{shareText("operations")}</th>
++                      </tr>
++                    </thead>
++                    <tbody>
++                      <For each={filtered()}>
++                        {(share) => (
++                          <tr>
++                            <td>
++                              <div class="drive-shares-name">
++                                <span class="drive-shares-link-icon">
++                                  <Icon as={BsLink45deg} />
++                                </span>
++                                <div>
++                                  <button
++                                    type="button"
++                                    class="drive-shares-name-button"
++                                    onClick={() => setEditor(share)}
++                                  >
++                                    {name(share)}
++                                  </button>
++                                  <small title={share.files.join("\n")}>
++                                    {share.files.join(", ")}
++                                  </small>
++                                  <a
++                                    href={shareUrl(share.id)}
++                                    target="_blank"
++                                    rel="noreferrer"
++                                  >
++                                    {share.id}
++                                  </a>
++                                </div>
++                              </div>
++                            </td>
++                            <td>
++                              <span
++                                class="drive-shares-badge"
++                                data-status={shareStatus(share, now())}
++                              >
++                                {shareText(shareStatus(share, now()))}
++                              </span>
++                            </td>
++                            <td data-label={shareText("expires")}>
++                              {date(share.expires)}
++                            </td>
++                            <td data-label={shareText("accesses")}>
++                              {share.accessed}
++                              {share.max_accessed > 0
++                                ? ` / ${share.max_accessed}`
++                                : ""}
++                            </td>
++                            <td>
++                              <div class="drive-shares-row-actions">
++                                <button
++                                  type="button"
++                                  class="drive-button"
++                                  onClick={() => void copy(shareUrl(share.id))}
++                                >
++                                  {shareText("copy")}
++                                </button>
++                                <Menu placement="bottom-end">
++                                  <MenuTrigger
++                                    as="button"
++                                    class="drive-icon-button"
++                                    aria-label={`${shareText("more")}: ${share.id}`}
++                                    disabled={!!busy()}
++                                  >
++                                    <Icon as={BsThreeDots} />
++                                  </MenuTrigger>
++                                  <MenuContent
++                                    class="drive-shares-menu"
++                                    data-drive-mode={mode()}
++                                  >
++                                    <MenuItem onSelect={() => setEditor(share)}>
++                                      {shareText("edit")}
++                                    </MenuItem>
++                                    <MenuItem
++                                      onSelect={() =>
++                                        void perform(
++                                          share,
++                                          share.disabled ? "enable" : "disable",
++                                        )
++                                      }
++                                    >
++                                      {shareText(
++                                        share.disabled ? "enable" : "disable",
++                                      )}
++                                    </MenuItem>
++                                    <MenuItem
++                                      class="drive-shares-delete"
++                                      onSelect={() => {
++                                        setActionError("")
++                                        setDeleting(share)
++                                      }}
++                                    >
++                                      {shareText("delete")}
++                                    </MenuItem>
++                                  </MenuContent>
++                                </Menu>
++                              </div>
++                            </td>
++                          </tr>
++                        )}
++                      </For>
++                    </tbody>
++                  </table>
++                </div>
++              </Show>
++            </Show>
++          </Show>
++        </section>
++      </Container>
++      <Show when={editor() !== undefined}>
++        <ShareEditor
++          share={editor() || undefined}
++          onClose={() => setEditor(undefined)}
++          onSaved={() => {
++            setEditor(undefined)
++            void refresh()
++          }}
++        />
++      </Show>
++      <Modal
++        opened={!!deleting()}
++        onClose={() => {
++          if (!busy()) setDeleting(undefined)
++        }}
++      >
++        <ModalOverlay />
++        <ModalContent>
++          <ModalHeader>{shareText("delete_title")}</ModalHeader>
++          <ModalBody>
++            <strong>{deleting()?.id}</strong>
++            <p class="drive-shares-delete-hint">{shareText("delete_hint")}</p>
++            <Show when={actionError()}>
++              <p class="drive-share-error" role="alert">
++                {actionError()}
++              </p>
++            </Show>
++          </ModalBody>
++          <ModalFooter>
++            <Button
++              colorScheme="neutral"
++              disabled={!!busy()}
++              onClick={() => setDeleting(undefined)}
++            >
++              {shareText("cancel")}
++            </Button>
++            <Button
++              colorScheme="danger"
++              loading={!!busy()}
++              onClick={() => {
++                const share = deleting()
++                if (share) void perform(share, "delete")
++              }}
++            >
++              {shareText("delete")}
++            </Button>
++          </ModalFooter>
++        </ModalContent>
++      </Modal>
++    </DriveDialogScope>
++  )
++}
++
++export default Shares
+diff --git a/src/pages/home/shares/shared.ts b/src/pages/home/shares/shared.ts
+new file mode 100644
+index 0000000..3961fbf
+--- /dev/null
++++ b/src/pages/home/shares/shared.ts
+@@ -0,0 +1,105 @@
++import { currentLang } from "~/app/i18n"
++import { ShareInfo } from "~/types"
++import { joinBase } from "~/utils"
++
++const labels = {
++  title: ["分享", "Shared"],
++  description: ["管理你创建的分享链接。", "Manage your shared links."],
++  create: ["新建分享", "Create share"],
++  edit: ["编辑分享", "Edit share"],
++  search: ["搜索文件、链接或备注", "Search files, links or notes"],
++  all: ["所有链接", "All links"],
++  active: ["有效", "Active"],
++  invalid: ["已失效", "Expired"],
++  disabled: ["已停用", "Disabled"],
++  link: ["分享链接", "Shared link"],
++  status: ["状态", "Status"],
++  expires: ["到期时间", "Expiration"],
++  accesses: ["访问次数", "Access count"],
++  operations: ["操作", "Actions"],
++  copy: ["复制链接", "Copy link"],
++  more: ["更多操作", "More actions"],
++  refresh: ["刷新", "Refresh"],
++  loading: ["正在加载分享…", "Loading shared links…"],
++  empty: ["还没有分享链接", "No shared links yet"],
++  empty_hint: [
++    "新建分享，或在所有文件中选择项目进行分享。",
++    "Create a share, or select items in All files to share them.",
++  ],
++  no_matches: ["没有找到匹配的分享", "No matching shares"],
++  clear: ["清除筛选", "Clear filters"],
++  load_error: [
++    "无法加载分享，请重试。",
++    "Unable to load shares. Please retry.",
++  ],
++  save_error: ["操作失败，请重试。", "Operation failed. Please retry."],
++  forbidden: [
++    "分享管理仅对管理员开放。",
++    "Share management is available to administrators.",
++  ],
++  back: ["返回所有文件", "Back to All files"],
++  never: ["长期有效", "Never"],
++  files: ["文件或文件夹", "Files or folders"],
++  files_hint: [
++    "每行一个完整路径，也可点击文件夹图标选择。",
++    "Enter one full path per line, or use the folder picker.",
++  ],
++  files_required: [
++    "请至少选择一个文件或文件夹。",
++    "Choose at least one file or folder.",
++  ],
++  id: ["自定义链接 ID", "Custom link ID"],
++  id_hint: [
++    "留空自动生成；可使用字母、数字、下划线和连字符。",
++    "Leave blank to generate; use letters, numbers, underscores and hyphens.",
++  ],
++  id_invalid: [
++    "链接 ID 只能使用字母、数字、下划线和连字符，最多 64 个字符。",
++    "Link IDs allow letters, numbers, underscores and hyphens, up to 64 characters.",
++  ],
++  remark: ["备注", "Note"],
++  password: ["访问密码", "Access password"],
++  optional: ["可选", "Optional"],
++  default: ["默认", "Default"],
++  expiry_hint: ["留空则长期有效。", "Leave blank for no expiration."],
++  expiry_invalid: ["请输入有效的到期时间。", "Enter a valid expiration time."],
++  limit: ["访问次数上限", "Access limit"],
++  limit_hint: ["0 表示不限次数。", "0 means unlimited."],
++  limit_invalid: [
++    "次数上限必须是大于或等于 0 的整数。",
++    "The access limit must be a non-negative integer.",
++  ],
++  advanced: ["更多设置", "Advanced settings"],
++  save: ["保存", "Save"],
++  cancel: ["取消", "Cancel"],
++  enable: ["启用", "Enable"],
++  disable: ["停用", "Disable"],
++  delete: ["删除", "Delete"],
++  delete_title: ["删除分享链接", "Delete shared link"],
++  delete_hint: [
++    "删除后，此分享链接将无法访问，原文件不会删除。",
++    "This link will stop working. The original files will remain.",
++  ],
++  saved: ["分享已保存", "Share saved"],
++  deleted: ["分享已删除", "Share deleted"],
++  enabled: ["分享已启用", "Share enabled"],
++  stopped: ["分享已停用", "Share disabled"],
++} as const
++
++export const shareText = (key: keyof typeof labels) =>
++  labels[key][String(currentLang()).startsWith("zh") ? 0 : 1]
++
++export type ShareStatus = "active" | "invalid" | "disabled"
++export function shareStatus(share: ShareInfo, now = Date.now()): ShareStatus {
++  if (share.disabled) return "disabled"
++  if (
++    !share.files.length ||
++    (share.max_accessed > 0 && share.accessed >= share.max_accessed) ||
++    (share.expires && new Date(share.expires).getTime() <= now)
++  )
++    return "invalid"
++  return "active"
++}
++
++export const shareUrl = (id: string) =>
++  `${location.origin}${joinBase("@s", encodeURIComponent(id))}`
+diff --git a/src/pages/home/shares/shares.css b/src/pages/home/shares/shares.css
+new file mode 100644
+index 0000000..2129a11
+--- /dev/null
++++ b/src/pages/home/shares/shares.css
+@@ -0,0 +1,440 @@
++.drive-shares {
++  padding: 32px 0 56px;
++}
++.drive-shares-description {
++  margin: 8px 0 0;
++  color: var(--drive-muted);
++}
++.drive-shares-search {
++  cursor: text;
++}
++.drive-shares-search input {
++  width: 100%;
++  min-width: 0;
++  border: 0;
++  outline: 0;
++  color: var(--drive-text);
++  background: transparent;
++  font: inherit;
++}
++.drive-shares-search:focus-within {
++  outline: 2px solid var(--drive-blue);
++  outline-offset: 2px;
++}
++.drive-shares-search input::placeholder {
++  color: var(--drive-muted);
++}
++.drive-shares-back {
++  display: none;
++}
++.drive-shares-filters {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++  margin-top: 28px;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-shares-filters nav {
++  display: flex;
++  gap: 24px;
++  overflow-x: auto;
++}
++.drive-shares-filters button {
++  min-height: 46px;
++  padding: 8px 0;
++  border: 0;
++  border-bottom: 2px solid transparent;
++  color: var(--drive-muted);
++  background: transparent;
++  white-space: nowrap;
++}
++.drive-shares-filters button.is-current {
++  color: var(--drive-text);
++  border-bottom-color: var(--drive-blue);
++  font-weight: 600;
++}
++.drive-shares-filters > span {
++  color: var(--drive-muted);
++  font-size: 12px;
++  white-space: nowrap;
++}
++.drive-shares-table-wrap {
++  overflow-x: auto;
++}
++.drive-shares-table {
++  width: 100%;
++  border-collapse: collapse;
++  text-align: left;
++}
++.drive-shares-table th {
++  padding: 18px 14px;
++  color: var(--drive-muted);
++  font-size: 12px;
++  font-weight: 500;
++  white-space: nowrap;
++}
++.drive-shares-table td {
++  padding: 18px 14px;
++  border-top: 1px solid var(--drive-line);
++  font-size: 13px;
++  vertical-align: middle;
++}
++.drive-shares-table th:first-child,
++.drive-shares-table td:first-child {
++  padding-left: 0;
++}
++.drive-shares-table th:last-child,
++.drive-shares-table td:last-child {
++  padding-right: 0;
++}
++.drive-shares-table tbody tr:hover {
++  background: var(--drive-hover);
++}
++.drive-shares-name {
++  display: flex;
++  align-items: center;
++  gap: 14px;
++  min-width: 200px;
++}
++.drive-shares-name > div {
++  min-width: 0;
++  max-width: 340px;
++}
++.drive-shares-link-icon,
++.drive-shares-empty-icon {
++  display: grid;
++  place-items: center;
++  flex-shrink: 0;
++  width: 40px;
++  height: 40px;
++  border-radius: 7px;
++  background: var(--drive-selected);
++  color: var(--drive-blue);
++}
++.drive-shares-link-icon svg {
++  width: 25px;
++  height: 25px;
++}
++.drive-shares-name-button {
++  padding: 0;
++  border: 0;
++  color: inherit;
++  background: transparent;
++  font-weight: 600 !important;
++  text-align: left;
++  overflow-wrap: anywhere;
++}
++.drive-shares-name-button:hover {
++  color: var(--drive-blue);
++  text-decoration: underline;
++}
++.drive-shares-name small {
++  display: block;
++  margin: 4px 0;
++  color: var(--drive-muted);
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++}
++.drive-shares-name a {
++  color: var(--drive-muted);
++  font-size: 12px;
++  text-decoration: none;
++  overflow-wrap: anywhere;
++}
++.drive-shares-name a:hover {
++  color: var(--drive-blue);
++  text-decoration: underline;
++}
++.drive-shares-badge {
++  display: inline-block;
++  padding: 4px 8px;
++  border: 1px solid var(--drive-line);
++  border-radius: 4px;
++  color: var(--drive-muted);
++  background: var(--drive-hover);
++  white-space: nowrap;
++  font-size: 12px;
++}
++.drive-shares-badge[data-status="active"] {
++  color: #167a46;
++  background: #ebf8f0;
++  border-color: #cdebd8;
++}
++.drive-shares-badge[data-status="invalid"] {
++  color: #a35715;
++  background: #fff4e8;
++  border-color: #f1dfc6;
++}
++[data-drive-mode="dark"] .drive-shares-badge[data-status="active"] {
++  color: #86dba8;
++  background: #19392c;
++  border-color: #2e5842;
++}
++[data-drive-mode="dark"] .drive-shares-badge[data-status="invalid"] {
++  color: #ebbd86;
++  background: #392b1e;
++  border-color: #58412b;
++}
++.drive-shares-row-actions {
++  display: flex;
++  align-items: center;
++  justify-content: flex-end;
++  gap: 8px;
++  white-space: nowrap;
++}
++.drive-shares-row-actions .drive-button {
++  min-height: 34px;
++  padding: 6px 12px;
++  font-size: 12px;
++}
++.drive-shares-row-actions .drive-icon-button {
++  width: 32px;
++  height: 32px;
++  min-height: 32px;
++  border: 0;
++  background: transparent;
++}
++.drive-shares-menu {
++  border: 1px solid #e8e6e3;
++  border-radius: 8px;
++  background: #fff;
++  color: #1e1919;
++  box-shadow: 0 8px 32px #0000001a;
++}
++.drive-shares-menu[data-drive-mode="dark"] {
++  border-color: #34373e;
++  background: #202227;
++  color: #f1f1f1;
++}
++.drive-shares-menu .hope-menu__item {
++  color: inherit;
++}
++.drive-shares-menu .drive-shares-delete {
++  color: #c13535;
++}
++.drive-shares-menu[data-drive-mode="dark"] .drive-shares-delete {
++  color: #ff9999;
++}
++.drive-shares-empty {
++  padding: 70px 20px;
++  text-align: center;
++  color: var(--drive-muted);
++}
++.drive-shares-empty-icon {
++  width: 60px;
++  height: 60px;
++  margin: 0 auto 20px;
++}
++.drive-shares-empty-icon svg {
++  width: 32px;
++  height: 32px;
++}
++.drive-shares-empty h2 {
++  color: var(--drive-text);
++  font-size: 20px;
++  font-weight: 600;
++  margin-bottom: 8px;
++}
++.drive-shares-empty .drive-button {
++  margin: 18px auto 0;
++}
++.drive-share-error {
++  display: flex;
++  flex-wrap: wrap;
++  align-items: center;
++  gap: 12px;
++  margin: 16px 0;
++  padding: 12px 14px;
++  border: 1px solid #c1353533;
++  border-radius: 5px;
++  color: #b12e2e;
++  background: #c135350a;
++  overflow-wrap: anywhere;
++}
++[data-drive-mode="dark"] .drive-share-error {
++  color: #ff9999;
++}
++.drive-share-form fieldset {
++  min-width: 0;
++  margin: 0;
++  padding: 0;
++  border: 0;
++}
++.drive-share-field {
++  display: grid;
++  gap: 8px;
++  margin-bottom: 20px;
++  min-width: 0;
++}
++.drive-share-field label {
++  font-size: 14px;
++  font-weight: 600;
++}
++.drive-share-field small {
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-share-field input,
++.drive-share-field textarea,
++.drive-share-field select {
++  min-width: 0;
++  width: 100%;
++  padding: 10px 12px;
++  border: 1px solid var(--drive-line);
++  border-radius: 5px;
++  background: var(--drive-bg);
++  color: var(--drive-text);
++  font: inherit;
++}
++.drive-share-field textarea {
++  resize: vertical;
++}
++.drive-share-field input:focus,
++.drive-share-field textarea:focus,
++.drive-share-field select:focus {
++  outline: 2px solid var(--drive-blue);
++  outline-offset: 1px;
++}
++.drive-share-form-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 20px;
++}
++.drive-share-path-field {
++  display: flex;
++  align-items: flex-start;
++  gap: 10px;
++}
++.drive-share-path-field button {
++  flex-shrink: 0;
++}
++.drive-share-path-field .drive-button {
++  display: grid;
++  place-items: center;
++  width: 42px;
++  min-height: 42px;
++  border: 1px solid var(--drive-line);
++  border-radius: 5px;
++  color: var(--drive-text);
++  background: var(--drive-hover);
++}
++.drive-share-advanced {
++  border-top: 1px solid var(--drive-line);
++  padding-top: 16px;
++}
++.drive-share-advanced summary {
++  margin-bottom: 20px;
++  cursor: pointer;
++  font-weight: 600;
++}
++.drive-shares-delete-hint {
++  margin-top: 14px;
++  color: var(--drive-muted);
++}
++.drive-shares button:disabled {
++  cursor: wait;
++  opacity: 0.6;
++}
++@media (max-width: 1100px) and (min-width: 761px) {
++  .drive-shares-table {
++    min-width: 760px;
++  }
++}
++@media (max-width: 760px) {
++  .drive-shares {
++    padding-top: 20px;
++  }
++  .drive-shares-back {
++    display: grid;
++    flex-shrink: 0;
++  }
++  .drive-shares-search {
++    max-width: none;
++  }
++  .drive-shares-search input {
++    font-size: 13px;
++  }
++  .drive-shares .drive-header-tools {
++    display: none;
++  }
++  .drive-shares-description {
++    max-width: 180px;
++    font-size: 12px;
++  }
++  .drive-shares .drive-actions {
++    flex-shrink: 0;
++  }
++  .drive-shares .drive-button-primary {
++    padding-inline: 10px;
++    font-size: 12px;
++  }
++  .drive-shares .drive-button-primary svg {
++    display: none;
++  }
++  .drive-shares-filters {
++    gap: 10px;
++    margin-top: 20px;
++  }
++  .drive-shares-filters nav {
++    gap: 16px;
++  }
++  .drive-shares-filters button {
++    font-size: 12px;
++  }
++  .drive-shares-table-wrap {
++    overflow: visible;
++  }
++  .drive-shares-table,
++  .drive-shares-table tbody {
++    display: block;
++  }
++  .drive-shares-table thead {
++    position: absolute;
++    width: 1px;
++    height: 1px;
++    overflow: hidden;
++    clip-path: inset(50%);
++  }
++  .drive-shares-table tbody tr {
++    display: grid;
++    grid-template-columns: minmax(0, 1fr) auto;
++    gap: 12px;
++    padding: 20px 0;
++    border-bottom: 1px solid var(--drive-line);
++  }
++  .drive-shares-table td {
++    border: 0;
++    padding: 0;
++    font-size: 12px;
++  }
++  .drive-shares-table td:first-child {
++    grid-column: 1 / -1;
++  }
++  .drive-shares-name {
++    min-width: 0;
++  }
++  .drive-shares-name > div {
++    width: calc(100% - 54px);
++    max-width: none;
++  }
++  .drive-shares-table td:nth-child(2) {
++    grid-column: 1 / -1;
++  }
++  .drive-shares-table td:nth-child(3)::before,
++  .drive-shares-table td:nth-child(4)::before {
++    content: attr(data-label) ": ";
++    color: var(--drive-muted);
++  }
++  .drive-shares-table td:last-child {
++    grid-column: 1 / -1;
++  }
++  .drive-shares-row-actions {
++    justify-content: flex-start;
++  }
++  .drive-share-form-grid {
++    grid-template-columns: 1fr;
++    gap: 0;
++  }
++}
