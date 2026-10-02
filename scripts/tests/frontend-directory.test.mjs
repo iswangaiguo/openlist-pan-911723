@@ -12,14 +12,15 @@ if (!root)
 // No live accounts, browser credentials or cloud files are used.
 async function harness() {
   const adapter = `
-    export const h = { path: '/a', page: 1, calls: [], user: { id: 1, role: 0, permission: 8, base_path: '/' }, state: {}, password: '' };
+    export const h = { path: '/a', page: 1, calls: [], recent: [], user: { id: 1, role: 0, permission: 8, base_path: '/' }, state: {}, password: '' };
+    export const recordRecent=(path,obj)=>h.recent.push({path,obj});
     export const State = { Initial:0, FetchingObj:1, FetchingObjs:2, FetchingMore:3, Folder:4, File:5, NeedPassword:6 };
     export const objStore = h.state;
     export const ObjStore = Object.fromEntries(['Objs','Total','Readme','Header','Write','WriteContentBypass','Provider','DirectUploadTools','State','Err','Revalidating','Obj','Related','RawUrl'].map(k=>['set'+k,v=>{h.state[k[0].toLowerCase()+k.slice(1)]=v}]));
     ObjStore.mergeObjs=v=>{h.merges=(h.merges||0)+1;h.state.objs=v};
     export const me=()=>h.user, password=()=>h.password, shouldKeepState=()=>false;
     export const getPagination=()=>({type:'all',size:30});
-    export const getHistoryKey=p=>p, hasHistory=()=>false, recoverHistory=()=>{}, clearHistory=()=>{};
+    export const getHistoryKey=p=>p, hasHistory=()=>!!h.cachedFile, recoverHistory=async()=>{h.state.obj=h.cachedFile;h.state.state=5}, clearHistory=()=>{};
     export const appendObjs=v=>h.state.objs.push(...v);
     export const useFetch=fn=>[()=>false,fn];
     export const useRouter=()=>({pathname:()=>h.path,to:p=>{h.path=p},searchParams:{}});
@@ -44,7 +45,7 @@ async function harness() {
           b.onResolve(
             {
               filter:
-                /^(test:adapter|~\/store|~\/utils|\.\/useFetch|\.\/useRouter|axios)$/,
+                /^(test:adapter|~\/store|~\/utils|~\/pages\/home\/recent\/record|\.\/useFetch|\.\/useRouter|axios)$/,
             },
             (args) => ({
               path: args.path === "axios" ? "axios" : "adapter",
@@ -288,7 +289,6 @@ test("real Solid store reconciliation keeps rows/selection while renewing signat
   )
 })
 
-
 test("home lists mounts directly without hover and ignores a late child response", async () => {
   const { h, usePath } = await harness()
   const nav = usePath()
@@ -299,7 +299,11 @@ test("home lists mounts directly without hover and ignores a late child response
   h.path = "/"
   const home = nav.handlePathChange(h.path)
   assert.equal(h.calls.at(-1).path, "/")
-  assert.equal(h.calls.at(-1).get, undefined, "home must request the mount listing, not object metadata")
+  assert.equal(
+    h.calls.at(-1).get,
+    undefined,
+    "home must request the mount listing, not object metadata",
+  )
   const mounts = response("B2")
   mounts.data.content[0].is_dir = true
   mounts.data.provider = "Virtual"
@@ -310,8 +314,57 @@ test("home lists mounts directly without hover and ignores a late child response
   assert.equal(h.state.objs[0].name, "B2")
   assert.equal(h.state.provider, "Virtual")
   const revisit = nav.handlePathChange("/")
-  assert.equal(h.state.objs[0].name, "B2", "cached home remains visible during revalidation")
+  assert.equal(
+    h.state.objs[0].name,
+    "B2",
+    "cached home remains visible during revalidation",
+  )
   h.calls.at(-1).resolve(mounts)
   await revisit
   assert.equal(h.state.objs[0].name, "B2")
+})
+
+test("recent history records only the newest successful file navigation", async () => {
+  const { h, usePath } = await harness()
+  const nav = usePath()
+  const older = nav.handlePathChange("/slow.pdf")
+  const old = h.calls.at(-1)
+  h.path = "/new.pdf"
+  const newer = nav.handlePathChange(h.path)
+  h.calls
+    .at(-1)
+    .resolve({
+      code: 200,
+      data: {
+        name: "new.pdf",
+        is_dir: false,
+        size: 10,
+        type: 0,
+        raw_url: "https://example.invalid/signed",
+      },
+    })
+  await newer
+  old.resolve({
+    code: 200,
+    data: { name: "slow.pdf", is_dir: false, size: 10, type: 0 },
+  })
+  await older
+  assert.deepEqual(
+    h.recent.map((x) => x.path),
+    ["/new.pdf"],
+  )
+  const denied = nav.handlePathChange("/private.pdf")
+  h.calls.at(-1).resolve({ code: 403, message: "denied" })
+  await denied
+  assert.equal(h.recent.length, 1)
+})
+test("reopening a successfully recovered cached file updates recent history", async () => {
+  const { h, usePath } = await harness()
+  h.cachedFile = { name: "cached.pdf", is_dir: false, size: 10, type: 0 }
+  await usePath().handlePathChange("/cached.pdf")
+  assert.deepEqual(
+    h.recent.map((x) => x.path),
+    ["/cached.pdf"],
+  )
+  assert.equal(h.calls.length, 0)
 })

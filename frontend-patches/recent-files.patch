@@ -1,0 +1,712 @@
+diff --git a/src/hooks/usePath.ts b/src/hooks/usePath.ts
+index 7e0ad90..f0ce86f 100644
+--- a/src/hooks/usePath.ts
++++ b/src/hooks/usePath.ts
+@@ -30,6 +30,8 @@ import {
+ import { useFetch } from "./useFetch"
+ import { useRouter } from "./useRouter"
+ 
++import { recordRecent } from "~/pages/home/recent/record"
++
+ let first_fetch = true
+ let navigationVersion = 0
+ 
+@@ -159,7 +161,14 @@ export const usePath = () => {
+     }
+     if (!force && !rp && hasHistory(path, index)) {
+       log(`handle [${getHistoryKey(path, index)}] from history`)
+-      return recoverHistory(path, index, () => version === navigationVersion)
++      return recoverHistory(
++        path,
++        index,
++        () => version === navigationVersion,
++      ).then(() => {
++        if (version === navigationVersion && objStore.state === State.File)
++          recordRecent(path, objStore.obj)
++      })
+     } else if (IsDirRecord[path]) {
+       log(`handle [${getHistoryKey(path, index)}] as folder`)
+       return handleFolder(path, index, undefined, undefined, force)
+@@ -192,6 +201,7 @@ export const usePath = () => {
+           ObjStore.setRelated(data.related ?? [])
+           ObjStore.setRawUrl(data.raw_url)
+           shouldKeepState() || ObjStore.setState(State.File)
++          recordRecent(path, data)
+         }
+       },
+       handleErr,
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+index 4ab9131..74000a3 100644
+--- a/src/pages/home/DriveChrome.tsx
++++ b/src/pages/home/DriveChrome.tsx
+@@ -3,6 +3,7 @@ import { Show } from "solid-js"
+ import {
+   BsFolder2,
+   BsShare,
++  BsClockHistory,
+   BsArrowClockwise,
+   BsFolderPlus,
+   BsArrowUp,
+@@ -16,11 +17,12 @@ import { bus } from "~/utils"
+ import { DriveUsage } from "./DriveUsage"
+ 
+ export const driveText = (
+-  key: "files" | "shares" | "workspace" | "waiting",
++  key: "files" | "recent" | "shares" | "workspace" | "waiting",
+ ) => {
+   const zh = String(currentLang()).startsWith("zh")
+   return {
+     files: zh ? "所有文件" : "All files",
++    recent: zh ? "最近使用" : "Recents",
+     shares: zh ? "分享" : "Shared",
+     workspace: zh ? "文件空间" : "Workspace",
+     waiting: zh ? "等待传输" : "Waiting for transfer",
+@@ -64,14 +66,32 @@ export const DriveRail = () => {
+         <Show when={!isShare()}>
+           <button
+             class="drive-nav-item"
+-            classList={{ "drive-nav-current": pathname() !== "/@links" }}
+-            aria-current={pathname() !== "/@links" ? "page" : undefined}
++            classList={{
++              "drive-nav-current": !["/@links", "/@recent"].includes(
++                pathname(),
++              ),
++            }}
++            aria-current={
++              !["/@links", "/@recent"].includes(pathname()) ? "page" : undefined
++            }
+             onClick={() => to("/")}
+           >
+             <Icon as={BsFolder2} />
+             <span>{driveText("files")}</span>
+           </button>
+         </Show>
++        <Show when={!isShare() && !!me().id && !UserMethods.is_guest(me())}>
++          <button
++            type="button"
++            class="drive-nav-item"
++            classList={{ "drive-nav-current": pathname() === "/@recent" }}
++            aria-current={pathname() === "/@recent" ? "page" : undefined}
++            onClick={() => to("/@recent")}
++          >
++            <Icon as={BsClockHistory} />
++            <span>{driveText("recent")}</span>
++          </button>
++        </Show>
+         <Show when={!isShare() && UserMethods.is_admin(me())}>
+           <button
+             type="button"
+diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
+index f22717d..4e042d0 100644
+--- a/src/pages/home/Layout.tsx
++++ b/src/pages/home/Layout.tsx
+@@ -11,6 +11,7 @@ import { Footer } from "./Footer"
+ import { Header } from "./header/Header"
+ import { Toolbar } from "./toolbar/Toolbar"
+ 
++const Recent = lazy(() => import("./recent/Recent"))
+ const Shares = lazy(() => import("./shares/Shares"))
+ 
+ const Index = () => {
+@@ -29,7 +30,10 @@ const Index = () => {
+           <Match when={pathname() === "/@links"}>
+             <Shares />
+           </Match>
+-          <Match when={pathname() !== "/@links"}>
++          <Match when={pathname() === "/@recent"}>
++            <Recent />
++          </Match>
++          <Match when={!["/@links", "/@recent"].includes(pathname())}>
+             <Header />
+             <Toolbar />
+             <Body />
+diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
+index 71e7727..5392311 100644
+--- a/src/pages/home/header/Header.tsx
++++ b/src/pages/home/header/Header.tsx
+@@ -63,6 +63,13 @@ export const Header = () => {
+                     {driveText("files")}
+                   </MenuItem>
+                 </Show>
++                <Show
++                  when={!isShare() && !!me().id && !UserMethods.is_guest(me())}
++                >
++                  <MenuItem onSelect={() => to("/@recent")}>
++                    {driveText("recent")}
++                  </MenuItem>
++                </Show>
+                 <Show when={!isShare() && UserMethods.is_admin(me())}>
+                   <MenuItem onSelect={() => to("/@links")}>
+                     {driveText("shares")}
+diff --git a/src/pages/home/recent/Recent.tsx b/src/pages/home/recent/Recent.tsx
+new file mode 100644
+index 0000000..9e4fb5a
+--- /dev/null
++++ b/src/pages/home/recent/Recent.tsx
+@@ -0,0 +1,430 @@
++import {
++  Icon,
++  Menu,
++  MenuContent,
++  MenuItem,
++  MenuTrigger,
++  ModalBody,
++  ModalFooter,
++  ModalHeader,
++  useColorModeValue,
++} from "@hope-ui/solid"
++import {
++  createEffect,
++  createMemo,
++  createSignal,
++  For,
++  on,
++  onCleanup,
++  onMount,
++  Show,
++} from "solid-js"
++import {
++  BsArrowClockwise,
++  BsArrowLeft,
++  BsClockHistory,
++  BsFolder2,
++  BsSearch,
++  BsThreeDots,
++  BsX,
++} from "solid-icons/bs"
++import { currentLang } from "~/app/i18n"
++import { useRouter, useTitle } from "~/hooks"
++import { me } from "~/store"
++import type { PageResp, Resp } from "~/types"
++import { encodePath, getFileSize, joinBase, pathDir, r } from "~/utils"
++import { getIconByObj } from "~/utils/icon"
++import {
++  Button,
++  DriveDialogScope,
++  Modal,
++  ModalContent,
++  ModalOverlay,
++} from "~/components/DriveDialog"
++import { Container } from "../Container"
++import { DriveAccount } from "../DriveChrome"
++import { recentText } from "./labels"
++import "../shares/shares.css"
++import "./recent.css"
++interface RecentFile {
++  path: string
++  name: string
++  size: number
++  type: number
++  opened_at: number
++}
++const Recent = () => {
++  const { to } = useRouter()
++  useTitle(recentText("title"))
++  const mode = useColorModeValue("light", "dark")
++  const signedIn = () => !!me().id && me().role !== 1 && !me().disabled
++  const [files, setFiles] = createSignal<RecentFile[]>([])
++  const [search, setSearch] = createSignal("")
++  const [loading, setLoading] = createSignal(false)
++  const [error, setError] = createSignal("")
++  const [busy, setBusy] = createSignal(false)
++  const [confirm, setConfirm] = createSignal(false)
++  let request: AbortController | undefined
++  let disposed = false
++  const refresh = async () => {
++    if (!signedIn() || busy()) return
++    request?.abort()
++    const current = new AbortController()
++    request = current
++    setLoading(true)
++    try {
++      const resp: PageResp<RecentFile> = await r.get("/recent/list", {
++        signal: current.signal,
++        timeout: 30000,
++      })
++      if (resp.code !== 200) throw new Error()
++      if (!disposed && !current.signal.aborted) {
++        setFiles(resp.data.content || [])
++        setError("")
++      }
++    } catch {
++      if (!disposed && !current.signal.aborted)
++        setError(recentText("load_error"))
++    } finally {
++      if (!disposed && request === current) setLoading(false)
++    }
++  }
++  const mutate = async (path?: string) => {
++    if (busy()) return
++    request?.abort()
++    setLoading(false)
++    setBusy(true)
++    const owner = identity()
++    setError("")
++    try {
++      const resp: Resp<null> = await r.post(
++        path ? "/recent/delete" : "/recent/clear",
++        path ? { path } : {},
++        { timeout: 30000 },
++      )
++      if (resp.code !== 200) throw new Error()
++      if (!disposed && identity() === owner) {
++        setFiles((prev) =>
++          path ? prev.filter((file) => file.path !== path) : [],
++        )
++        setConfirm(false)
++      }
++    } catch {
++      if (!disposed && identity() === owner)
++        setError(recentText("change_error"))
++    } finally {
++      if (!disposed && identity() === owner) setBusy(false)
++    }
++  }
++  const identity = () =>
++    `${me().id}:${me().base_path}:${me().role}:${me().disabled}`
++  createEffect(
++    on(identity, () => {
++      request?.abort()
++      setFiles([])
++      setBusy(false)
++      setConfirm(false)
++      setError("")
++      setSearch("")
++      if (signedIn()) void refresh()
++    }),
++  )
++  const visibleRefresh = () => {
++    if (document.visibilityState === "visible") void refresh()
++  }
++  const changed = (e: StorageEvent) => {
++    if (e.key === "openlist:recent-change") visibleRefresh()
++  }
++  onMount(() => {
++    window.addEventListener("focus", visibleRefresh)
++    window.addEventListener("storage", changed)
++    window.addEventListener("openlist:recent-change", visibleRefresh)
++    document.addEventListener("visibilitychange", visibleRefresh)
++    const timer = setInterval(visibleRefresh, 60000)
++    onCleanup(() => {
++      clearInterval(timer)
++      window.removeEventListener("focus", visibleRefresh)
++      window.removeEventListener("storage", changed)
++      window.removeEventListener("openlist:recent-change", visibleRefresh)
++      document.removeEventListener("visibilitychange", visibleRefresh)
++    })
++  })
++  onCleanup(() => {
++    disposed = true
++    request?.abort()
++  })
++  const filtered = createMemo(() => {
++    const value = search().trim().toLocaleLowerCase()
++    return files().filter((file) =>
++      `${file.name} ${file.path}`.toLocaleLowerCase().includes(value),
++    )
++  })
++  const open = (file: RecentFile) =>
++    window.open(
++      joinBase(encodePath(file.path)),
++      "_blank",
++      "noopener,noreferrer",
++    )
++  const date = (value: number) =>
++    new Intl.DateTimeFormat(
++      String(currentLang()).startsWith("zh") ? "zh-CN" : "en",
++      { dateStyle: "medium", timeStyle: "short" },
++    ).format(value)
++  return (
++    <DriveDialogScope>
++      <header class="drive-header">
++        <Container>
++          <div class="drive-header-inner">
++            <button
++              class="drive-icon-button drive-shares-back"
++              aria-label={recentText("files")}
++              onClick={() => to("/")}
++            >
++              <Icon as={BsArrowLeft} />
++            </button>
++            <label class="drive-search drive-shares-search">
++              <Icon as={BsSearch} />
++              <input
++                type="search"
++                aria-label={recentText("search")}
++                placeholder={recentText("search")}
++                value={search()}
++                onInput={(e) => setSearch(e.currentTarget.value)}
++              />
++            </label>
++            <div class="drive-header-tools">
++              <DriveAccount />
++            </div>
++          </div>
++        </Container>
++      </header>
++      <Container>
++        <section
++          class="drive-shares drive-recent"
++          aria-labelledby="drive-recent-title"
++        >
++          <div class="drive-heading">
++            <div>
++              <h1 id="drive-recent-title">{recentText("title")}</h1>
++              <p class="drive-shares-description">
++                {recentText("description")}
++              </p>
++            </div>
++            <Show when={signedIn()}>
++              <div class="drive-actions">
++                <button
++                  class="drive-icon-button"
++                  aria-label={recentText("refresh")}
++                  disabled={loading() || busy()}
++                  onClick={() => void refresh()}
++                >
++                  <Icon as={BsArrowClockwise} />
++                </button>
++                <button
++                  class="drive-button"
++                  disabled={!files().length || busy()}
++                  onClick={() => setConfirm(true)}
++                >
++                  {recentText("clear")}
++                </button>
++              </div>
++            </Show>
++          </div>
++          <Show when={error()}>
++            <div class="drive-share-error" role="alert">
++              {error()}
++              <button
++                class="drive-button"
++                disabled={loading() || busy()}
++                onClick={() => void refresh()}
++              >
++                {recentText("refresh")}
++              </button>
++            </div>
++          </Show>
++          <Show
++            when={signedIn()}
++            fallback={
++              <div class="drive-shares-empty">
++                <h2>{recentText("login")}</h2>
++                <button class="drive-button" onClick={() => to("/@login")}>
++                  {recentText("login")}
++                </button>
++              </div>
++            }
++          >
++            <Show
++              when={!loading() || files().length}
++              fallback={
++                <p class="drive-shares-empty" role="status">
++                  {recentText("loading")}
++                </p>
++              }
++            >
++              <Show
++                when={filtered().length}
++                fallback={
++                  <Show when={!error()}>
++                    <div class="drive-shares-empty">
++                      <span class="drive-shares-empty-icon">
++                        <Icon as={BsClockHistory} />
++                      </span>
++                      <h2>{recentText(files().length ? "none" : "empty")}</h2>
++                      <p>{recentText("empty_hint")}</p>
++                      <Show when={search()}>
++                        <button
++                          class="drive-button"
++                          onClick={() => setSearch("")}
++                        >
++                          {recentText("reset")}
++                        </button>
++                      </Show>
++                    </div>
++                  </Show>
++                }
++              >
++                <div class="drive-shares-table-wrap">
++                  <table
++                    class="drive-shares-table drive-recent-table"
++                    aria-label={recentText("title")}
++                    aria-busy={loading()}
++                  >
++                    <thead>
++                      <tr>
++                        <th scope="col">{recentText("name")}</th>
++                        <th scope="col">{recentText("opened")}</th>
++                        <th scope="col">{recentText("size")}</th>
++                        <th scope="col">{recentText("actions")}</th>
++                      </tr>
++                    </thead>
++                    <tbody>
++                      <For each={filtered()}>
++                        {(file) => (
++                          <tr>
++                            <td>
++                              <div class="drive-shares-name">
++                                <span class="drive-recent-icon">
++                                  <Icon
++                                    as={getIconByObj({
++                                      name: file.name,
++                                      type: file.type,
++                                      is_dir: false,
++                                    })}
++                                  />
++                                </span>
++                                <div>
++                                  <button
++                                    class="drive-shares-name-button"
++                                    onClick={() => open(file)}
++                                  >
++                                    {file.name}
++                                  </button>
++                                  <small title={pathDir(file.path)}>
++                                    {pathDir(file.path)}
++                                  </small>
++                                </div>
++                              </div>
++                            </td>
++                            <td data-label={recentText("opened")}>
++                              <time
++                                datetime={new Date(
++                                  file.opened_at,
++                                ).toISOString()}
++                              >
++                                {date(file.opened_at)}
++                              </time>
++                            </td>
++                            <td data-label={recentText("size")}>
++                              {getFileSize(file.size)}
++                            </td>
++                            <td>
++                              <div class="drive-shares-row-actions">
++                                <button
++                                  class="drive-button"
++                                  onClick={() => open(file)}
++                                >
++                                  {recentText("open")}
++                                </button>
++                                <Menu placement="bottom-end">
++                                  <MenuTrigger
++                                    as="button"
++                                    class="drive-icon-button"
++                                    aria-label={`${recentText("more")}: ${file.name}`}
++                                    disabled={busy()}
++                                  >
++                                    <Icon as={BsThreeDots} />
++                                  </MenuTrigger>
++                                  <MenuContent
++                                    class="drive-shares-menu"
++                                    data-drive-mode={mode()}
++                                  >
++                                    <MenuItem
++                                      icon={<Icon as={BsFolder2} />}
++                                      iconSpacing="12px"
++                                      onSelect={() =>
++                                        to(encodePath(pathDir(file.path)))
++                                      }
++                                    >
++                                      {recentText("location")}
++                                    </MenuItem>
++                                    <MenuItem
++                                      icon={<Icon as={BsX} />}
++                                      iconSpacing="12px"
++                                      onSelect={() => void mutate(file.path)}
++                                    >
++                                      {recentText("remove")}
++                                    </MenuItem>
++                                  </MenuContent>
++                                </Menu>
++                              </div>
++                            </td>
++                          </tr>
++                        )}
++                      </For>
++                    </tbody>
++                  </table>
++                </div>
++              </Show>
++            </Show>
++          </Show>
++        </section>
++      </Container>
++      <Modal
++        opened={confirm()}
++        onClose={() => {
++          if (!busy()) setConfirm(false)
++        }}
++      >
++        <ModalOverlay />
++        <ModalContent>
++          <ModalHeader>{recentText("clear_title")}</ModalHeader>
++          <ModalBody>
++            <p>{recentText("clear_hint")}</p>
++            <Show when={error()}>
++              <p class="drive-share-error" role="alert">
++                {error()}
++              </p>
++            </Show>
++          </ModalBody>
++          <ModalFooter>
++            <Button
++              colorScheme="neutral"
++              disabled={busy()}
++              onClick={() => setConfirm(false)}
++            >
++              {recentText("cancel")}
++            </Button>
++            <Button
++              colorScheme="danger"
++              loading={busy()}
++              onClick={() => void mutate()}
++            >
++              {recentText("clear")}
++            </Button>
++          </ModalFooter>
++        </ModalContent>
++      </Modal>
++    </DriveDialogScope>
++  )
++}
++export default Recent
+diff --git a/src/pages/home/recent/labels.ts b/src/pages/home/recent/labels.ts
+new file mode 100644
+index 0000000..18c10c0
+--- /dev/null
++++ b/src/pages/home/recent/labels.ts
+@@ -0,0 +1,45 @@
++import { currentLang } from "~/app/i18n"
++const labels = {
++  title: ["最近使用", "Recents"],
++  description: [
++    "最近打开的文件，在你的设备间同步。",
++    "Recently opened files, synced across your devices.",
++  ],
++  search: ["搜索最近使用的文件", "Search recent files"],
++  name: ["名称", "Name"],
++  opened: ["最近打开", "Last opened"],
++  size: ["大小", "Size"],
++  actions: ["操作", "Actions"],
++  refresh: ["刷新", "Refresh"],
++  clear: ["清空记录", "Clear history"],
++  clear_title: ["清空最近使用记录？", "Clear recent history?"],
++  clear_hint: [
++    "只清空此账号的使用记录，文件仍保留在原位置。",
++    "This clears your account’s history. Your files remain in their original locations.",
++  ],
++  remove: ["移除记录", "Remove from recents"],
++  open: ["打开文件", "Open file"],
++  location: ["打开所在文件夹", "Open containing folder"],
++  more: ["更多操作", "More actions"],
++  empty: ["还没有最近使用的文件", "No recent files yet"],
++  empty_hint: [
++    "打开文件后，它会出现在这里。",
++    "Files you open will appear here.",
++  ],
++  none: ["没有找到匹配的文件", "No matching files"],
++  reset: ["清除搜索", "Clear search"],
++  login: ["登录后查看最近使用", "Sign in to see recent files"],
++  loading: ["正在加载最近使用…", "Loading recent files…"],
++  load_error: [
++    "无法加载最近使用，请重试。",
++    "Unable to load recent files. Please retry.",
++  ],
++  change_error: [
++    "记录更新失败，请重试。",
++    "Unable to update history. Please retry.",
++  ],
++  cancel: ["取消", "Cancel"],
++  files: ["所有文件", "All files"],
++} as const
++export const recentText = (key: keyof typeof labels) =>
++  labels[key][String(currentLang()).startsWith("zh") ? 0 : 1]
+diff --git a/src/pages/home/recent/recent.css b/src/pages/home/recent/recent.css
+new file mode 100644
+index 0000000..2518e0b
+--- /dev/null
++++ b/src/pages/home/recent/recent.css
+@@ -0,0 +1,36 @@
++.drive-recent-table {
++  margin-top: 28px;
++}
++.drive-recent-icon {
++  display: grid;
++  place-items: center;
++  flex-shrink: 0;
++  width: 40px;
++  height: 40px;
++}
++.drive-recent-icon svg {
++  width: 36px;
++  height: 36px;
++}
++.drive-recent .drive-actions button:disabled {
++  opacity: 0.5;
++  cursor: default;
++}
++.drive-recent-table time {
++  white-space: nowrap;
++}
++@media (max-width: 760px) {
++  .drive-recent .drive-shares-description {
++    max-width: 180px;
++  }
++  .drive-recent-table td:nth-child(2) {
++    grid-column: 1 / -1;
++  }
++  .drive-recent-table td:nth-child(2)::before {
++    content: attr(data-label) ": ";
++    color: var(--drive-muted);
++  }
++  .drive-shares-table.drive-recent-table td:last-child::before {
++    content: none;
++  }
++}
+diff --git a/src/pages/home/recent/record.ts b/src/pages/home/recent/record.ts
+new file mode 100644
+index 0000000..873b3e8
+--- /dev/null
++++ b/src/pages/home/recent/record.ts
+@@ -0,0 +1,37 @@
++import { me } from "~/store/user"
++import type { Obj, Resp } from "~/types"
++import { r } from "~/utils/request"
++
++// Record only successful, authenticated file navigation. Never persist signed
++// URLs, query strings, passwords, or public-share visits.
++export function recordRecent(
++  path: string,
++  obj: Pick<Obj, "size" | "type" | "is_dir">,
++) {
++  const user = me()
++  if (
++    !user.id ||
++    user.disabled ||
++    user.role === 1 ||
++    obj.is_dir ||
++    path.startsWith("/@")
++  )
++    return
++  void r
++    .post<Resp<unknown>, Resp<unknown>>(
++      "/recent/record",
++      { path, size: obj.size, type: obj.type },
++      { timeout: 10000 },
++    )
++    .then((resp) => {
++      if (resp.code !== 200) return
++      window.dispatchEvent(new Event("openlist:recent-change"))
++      try {
++        localStorage.setItem(
++          "openlist:recent-change",
++          `${user.id}:${Date.now()}`,
++        )
++      } catch {}
++    })
++    .catch(() => {})
++}
