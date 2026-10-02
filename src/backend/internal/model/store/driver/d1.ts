@@ -7,6 +7,7 @@
  */
 import type { Driver } from "../types"
 import { buildDdl, KV_SCHEMA_SQLITE } from "../schema"
+import { sqliteKeyPrefix } from "../sql-prefix"
 
 /**
  * 判断对象是否具备 D1 绑定接口形态。
@@ -105,9 +106,10 @@ export const d1Driver: Driver = {
     if (!db) throw new Error("D1 binding not found")
 
     await ensureSchema(db, env)
+    const { sql, params } = sqliteKeyPrefix(prefix)
     const result = await db
-      .prepare("SELECT key FROM kv WHERE key LIKE ? ORDER BY key")
-      .bind(`${prefix}%`)
+      .prepare(sql)
+      .bind(...params)
       .all()
     return (result.results || []).map((r: any) => r.key)
   },

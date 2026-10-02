@@ -14,6 +14,7 @@
  * 固定实例，保证数据持久在同一 DO 实例。
  */
 import { D1_SCHEMA, KV_SCHEMA_SQLITE } from "../internal/model/store/schema"
+import { sqliteKeyPrefix } from "../internal/model/store/sql-prefix"
 
 export class OpenListDB {
   private state: any
@@ -64,8 +65,9 @@ export class OpenListDB {
 
   async kvList(prefix: string): Promise<string[]> {
     this.ensureSchema()
+    const { sql, params } = sqliteKeyPrefix(prefix)
     const rows = this.sql
-      .exec("SELECT key FROM kv WHERE key LIKE ? ORDER BY key", `${prefix}%`)
+      .exec(sql, ...params)
       .toArray()
     return rows.map((r: any) => r.key)
   }

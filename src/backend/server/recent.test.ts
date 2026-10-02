@@ -8,6 +8,9 @@ import { recentRouter } from "./recent"
 import type { Driver } from "../internal/model/store/types"
 import { kvDriver } from "../internal/model/store/driver/kv"
 import { createHash } from "node:crypto"
+import { DatabaseSync } from "node:sqlite"
+import { d1Driver } from "../internal/model/store/driver/d1"
+import { OpenListDB } from "../durable-objects/OpenListDB"
 function memory() {
   const values = new Map<string, string>()
   const driver: Driver = {
@@ -421,4 +424,188 @@ test("a legacy index cache write failure does not block record, list or clear", 
   await a.clear()
   assert.equal((await a.list(102)).length, 0)
   assert.equal(values.size, 0)
+})
+
+// Execute real SQLite statements while enforcing Cloudflare's 50-byte LIKE
+// pattern limit. Unrestricted desktop SQLite alone missed the production bug.
+function sqliteBinding() {
+  const sqlite = new DatabaseSync(":memory:")
+  sqlite.function("like", (pattern, value) => {
+    const p = String(pattern)
+    if (Buffer.byteLength(p) > 50)
+      throw new Error("LIKE or GLOB pattern too complex")
+    const regex = p
+      .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+      .replaceAll("%", ".*")
+      .replaceAll("_", ".")
+    return new RegExp("^" + regex + "$", "i").test(String(value)) ? 1 : 0
+  })
+  function prepare(sql: string) {
+    let params: any[] = []
+    return {
+      sql,
+      get params() {
+        return params
+      },
+      bind(...args: any[]) {
+        params = args
+        return this
+      },
+      async first() {
+        return sqlite.prepare(sql).get(...params) ?? null
+      },
+      async all() {
+        return { success: true, results: sqlite.prepare(sql).all(...params) }
+      },
+      async run() {
+        sqlite.prepare(sql).run(...params)
+        return { success: true, results: [] }
+      },
+    }
+  }
+  const binding = {
+    prepare,
+    async batch(statements: ReturnType<typeof prepare>[]) {
+      return statements.map((s) => ({
+        success: true,
+        results: sqlite.prepare(s.sql).all(...s.params),
+      }))
+    },
+  }
+  return { sqlite, binding }
+}
+
+test("D1 SQL recent APIs work with the production LIKE limit and preserve account data", async () => {
+  const { sqlite, binding } = sqliteBinding()
+  try {
+    const env: any = {
+      DB: binding,
+      DB_DRIVER: "d1",
+      DB_FORMAT: "sql",
+      DB_CIPHER: "aes-256-gcm",
+      JWT_SECRET: "d1-recent-local-test-secret",
+    }
+    const admin = {
+      ...user,
+      id: 1,
+      username: "admin",
+      role: 2,
+      base_path: "/",
+      disabled: false,
+    }
+    const other = { ...admin, id: 4, username: "other", role: 0 }
+    await saveDb(
+      { settings: [], users: [admin, other], storages: [], shares: [] },
+      env,
+      { force: true },
+    )
+    assert.throws(() =>
+      sqlite.prepare("SELECT 'test' LIKE ?").get("x".repeat(64) + "%"),
+    )
+    const request = async (id: number, action: string, body?: any) => {
+      const token = await sign(
+        { id, exp: Math.floor(Date.now() / 1000) + 60 },
+        env.JWT_SECRET,
+        "HS256",
+      )
+      return new Hono().route("/recent", recentRouter).request(
+        "/recent/" + action,
+        {
+          method: body ? "POST" : "GET",
+          headers: { Authorization: token, "Content-Type": "application/json" },
+          ...(body ? { body: JSON.stringify(body) } : {}),
+        },
+        env,
+      )
+    }
+    assert.equal((await request(1, "record", file())).status, 200)
+    assert.equal((await request(4, "record", file("/other.txt"))).status, 200)
+    const hash = (s: string) => createHash("sha256").update(s).digest("hex")
+    await d1Driver.put(
+      `openlist:recent:v1:1:${hash("/")}:${hash(file().path)}`,
+      JSON.stringify({ ...file(), opened_at: Date.now() - 1000 }),
+      env,
+    )
+    // Rebuild the optional legacy cache to simulate upgrading an existing site.
+    await d1Driver.delete(`openlist_recent_legacy_v1_1_${hash("/")}`, env)
+    const listed = await request(1, "list")
+    assert.equal(listed.status, 200)
+    assert.deepEqual(
+      (await listed.json()).data.content.map((x: any) => x.path),
+      [file().path],
+    )
+    assert.equal(
+      (await request(1, "delete", { path: file().path })).status,
+      200,
+    )
+    assert.equal((await (await request(1, "list")).json()).data.total, 0)
+    assert.equal((await request(1, "record", file("/new.txt"))).status, 200)
+    assert.equal((await request(1, "clear", {})).status, 200)
+    assert.equal((await (await request(1, "list")).json()).data.total, 0)
+    assert.equal(
+      (await (await request(4, "list")).json()).data.content[0].path,
+      "/other.txt",
+    )
+    assert.equal(
+      sqlite.prepare("SELECT COUNT(*) AS n FROM x_users").get()!.n,
+      2,
+    )
+  } finally {
+    sqlite.close()
+  }
+})
+
+test("D1 and SQLite Durable Objects list long and literal Unicode prefixes precisely", async () => {
+  const { sqlite, binding } = sqliteBinding()
+  try {
+    const env = { DB: binding }
+    const object = new OpenListDB({
+      storage: {
+        sql: {
+          exec(sql: string, ...params: any[]) {
+            return { toArray: () => sqlite.prepare(sql).all(...params) }
+          },
+        },
+      },
+    })
+    await d1Driver.init(env)
+    const prefixes = [
+      "x".repeat(100),
+      "with_%",
+      "Case_",
+      "case_",
+      "文件📁",
+      "\u{10ffff}",
+      "a\u{10ffff}",
+      "\ud7ff",
+      "",
+    ]
+    const keys = [
+      "withXX",
+      "With_%wrong",
+      "case_other",
+      "文件📂other",
+      "a\u{10ffff}suffix",
+      "b",
+      "\ue000other",
+    ]
+    for (const prefix of prefixes.filter(Boolean))
+      keys.push(prefix, prefix + "entry")
+    for (const key of keys) await d1Driver.put(key, "test", env)
+    for (const prefix of prefixes) {
+      const expected = [...new Set(keys)]
+        .filter((k) => k.startsWith(prefix))
+        .sort()
+      assert.deepEqual((await d1Driver.list(prefix, env)).sort(), expected)
+      assert.deepEqual((await object.kvList(prefix)).sort(), expected)
+    }
+    const plan = sqlite
+      .prepare(
+        "EXPLAIN QUERY PLAN SELECT key FROM kv WHERE key >= ? AND key < ? ORDER BY key",
+      )
+      .all("long-prefix", "long-prefiy")
+    assert.match(String(plan[0].detail), /SEARCH.*INDEX/)
+  } finally {
+    sqlite.close()
+  }
 })
