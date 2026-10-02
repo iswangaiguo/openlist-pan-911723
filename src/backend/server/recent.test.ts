@@ -6,6 +6,8 @@ import { saveDb } from "../internal/model/db"
 import { recentPath, recentRepository } from "../internal/model/recent"
 import { recentRouter } from "./recent"
 import type { Driver } from "../internal/model/store/types"
+import { kvDriver } from "../internal/model/store/driver/kv"
+import { createHash } from "node:crypto"
 function memory() {
   const values = new Map<string, string>()
   const driver: Driver = {
@@ -45,7 +47,9 @@ test("records survive a second device, deduplicate and keep metadata free of sec
     (await a.list(301)).map((x) => x.path),
     [file().path, "/b.mp4"],
   )
-  const record = JSON.parse([...values.values()][0])
+  const record = [...values.values()]
+    .map((v) => JSON.parse(v))
+    .find((v) => v.path === file().path)
   assert.deepEqual(Object.keys(record).sort(), [
     "name",
     "opened_at",
@@ -104,7 +108,10 @@ test("retention sorts, bounds and prunes old history", async () => {
   const list = await a.list(now + 200)
   assert.equal(list.length, 100)
   assert.equal(list[0].path, "/file-104.pdf")
-  assert.equal(values.size, 100)
+  assert.equal(
+    [...values.values()].filter((v) => JSON.parse(v).path).length,
+    100,
+  )
 })
 test("invalid paths and non-file metadata are rejected", async () => {
   const { driver } = memory()
@@ -132,35 +139,49 @@ test("retention preserves a file reopened by another device while listing", asyn
   let reopened = false
   driver.get = async (key, env) => {
     const old = await get(key, env)
-    if (!reopened && old) {
+    if (!reopened && old && JSON.parse(old).path) {
       reopened = true
       values.set(key, JSON.stringify({ ...JSON.parse(old), opened_at: now }))
     }
     return old
   }
   await a.list(now)
-  assert.equal(values.size, 1)
+  assert.equal([...values.values()].filter((v) => JSON.parse(v).path).length, 1)
   assert.equal((await a.list(now))[0].opened_at, now)
 })
 test("authenticated APIs synchronize only the current account", async () => {
   const values = new Map<string, string>()
+  const validKey = (key: string) => {
+    if (!/^[A-Za-z0-9_]+$/.test(key))
+      throw new Error(
+        "EdgeOne KV key can only contain letters, numbers and underscores",
+      )
+  }
   const env: any = {
     JWT_SECRET: "recent-test-secret-long-enough-32-chars",
     DB_DRIVER: "kv",
     KV: {
-      get: async (k: string) => values.get(k) || null,
+      get: async (k: string) => {
+        validKey(k)
+        return values.get(k) || null
+      },
       put: async (k: string, v: string) => {
+        validKey(k)
         values.set(k, v)
       },
       delete: async (k: string) => {
+        validKey(k)
         values.delete(k)
       },
-      list: async ({ prefix }: any) => ({
-        keys: [...values.keys()]
-          .filter((k) => k.startsWith(prefix))
-          .map((key) => ({ key })),
-        complete: true,
-      }),
+      list: async ({ prefix }: any) => {
+        validKey(prefix)
+        return {
+          keys: [...values.keys()]
+            .filter((k) => k.startsWith(prefix))
+            .map((key) => ({ key })),
+          complete: true,
+        }
+      },
     },
   }
   await saveDb(
@@ -197,6 +218,7 @@ test("authenticated APIs synchronize only the current account", async () => {
       },
       env,
     )
+  assert.equal((await request(3, "list")).status, 200)
   assert.equal((await request(3, "record", file())).status, 200)
   assert.equal((await (await request(3, "list")).json()).data.content.length, 1)
   assert.equal((await (await request(4, "list")).json()).data.content.length, 0)
@@ -207,4 +229,196 @@ test("authenticated APIs synchronize only the current account", async () => {
   assert.equal((await (await request(3, "list")).json()).data.content.length, 1)
   assert.equal((await request(3, "delete", { path: file().path })).status, 200)
   assert.equal((await (await request(3, "list")).json()).data.content.length, 0)
+})
+
+test("Cloudflare KV listing uses name and opaque cursors, including empty pages", async () => {
+  const cursors: string[] = []
+  const pages = [
+    {
+      keys: [{ name: "openlist_a" }],
+      list_complete: false,
+      cursor: "opaque-page-2",
+    },
+    { keys: [], list_complete: false, cursor: "opaque-page-3" },
+    { keys: [{ name: "openlist_b" }], list_complete: true, cursor: "" },
+  ]
+  const env = {
+    KV: {
+      get: async () => null,
+      put: async () => {},
+      list: async ({ prefix, cursor }: any) => {
+        assert.equal(prefix, "openlist_")
+        assert.ok(
+          cursors.length < pages.length,
+          "must not repeat a completed page",
+        )
+        cursors.push(cursor)
+        return pages[cursors.length - 1]
+      },
+    },
+  }
+  assert.deepEqual(await kvDriver.list("openlist_", env), [
+    "openlist_a",
+    "openlist_b",
+  ])
+  assert.deepEqual(cursors, ["", "opaque-page-2", "opaque-page-3"])
+})
+
+test("EdgeOne pagination uses its last key and rejects a repeated unfinished page", async () => {
+  const cursors: string[] = []
+  const env = {
+    KV: {
+      get: async () => null,
+      put: async () => {},
+      list: async ({ cursor }: any) => {
+        cursors.push(cursor)
+        return cursors.length === 1
+          ? { keys: [{ key: "openlist_a" }], complete: false }
+          : { keys: [{ key: "openlist_b" }], complete: true }
+      },
+    },
+  }
+  assert.deepEqual(await kvDriver.list("openlist_", env), [
+    "openlist_a",
+    "openlist_b",
+  ])
+  assert.deepEqual(cursors, ["", "openlist_a"])
+  env.KV.list = async () => ({ keys: [{ key: "openlist_a" }], complete: false })
+  await assert.rejects(kvDriver.list("openlist_", env), /did not advance/)
+})
+
+test("existing Cloudflare records remain readable and removable without touching other accounts", async () => {
+  const values = new Map<string, string>()
+  const reads: string[] = []
+  const env = {
+    KV: {
+      get: async (k: string) => {
+        reads.push(k)
+        return values.get(k) ?? null
+      },
+      put: async (k: string, v: string) => {
+        values.set(k, v)
+      },
+      delete: async (k: string) => {
+        values.delete(k)
+      },
+      list: async ({ prefix }: any) => ({
+        keys: [...values.keys()]
+          .filter((k) => k.startsWith(prefix))
+          .map((name) => ({ name })),
+        list_complete: true,
+        cursor: "",
+      }),
+    },
+  }
+  const hash = (s: string) => createHash("sha256").update(s).digest("hex")
+  const prefix = `openlist:recent:v1:${user.id}:${hash(user.base_path)}:`
+  const otherPrefix = `openlist:recent:v1:4:${hash(user.base_path)}:`
+  values.set("db", "configuration")
+  for (const path of [file().path, "/b.pdf"])
+    values.set(
+      prefix + hash(path),
+      JSON.stringify({ ...file(path), opened_at: 100 }),
+    )
+  values.set(
+    otherPrefix + hash(file().path),
+    JSON.stringify({ ...file(), opened_at: 101 }),
+  )
+  const a = await recentRepository(kvDriver, env, user)
+  assert.equal((await a.list(102)).length, 2)
+  assert.equal(
+    reads.some((k) => k.startsWith(otherPrefix)),
+    false,
+  )
+  await a.record(file(), 200)
+  const list = await a.list(201)
+  assert.equal(list.length, 2)
+  assert.equal(list[0].opened_at, 200)
+  assert.equal("raw_url" in list[0], false)
+  await a.remove(file().path)
+  assert.deepEqual(
+    (await a.list(202)).map((x) => x.path),
+    ["/b.pdf"],
+  )
+  await a.clear()
+  const secondDevice = await recentRepository(kvDriver, env, user)
+  assert.equal((await secondDevice.list(203)).length, 0)
+  assert.equal(values.get("db"), "configuration")
+  assert.ok(values.has(otherPrefix + hash(file().path)))
+})
+
+test("Cloudflare recent API loads populated history without exhausting KV operations", async () => {
+  const values = new Map<string, string>()
+  let lists = 0
+  const env: any = {
+    JWT_SECRET: "cloudflare-recent-test-secret",
+    DB_DRIVER: "kv",
+    KV: {
+      get: async (k: string) => values.get(k) ?? null,
+      put: async (k: string, v: string) => {
+        values.set(k, v)
+      },
+      delete: async (k: string) => {
+        values.delete(k)
+      },
+      list: async ({ prefix }: any) => {
+        // A populated terminal Cloudflare page is returned again if the caller
+        // ignores list_complete. Simulate the platform operation budget.
+        if (++lists > 12) throw new Error("KV operation limit exceeded")
+        return {
+          keys: [...values.keys()]
+            .filter((k) => k.startsWith(prefix))
+            .map((name) => ({ name })),
+          list_complete: true,
+          cursor: "",
+        }
+      },
+    },
+  }
+  await saveDb(
+    {
+      settings: [],
+      storages: [],
+      shares: [],
+      users: [{ ...user, username: "reader", disabled: false }],
+    },
+    env,
+    { force: true },
+  )
+  const hash = (s: string) => createHash("sha256").update(s).digest("hex")
+  values.set(
+    `openlist:recent:v1:${user.id}:${hash(user.base_path)}:${hash(file().path)}`,
+    JSON.stringify({ ...file(), opened_at: Date.now() - 1000 }),
+  )
+  const app = new Hono().route("/recent", recentRouter)
+  const token = await sign(
+    { id: user.id, exp: Math.floor(Date.now() / 1000) + 60 },
+    env.JWT_SECRET,
+    "HS256",
+  )
+  const response = await app.request(
+    "/recent/list",
+    { headers: { Authorization: token } },
+    env,
+  )
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.data.content[0].path, file().path)
+  assert.ok(lists <= 2, "listing should finish at a terminal page")
+})
+
+test("a legacy index cache write failure does not block record, list or clear", async () => {
+  const { driver, values } = memory()
+  const put = driver.put
+  driver.put = async (key, value, env) => {
+    if (key.startsWith("openlist_recent_legacy_v1_"))
+      throw new Error("per-key write rate exceeded")
+    await put(key, value, env)
+  }
+  const a = await recentRepository(driver, {}, user)
+  await a.record(file(), 100)
+  assert.equal((await a.list(101)).length, 1)
+  await a.clear()
+  assert.equal((await a.list(102)).length, 0)
+  assert.equal(values.size, 0)
 })
