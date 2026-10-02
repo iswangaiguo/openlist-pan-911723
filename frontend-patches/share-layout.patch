@@ -1,0 +1,206 @@
+diff --git a/src/pages/home/shares/Shares.tsx b/src/pages/home/shares/Shares.tsx
+index a5cf810..16f0836 100644
+--- a/src/pages/home/shares/Shares.tsx
++++ b/src/pages/home/shares/Shares.tsx
+@@ -22,6 +22,10 @@ import {
+   BsArrowLeft,
+   BsLink45deg,
+   BsPlusLg,
++  BsPencil,
++  BsPauseCircle,
++  BsPlayCircle,
++  BsTrash3,
+   BsSearch,
+   BsThreeDots,
+ } from "solid-icons/bs"
+@@ -386,10 +390,24 @@ const Shares = () => {
+                                     class="drive-shares-menu"
+                                     data-drive-mode={mode()}
+                                   >
+-                                    <MenuItem onSelect={() => setEditor(share)}>
++                                    <MenuItem
++                                      icon={<Icon as={BsPencil} />}
++                                      iconSpacing="12px"
++                                      onSelect={() => setEditor(share)}
++                                    >
+                                       {shareText("edit")}
+                                     </MenuItem>
+                                     <MenuItem
++                                      icon={
++                                        <Icon
++                                          as={
++                                            share.disabled
++                                              ? BsPlayCircle
++                                              : BsPauseCircle
++                                          }
++                                        />
++                                      }
++                                      iconSpacing="12px"
+                                       onSelect={() =>
+                                         void perform(
+                                           share,
+@@ -401,7 +419,13 @@ const Shares = () => {
+                                         share.disabled ? "enable" : "disable",
+                                       )}
+                                     </MenuItem>
++                                    <div
++                                      class="drive-shares-menu-separator"
++                                      role="separator"
++                                    />
+                                     <MenuItem
++                                      icon={<Icon as={BsTrash3} />}
++                                      iconSpacing="12px"
+                                       class="drive-shares-delete"
+                                       onSelect={() => {
+                                         setActionError("")
+diff --git a/src/pages/home/shares/shares.css b/src/pages/home/shares/shares.css
+index 5ecb757..ddeeb3e 100644
+--- a/src/pages/home/shares/shares.css
++++ b/src/pages/home/shares/shares.css
+@@ -82,7 +82,9 @@
+ }
+ .drive-shares-table th:last-child,
+ .drive-shares-table td:last-child {
++  width: 1%;
+   padding-right: 0;
++  white-space: nowrap;
+ }
+ .drive-shares-table tbody tr:hover {
+   background: var(--drive-hover);
+@@ -176,42 +178,76 @@
+ .drive-shares-row-actions {
+   display: flex;
+   align-items: center;
+-  justify-content: flex-end;
++  justify-content: flex-start;
+   gap: 8px;
+   white-space: nowrap;
+ }
+ .drive-shares-row-actions .drive-button {
+-  min-height: 34px;
++  min-height: 36px;
+   padding: 6px 12px;
+   font-size: 12px;
+ }
+ .drive-shares-row-actions .drive-icon-button {
+-  width: 32px;
+-  height: 32px;
+-  min-height: 32px;
++  width: 36px;
++  height: 36px;
++  min-height: 36px;
+   border: 0;
+   background: transparent;
+ }
+-.drive-shares-menu {
+-  border: 1px solid #e8e6e3;
+-  border-radius: 8px;
+-  background: #fff;
+-  color: #1e1919;
+-  box-shadow: 0 8px 32px #0000001a;
++.drive-shares-row-actions .drive-icon-button:hover,
++.drive-shares-row-actions .drive-icon-button[aria-expanded="true"] {
++  background: var(--drive-hover);
++}
++/* Menus are portaled outside the file browser, so carry their theme explicitly. */
++.drive-shares-menu.hope-menu__content {
++  --share-menu-bg: #fff;
++  --share-menu-text: #1e1919;
++  --share-menu-line: #e8e6e3;
++  --share-menu-hover: #f4f5f7;
++  --share-menu-danger: #c13535;
++  min-width: 208px;
++  max-width: calc(100vw - 24px);
++  padding: 6px;
++  border: 1px solid var(--share-menu-line);
++  border-radius: 10px;
++  background: var(--share-menu-bg);
++  color: var(--share-menu-text);
++  box-shadow: 0 12px 32px #00000024;
++  font-size: 14px;
++  line-height: 20px;
+ }
+-.drive-shares-menu[data-drive-mode="dark"] {
+-  border-color: #34373e;
+-  background: #202227;
+-  color: #f1f1f1;
++.drive-shares-menu.hope-menu__content[data-drive-mode="dark"] {
++  --share-menu-bg: #25272b;
++  --share-menu-text: #f1f1f1;
++  --share-menu-line: #3a3d43;
++  --share-menu-hover: #363940;
++  --share-menu-danger: #ff9999;
+ }
+ .drive-shares-menu .hope-menu__item {
++  min-height: 40px;
++  margin: 0;
++  padding: 10px 12px;
++  border-radius: 5px;
+   color: inherit;
++  font-size: 14px;
++  font-weight: 400;
++  line-height: 20px;
+ }
+-.drive-shares-menu .drive-shares-delete {
+-  color: #c13535;
++.drive-shares-menu .hope-menu__item:is(:hover, [data-active]) {
++  background: var(--share-menu-hover);
++  color: var(--share-menu-text);
+ }
+-.drive-shares-menu[data-drive-mode="dark"] .drive-shares-delete {
+-  color: #ff9999;
++.drive-shares-menu .hope-menu__item svg {
++  width: 18px;
++  height: 18px;
++}
++.drive-shares-menu-separator {
++  height: 1px;
++  margin: 6px 0;
++  background: var(--share-menu-line);
++}
++.drive-shares-menu .hope-menu__item.drive-shares-delete {
++  color: var(--share-menu-danger);
+ }
+ .drive-shares-empty {
+   padding: 70px 20px;
+@@ -260,6 +296,7 @@
+ }
+ .drive-share-field {
+   display: grid;
++  align-content: start;
+   gap: 8px;
+   margin-bottom: 20px;
+   min-width: 0;
+@@ -267,6 +304,7 @@
+ .drive-share-field label {
+   font-size: 14px;
+   font-weight: 600;
++  line-height: 20px;
+ }
+ .drive-share-field small {
+   color: var(--drive-muted);
+@@ -284,11 +322,16 @@
+   color: var(--drive-text);
+   font: inherit;
+ }
++.drive-share-field input,
++.drive-share-field select {
++  height: 42px;
++}
+ .drive-share-field textarea {
+   resize: vertical;
+ }
+ .drive-share-form-grid {
+   display: grid;
++  align-items: start;
+   grid-template-columns: repeat(2, minmax(0, 1fr));
+   gap: 20px;
+ }
+@@ -418,6 +461,7 @@
+     color: var(--drive-muted);
+   }
+   .drive-shares-table td:last-child {
++    width: auto;
+     grid-column: 1 / -1;
+   }
+   .drive-shares-row-actions {

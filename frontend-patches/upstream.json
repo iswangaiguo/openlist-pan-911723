@@ -16,6 +16,7 @@
     "pdf-range.patch",
     "file-type-icons.patch",
     "share-management.patch",
-    "focus-styles.patch"
+    "focus-styles.patch",
+    "share-layout.patch"
   ]
 }
