@@ -17,6 +17,7 @@
     "file-type-icons.patch",
     "share-management.patch",
     "focus-styles.patch",
-    "share-layout.patch"
+    "share-layout.patch",
+    "recent-files.patch"
   ]
 }
