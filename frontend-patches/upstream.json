@@ -18,6 +18,7 @@
     "share-management.patch",
     "focus-styles.patch",
     "share-layout.patch",
-    "recent-files.patch"
+    "recent-files.patch",
+    "mobile-navigation.patch"
   ]
 }
