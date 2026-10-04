@@ -1,0 +1,154 @@
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index a4ca471..b87fb4f 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -554,6 +554,28 @@
+     pointer-events: auto;
+   }
+ }
++/* A neutral layout control matching the file browser toolbar. */
++.drive-layout-trigger {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex-shrink: 0;
++  width: 40px;
++  height: 40px;
++  padding: 0;
++  border: 0;
++  border-radius: 5px;
++  color: var(--drive-text);
++  background: transparent;
++}
++.drive-layout-trigger:hover,
++.drive-layout-trigger[aria-expanded="true"] {
++  background: var(--drive-hover);
++}
++.drive-layout-trigger svg {
++  width: 22px;
++  height: 22px;
++}
+ .drive-layout-menu {
+   min-width: 190px;
+   border-radius: 14px;
+@@ -964,3 +986,15 @@
+   border-top: 1px solid var(--drive-line);
+   border-radius: 0;
+ }
++
++@media (min-width: 761px) {
++  .drive-header-inner > .drive-search {
++    flex: 1;
++    width: auto;
++    min-width: 0;
++    max-width: none;
++  }
++  .drive-header-tools {
++    flex-shrink: 0;
++  }
++}
+diff --git a/src/pages/home/header/layout.tsx b/src/pages/home/header/layout.tsx
+index 75d2a49..2acd6e4 100644
+--- a/src/pages/home/header/layout.tsx
++++ b/src/pages/home/header/layout.tsx
+@@ -1,18 +1,17 @@
+ import {
+-  IconButton,
++  Tooltip,
+   Menu,
+   MenuContent,
+   MenuItem,
+   MenuTrigger,
+ } from "@hope-ui/solid"
+-import { changeColor } from "seemly"
+ import { BsGrid3x3Gap, BsGridFill, BsCardImage } from "solid-icons/bs"
+ import { FaSolidListUl } from "solid-icons/fa"
+-import { Switch, Match, For } from "solid-js"
++import { For } from "solid-js"
+ import { Dynamic } from "solid-js/web"
+ import { useT } from "~/hooks"
+ import { currentLang } from "~/app/i18n"
+-import { getMainColor, LayoutType, layout, setLayout } from "~/store"
++import { LayoutType, layout, setLayout } from "~/store"
+ 
+ const layouts = {
+   grid: BsGrid3x3Gap,
+@@ -23,39 +22,37 @@ const layouts = {
+ 
+ export const Layout = () => {
+   const t = useT()
++  const label = () =>
++    String(currentLang()).startsWith("zh") ? "布局" : "Layout"
+   return (
+     <Menu>
+-      <MenuTrigger
+-        as={IconButton}
+-        color={getMainColor()}
+-        bgColor={changeColor(getMainColor(), { alpha: 0.15 })}
+-        _hover={{
+-          bgColor: changeColor(getMainColor(), { alpha: 0.2 }),
+-        }}
+-        aria-label="switch layout"
+-        compact
+-        size="lg"
+-        icon={
+-          <Switch>
+-            <Match when={layout() === "list"}>
+-              <FaSolidListUl />
+-            </Match>
+-            <Match when={layout() === "grid"}>
+-              <BsGrid3x3Gap />
+-            </Match>
+-            <Match when={layout() === "large_grid"}>
+-              <BsGridFill />
+-            </Match>
+-            <Match when={layout() === "image"}>
+-              <BsCardImage />
+-            </Match>
+-          </Switch>
+-        }
+-      ></MenuTrigger>
++      <Tooltip
++        label={label()}
++        placement="top"
++        withArrow
++        openDelay={150}
++        bg="#242321"
++        color="#fff"
++        borderRadius="6px"
++        padding="10px 14px"
++        fontSize="14px"
++      >
++        <MenuTrigger
++          as="button"
++          type="button"
++          class="drive-layout-trigger"
++          aria-label={label()}
++        >
++          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
++            <path
++              fill="currentColor"
++              d="M2 2h8v8H2zM14 2h8v8h-8zM2 14h8v8H2zM14 14h8v8h-8z"
++            />
++          </svg>
++        </MenuTrigger>
++      </Tooltip>
+       <MenuContent class="drive-layout-menu">
+-        <div class="drive-layout-label">
+-          {String(currentLang()).startsWith("zh") ? "布局" : "Layout"}
+-        </div>
++        <div class="drive-layout-label">{label()}</div>
+         <For each={Object.entries(layouts)}>
+           {(item) => (
+             <MenuItem
+@@ -67,7 +64,9 @@ export const Layout = () => {
+               <span class="drive-layout-choice">
+                 <span>{layout() === item[0] ? "✓" : ""}</span>
+                 {item[0] === "large_grid"
+-                  ? String(currentLang()).startsWith("zh") ? "大型网格" : "Large grid"
++                  ? String(currentLang()).startsWith("zh")
++                    ? "大型网格"
++                    : "Large grid"
+                   : t(`home.layouts.${item[0]}`)}
+               </span>
+             </MenuItem>

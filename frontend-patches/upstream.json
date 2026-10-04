@@ -20,6 +20,7 @@
     "share-layout.patch",
     "recent-files.patch",
     "mobile-navigation.patch",
-    "desktop-sidebar.patch"
+    "desktop-sidebar.patch",
+    "dropbox-layout-search.patch"
   ]
 }
