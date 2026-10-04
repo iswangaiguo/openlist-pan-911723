@@ -1,0 +1,397 @@
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+index 74000a3..8f19830 100644
+--- a/src/pages/home/DriveChrome.tsx
++++ b/src/pages/home/DriveChrome.tsx
+@@ -29,7 +29,7 @@ export const driveText = (
+   }[key]
+ }
+
+-export const DriveBrand = () => {
++export const DriveBrand = (props: { onNavigate?: () => void }) => {
+   const { to } = useRouter()
+   const logos = getSetting("logo").split("\n")
+   const logo = useColorModeValue(logos[0], logos[1] || logos[0])
+@@ -40,7 +40,10 @@ export const DriveBrand = () => {
+       aria-label={
+         String(currentLang()).startsWith("zh") ? "返回首页" : "Go home"
+       }
+-      onClick={() => to("/")}
++      onClick={() => {
++        props.onNavigate?.()
++        to("/")
++      }}
+     >
+       <Show when={logo()} fallback={<span class="drive-brand-mark">O</span>}>
+         <Image
+@@ -56,60 +59,66 @@ export const DriveBrand = () => {
+   )
+ }
+
+-export const DriveRail = () => {
++export const DriveNavigation = (props: { onNavigate?: () => void }) => {
+   const { to, isShare, pathname } = useRouter()
++  const navigate = (path: string) => {
++    props.onNavigate?.()
++    to(path)
++  }
+   return (
+-    <aside class="drive-rail" aria-label={driveText("workspace")}>
+-      <DriveBrand />
+-      <div class="drive-rail-label">{driveText("workspace")}</div>
+-      <nav class="drive-rail-nav">
+-        <Show when={!isShare()}>
+-          <button
+-            class="drive-nav-item"
+-            classList={{
+-              "drive-nav-current": !["/@links", "/@recent"].includes(
+-                pathname(),
+-              ),
+-            }}
+-            aria-current={
+-              !["/@links", "/@recent"].includes(pathname()) ? "page" : undefined
+-            }
+-            onClick={() => to("/")}
+-          >
+-            <Icon as={BsFolder2} />
+-            <span>{driveText("files")}</span>
+-          </button>
+-        </Show>
+-        <Show when={!isShare() && !!me().id && !UserMethods.is_guest(me())}>
+-          <button
+-            type="button"
+-            class="drive-nav-item"
+-            classList={{ "drive-nav-current": pathname() === "/@recent" }}
+-            aria-current={pathname() === "/@recent" ? "page" : undefined}
+-            onClick={() => to("/@recent")}
+-          >
+-            <Icon as={BsClockHistory} />
+-            <span>{driveText("recent")}</span>
+-          </button>
+-        </Show>
+-        <Show when={!isShare() && UserMethods.is_admin(me())}>
+-          <button
+-            type="button"
+-            class="drive-nav-item"
+-            classList={{ "drive-nav-current": pathname() === "/@links" }}
+-            aria-current={pathname() === "/@links" ? "page" : undefined}
+-            onClick={() => to("/@links")}
+-          >
+-            <Icon as={BsShare} />
+-            <span>{driveText("shares")}</span>
+-          </button>
+-        </Show>
+-      </nav>
+-      <DriveUsage />
+-    </aside>
++    <nav class="drive-rail-nav">
++      <Show when={!isShare()}>
++        <button
++          class="drive-nav-item"
++          classList={{
++            "drive-nav-current": !["/@links", "/@recent"].includes(pathname()),
++          }}
++          aria-current={
++            !["/@links", "/@recent"].includes(pathname()) ? "page" : undefined
++          }
++          onClick={() => navigate("/")}
++        >
++          <Icon as={BsFolder2} />
++          <span>{driveText("files")}</span>
++        </button>
++      </Show>
++      <Show when={!isShare() && !!me().id && !UserMethods.is_guest(me())}>
++        <button
++          type="button"
++          class="drive-nav-item"
++          classList={{ "drive-nav-current": pathname() === "/@recent" }}
++          aria-current={pathname() === "/@recent" ? "page" : undefined}
++          onClick={() => navigate("/@recent")}
++        >
++          <Icon as={BsClockHistory} />
++          <span>{driveText("recent")}</span>
++        </button>
++      </Show>
++      <Show when={!isShare() && UserMethods.is_admin(me())}>
++        <button
++          type="button"
++          class="drive-nav-item"
++          classList={{ "drive-nav-current": pathname() === "/@links" }}
++          aria-current={pathname() === "/@links" ? "page" : undefined}
++          onClick={() => navigate("/@links")}
++        >
++          <Icon as={BsShare} />
++          <span>{driveText("shares")}</span>
++        </button>
++      </Show>
++    </nav>
+   )
+ }
+
++export const DriveRail = () => (
++  <aside class="drive-rail" aria-label={driveText("workspace")}>
++    <DriveBrand />
++    <div class="drive-rail-label">{driveText("workspace")}</div>
++    <DriveNavigation />
++    <DriveUsage />
++  </aside>
++)
++
+ export const DriveAccount = () => {
+   const t = useT()
+   const { to } = useRouter()
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index 7cea2b4..db11750 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -1,5 +1,6 @@
+ /* File browser skin, scoped so management and login keep their own layouts. */
+-.drive-shell {
++.drive-shell,
++.drive-mobile-drawer {
+   --drive-bg: #fff;
+   --drive-rail: #f9fafd;
+   --drive-text: #1e1919;
+@@ -8,6 +9,8 @@
+   --drive-hover: #f7f8fa;
+   --drive-blue: #0061ff;
+   --drive-selected: #eaf1ff;
++}
++.drive-shell {
+   width: 100%;
+   min-height: 100vh;
+   display: grid;
+@@ -16,7 +19,8 @@
+   background: var(--drive-bg);
+   font-size: 14px;
+ }
+-.drive-shell[data-drive-mode="dark"] {
++.drive-shell[data-drive-mode="dark"],
++.drive-mobile-drawer[data-drive-mode="dark"] {
+   --drive-bg: #181a1e;
+   --drive-rail: #202227;
+   --drive-text: #f1f1f1;
+@@ -26,7 +30,8 @@
+   --drive-selected: #183354;
+   --drive-blue: #79abff;
+ }
+-.drive-shell button {
++.drive-shell button,
++.drive-mobile-drawer button {
+   font: inherit;
+   cursor: pointer;
+ }
+@@ -908,3 +913,40 @@
+ }
+
+ .drive-rename-progress { position: absolute; top: calc(100% + 2px); left: 0; z-index: 2; background: var(--drive-bg); color: var(--drive-muted); font-size: 12px; padding: 2px 6px; border-radius: 4px; }
++
++/* The drawer is portalled outside the shell, so it owns the same theme tokens. */
++.drive-mobile-drawer.hope-drawer__content {
++  width: min(300px, 85vw);
++  max-width: 100vw;
++  height: 100vh;
++  height: 100dvh;
++  max-height: 100dvh;
++  color: var(--drive-text);
++  background: var(--drive-rail);
++  border-radius: 0;
++  border-right: 1px solid var(--drive-line);
++}
++.drive-mobile-drawer .drive-drawer-header {
++  padding: calc(24px + env(safe-area-inset-top, 0px)) 60px 24px
++    calc(24px + env(safe-area-inset-left, 0px));
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-mobile-drawer .drive-drawer-close {
++  top: calc(20px + env(safe-area-inset-top, 0px));
++  right: 16px;
++  color: var(--drive-text);
++}
++.drive-mobile-drawer .drive-drawer-body {
++  padding: 20px 16px calc(24px + env(safe-area-inset-bottom, 0px))
++    calc(16px + env(safe-area-inset-left, 0px));
++  overflow-y: auto;
++  overscroll-behavior: contain;
++}
++.drive-mobile-drawer .drive-rail-label {
++  margin: 0 12px 12px;
++}
++.drive-mobile-drawer .drive-drawer-refresh {
++  margin-top: 20px;
++  border-top: 1px solid var(--drive-line);
++  border-radius: 0;
++}
+diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
+index 5392311..48baacb 100644
+--- a/src/pages/home/header/Header.tsx
++++ b/src/pages/home/header/Header.tsx
+@@ -10,17 +10,11 @@ import {
+ import { currentLang } from "~/app/i18n"
+ import { Show } from "solid-js"
+ import { getSetting, local, objStore, State, me, userCan } from "~/store"
+-import {
+-  BsSearch,
+-  BsList,
+-  BsPlusLg,
+-  BsFolderPlus,
+-  BsArrowUp,
+-  BsArrowClockwise,
+-} from "solid-icons/bs"
+-import { useT, useRouter, usePath } from "~/hooks"
++import { BsSearch, BsPlusLg, BsFolderPlus, BsArrowUp } from "solid-icons/bs"
++import { useT, useRouter } from "~/hooks"
+ import { Container } from "../Container"
+-import { DriveAccount, driveText } from "../DriveChrome"
++import { DriveAccount } from "../DriveChrome"
++import { MobileNavigation } from "./MobileNavigation"
+ import { UserMethods } from "~/types"
+ import { bus } from "~/utils"
+ import { isMac } from "~/utils/compatibility"
+@@ -28,7 +22,6 @@ import { isMac } from "~/utils/compatibility"
+ export const Header = () => {
+   const t = useT()
+   const { to, isShare } = useRouter()
+-  const { refresh } = usePath()
+   const canWrite = () =>
+     objStore.state === State.Folder &&
+     !isShare() &&
+@@ -48,40 +41,7 @@ export const Header = () => {
+     >
+       <Container>
+         <div class="drive-header-inner">
+-          <div class="drive-mobile-nav">
+-            <Menu placement="bottom-start">
+-              <MenuTrigger
+-                as="button"
+-                class="drive-icon-button drive-menu-button"
+-                aria-label={String(t("home.toolbar.more"))}
+-              >
+-                <Icon as={BsList} />
+-              </MenuTrigger>
+-              <MenuContent>
+-                <Show when={!isShare()}>
+-                  <MenuItem onSelect={() => to("/")}>
+-                    {driveText("files")}
+-                  </MenuItem>
+-                </Show>
+-                <Show
+-                  when={!isShare() && !!me().id && !UserMethods.is_guest(me())}
+-                >
+-                  <MenuItem onSelect={() => to("/@recent")}>
+-                    {driveText("recent")}
+-                  </MenuItem>
+-                </Show>
+-                <Show when={!isShare() && UserMethods.is_admin(me())}>
+-                  <MenuItem onSelect={() => to("/@links")}>
+-                    {driveText("shares")}
+-                  </MenuItem>
+-                </Show>
+-                <MenuItem onSelect={() => refresh(undefined, true)}>
+-                  <Icon as={BsArrowClockwise} />
+-                  {t("home.toolbar.refresh")}
+-                </MenuItem>
+-              </MenuContent>
+-            </Menu>
+-          </div>
++          <MobileNavigation />
+           <Show when={canWrite()}>
+             <div class="drive-mobile-create">
+               <Menu placement="bottom-start">
+diff --git a/src/pages/home/header/MobileNavigation.tsx b/src/pages/home/header/MobileNavigation.tsx
+new file mode 100644
+index 0000000..19ef2fa
+--- /dev/null
++++ b/src/pages/home/header/MobileNavigation.tsx
+@@ -0,0 +1,92 @@
++import {
++  Drawer,
++  DrawerBody,
++  DrawerCloseButton,
++  DrawerContent,
++  DrawerHeader,
++  DrawerOverlay,
++  Icon,
++  createDisclosure,
++  useColorModeValue,
++} from "@hope-ui/solid"
++import { Show, createEffect, on, onCleanup, onMount } from "solid-js"
++import { BsArrowClockwise, BsList } from "solid-icons/bs"
++import { usePath, useRouter, useT } from "~/hooks"
++import { DriveBrand, DriveNavigation, driveText } from "../DriveChrome"
++
++export const MobileNavigation = () => {
++  const t = useT()
++  const { pathname } = useRouter()
++  const { refresh } = usePath()
++  const { isOpen, onOpen, onClose } = createDisclosure()
++  const mode = useColorModeValue("light", "dark")
++  const reducedMotion = window.matchMedia(
++    "(prefers-reduced-motion: reduce)",
++  ).matches
++
++  createEffect(on(pathname, onClose, { defer: true }))
++  onMount(() => {
++    const desktop = window.matchMedia("(min-width: 761px)")
++    const resized = () => {
++      if (desktop.matches) onClose()
++    }
++    desktop.addEventListener("change", resized)
++    onCleanup(() => desktop.removeEventListener("change", resized))
++  })
++
++  return (
++    <div class="drive-mobile-nav">
++      <button
++        type="button"
++        class="drive-icon-button drive-menu-button"
++        aria-label={driveText("workspace")}
++        aria-haspopup="dialog"
++        aria-expanded={isOpen()}
++        aria-controls={isOpen() ? "drive-mobile-navigation" : undefined}
++        onClick={onOpen}
++      >
++        <Icon as={BsList} />
++      </button>
++      {/* Hope's no-motion transition has no end event to release its portal. */}
++      <Show when={!reducedMotion || isOpen()}>
++        <Drawer
++          id="drive-mobile-navigation"
++          opened={isOpen()}
++          placement="left"
++          onClose={onClose}
++          disableMotion={reducedMotion}
++        >
++          <DrawerOverlay />
++          <DrawerContent
++            class="drive-mobile-drawer"
++            data-drive-mode={mode()}
++            aria-label={driveText("workspace")}
++          >
++            <DrawerCloseButton
++              class="drive-drawer-close"
++              aria-label={t("global.close")}
++            />
++            <DrawerHeader class="drive-drawer-header">
++              <DriveBrand onNavigate={onClose} />
++            </DrawerHeader>
++            <DrawerBody class="drive-drawer-body">
++              <div class="drive-rail-label">{driveText("workspace")}</div>
++              <DriveNavigation onNavigate={onClose} />
++              <button
++                type="button"
++                class="drive-nav-item drive-drawer-refresh"
++                onClick={() => {
++                  onClose()
++                  refresh(undefined, true)
++                }}
++              >
++                <Icon as={BsArrowClockwise} />
++                <span>{t("home.toolbar.refresh")}</span>
++              </button>
++            </DrawerBody>
++          </DrawerContent>
++        </Drawer>
++      </Show>
++    </div>
++  )
++}
