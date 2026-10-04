@@ -19,6 +19,7 @@
     "focus-styles.patch",
     "share-layout.patch",
     "recent-files.patch",
-    "mobile-navigation.patch"
+    "mobile-navigation.patch",
+    "desktop-sidebar.patch"
   ]
 }
