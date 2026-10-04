@@ -77,6 +77,7 @@ jobs:
         run: |
           pnpm exec playwright install --with-deps chromium --only-shell
           command -v ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          node --test scripts/tests/frontend-search-browser.test.mjs
           node --test scripts/tests/frontend-wake-browser.test.mjs
           node --test scripts/tests/pdf-browser-cache.test.mjs
           node --test scripts/tests/pdf-viewer.test.mjs scripts/tests/pdf-print-range.test.mjs
