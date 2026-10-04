@@ -1,0 +1,1084 @@
+diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
+index 657d9cb..f747a7d 100644
+--- a/src/pages/home/Layout.tsx
++++ b/src/pages/home/Layout.tsx
+@@ -1,7 +1,7 @@
+ import { useColorModeValue } from "@hope-ui/solid"
+ import { Markdown } from "~/components"
+ import { useRouter, useTitle } from "~/hooks"
+-import { createSignal, lazy, Match, Switch } from "solid-js"
++import { createSignal, lazy, Match, Show, Switch } from "solid-js"
+ import { getSetting } from "~/store"
+ import { notify } from "~/utils"
+ import { DriveRail, DriveSidebarContext } from "./DriveChrome"
+@@ -10,6 +10,7 @@ import { Body } from "./Body"
+ import { Footer } from "./Footer"
+ import { Header } from "./header/Header"
+ import { Toolbar } from "./toolbar/Toolbar"
++import { Search, SearchContext, createFileSearch } from "./folder/Search"
+ 
+ const Recent = lazy(() => import("./recent/Recent"))
+ const Shares = lazy(() => import("./shares/Shares"))
+@@ -18,39 +19,47 @@ const Index = () => {
+   const mode = useColorModeValue("light", "dark")
+   const { pathname } = useRouter()
+   const [collapsed, setCollapsed] = createSignal(false)
++  const search = createFileSearch()
+   useTitle(getSetting("site_title"))
+   const announcement = getSetting("announcement")
+   if (announcement) {
+     notify.render(<Markdown children={announcement} />)
+   }
+   return (
+-    <DriveSidebarContext.Provider
+-      value={{ collapsed, toggle: () => setCollapsed((value) => !value) }}
+-    >
+-      <div
+-        class="drive-shell"
+-        classList={{ "drive-sidebar-collapsed": collapsed() }}
+-        data-drive-mode={mode()}
++    <SearchContext.Provider value={search}>
++      <DriveSidebarContext.Provider
++        value={{ collapsed, toggle: () => setCollapsed((value) => !value) }}
+       >
+-        <DriveRail />
+-        <main class="drive-main">
+-          <Switch>
+-            <Match when={pathname() === "/@links"}>
+-              <Shares />
+-            </Match>
+-            <Match when={pathname() === "/@recent"}>
+-              <Recent />
+-            </Match>
+-            <Match when={!["/@links", "/@recent"].includes(pathname())}>
+-              <Header />
+-              <Toolbar />
+-              <Body />
+-              <Footer />
+-            </Match>
+-          </Switch>
+-        </main>
+-      </div>
+-    </DriveSidebarContext.Provider>
++        <div
++          class="drive-shell"
++          classList={{ "drive-sidebar-collapsed": collapsed() }}
++          data-drive-mode={mode()}
++        >
++          <DriveRail />
++          <main class="drive-main">
++            <Switch>
++              <Match when={pathname() === "/@links"}>
++                <Shares />
++              </Match>
++              <Match when={pathname() === "/@recent"}>
++                <Recent />
++              </Match>
++              <Match when={!["/@links", "/@recent"].includes(pathname())}>
++                <Header />
++                <Toolbar />
++                <div hidden={search.active()}>
++                  <Body />
++                  <Footer />
++                </div>
++                <Show when={search.active()}>
++                  <Search />
++                </Show>
++              </Match>
++            </Switch>
++          </main>
++        </div>
++      </DriveSidebarContext.Provider>
++    </SearchContext.Provider>
+   )
+ }
+ 
+diff --git a/src/pages/home/drive.css b/src/pages/home/drive.css
+index b87fb4f..bc24be9 100644
+--- a/src/pages/home/drive.css
++++ b/src/pages/home/drive.css
+@@ -998,3 +998,193 @@
+     flex-shrink: 0;
+   }
+ }
++
++.drive-inline-search {
++  min-height: 46px;
++  cursor: text;
++}
++.drive-inline-search > svg {
++  flex-shrink: 0;
++  width: 18px;
++  height: 18px;
++}
++.drive-inline-search input {
++  flex: 1;
++  width: 100%;
++  min-width: 0;
++  border: 0;
++  padding: 0;
++  outline: 0;
++  background: transparent;
++  color: var(--drive-text);
++  font: inherit;
++}
++.drive-inline-search input::placeholder {
++  color: var(--drive-muted);
++}
++.drive-inline-search input::-webkit-search-cancel-button {
++  -webkit-appearance: none;
++}
++.drive-search-clear {
++  display: inline-flex;
++  align-items: center;
++  justify-content: center;
++  flex-shrink: 0;
++  width: 24px;
++  height: 24px;
++  padding: 0;
++  border: 0;
++  border-radius: 50%;
++  background: transparent;
++  color: var(--drive-muted);
++}
++.drive-search-clear:hover {
++  background: var(--drive-line);
++  color: var(--drive-text);
++}
++.drive-search-page {
++  padding: 32px 0 48px;
++}
++.drive-search-summary {
++  display: flex;
++  align-items: center;
++  justify-content: space-between;
++  gap: 16px;
++}
++.drive-search-summary h1 {
++  font-size: 20px;
++  font-weight: 600;
++}
++.drive-search-summary .drive-button {
++  flex-shrink: 0;
++}
++.drive-search-filters {
++  display: flex;
++  align-items: center;
++  flex-wrap: wrap;
++  gap: 12px;
++  margin: 24px 0;
++  color: var(--drive-muted);
++}
++.drive-search-filters select {
++  font: inherit;
++  border: 0;
++  border-radius: 20px;
++  padding: 9px 14px;
++  background: var(--drive-hover);
++  color: var(--drive-text);
++  cursor: pointer;
++}
++.drive-search-filters > span {
++  min-width: 0;
++  overflow-wrap: anywhere;
++}
++.drive-search-columns,
++.drive-search-result {
++  display: grid;
++  grid-template-columns: 40px minmax(0, 1fr) minmax(120px, 240px) 100px;
++  align-items: center;
++  gap: 12px;
++  padding: 14px 12px;
++  border-bottom: 1px solid var(--drive-line);
++}
++.drive-search-columns {
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++.drive-search-columns > span:first-child {
++  grid-column: span 2;
++  padding-left: 52px;
++}
++.drive-search-result {
++  min-height: 76px;
++  color: var(--drive-text);
++  text-decoration: none;
++}
++.drive-search-result:hover {
++  background: var(--drive-hover);
++}
++.drive-search-file-icon {
++  width: 32px;
++  height: 32px;
++}
++.drive-search-file-name {
++  min-width: 0;
++  overflow-wrap: anywhere;
++}
++.drive-search-file-name strong {
++  font-weight: 600;
++}
++.drive-search-file-name small {
++  display: none;
++  margin-top: 6px;
++  color: var(--drive-muted);
++}
++.drive-search-file-name mark {
++  background: var(--drive-selected);
++  color: var(--drive-text);
++}
++.drive-search-location {
++  overflow: hidden;
++  text-overflow: ellipsis;
++  white-space: nowrap;
++  color: var(--drive-muted);
++}
++.drive-search-size {
++  color: var(--drive-muted);
++  white-space: nowrap;
++}
++.drive-search-empty {
++  padding: 48px 0;
++  color: var(--drive-muted);
++  text-align: center;
++}
++.drive-search-empty .drive-button {
++  margin-top: 12px;
++}
++.drive-search-pagination {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  gap: 16px;
++  padding-top: 24px;
++}
++.drive-search-page button:disabled {
++  cursor: default;
++  opacity: 0.5;
++}
++@media (max-width: 760px) {
++  .drive-inline-search {
++    max-width: none;
++    min-width: 0;
++    min-height: 40px;
++  }
++  .drive-search-page {
++    padding-top: 24px;
++  }
++  .drive-search-summary h1 {
++    font-size: 18px;
++  }
++  .drive-search-summary .drive-button {
++    padding-inline: 10px;
++  }
++  .drive-search-columns,
++  .drive-search-result {
++    grid-template-columns: 32px minmax(0, 1fr) 76px;
++    gap: 10px;
++    padding-inline: 0;
++  }
++  .drive-search-columns > span:first-child {
++    padding-left: 42px;
++  }
++  .drive-search-location {
++    display: none;
++  }
++  .drive-search-file-name small {
++    display: block;
++    font-size: 11px;
++  }
++  .drive-search-size {
++    font-size: 12px;
++  }
++}
+diff --git a/src/pages/home/folder/Folder.tsx b/src/pages/home/folder/Folder.tsx
+index 1d60ab0..284e5d1 100644
+--- a/src/pages/home/folder/Folder.tsx
++++ b/src/pages/home/folder/Folder.tsx
+@@ -22,7 +22,6 @@ import lgAutoplay from "lightgallery/plugins/autoplay"
+ import lgFullscreen from "lightgallery/plugins/fullscreen"
+ import "lightgallery/css/lightgallery-bundle.css"
+ import { LightGallery } from "lightgallery/lightgallery"
+-import { Search } from "./Search"
+ 
+ const ListLayout = lazy(() => import("./List"))
+ const GridLayout = lazy(() => import("./Grid"))
+@@ -82,7 +81,6 @@ const Folder = () => {
+         </Match>
+       </Switch>
+       <Pager />
+-      <Search />
+       <ContextMenu />
+     </>
+   )
+diff --git a/src/pages/home/folder/Search.tsx b/src/pages/home/folder/Search.tsx
+index 9a56b10..d7fc337 100644
+--- a/src/pages/home/folder/Search.tsx
++++ b/src/pages/home/folder/Search.tsx
+@@ -1,328 +1,411 @@
++import { Icon } from "@hope-ui/solid"
+ import {
+-  Badge,
+-  createDisclosure,
+-  HStack,
+-  Icon,
+-  IconButton,
+-  Input,
+-  Modal,
+-  ModalBody,
+-  ModalCloseButton,
+-  ModalContent,
+-  ModalHeader,
+-  ModalOverlay,
+-  Text,
+-  VStack,
+-  hope,
+-} from "@hope-ui/solid"
+-import { BsSearch } from "solid-icons/bs"
+-import {
+-  createSignal,
+   For,
+-  Match,
+-  onCleanup,
+-  onMount,
+   Show,
+-  Switch,
++  createContext,
++  createEffect,
++  createMemo,
++  createSignal,
++  on,
++  onCleanup,
++  useContext,
+ } from "solid-js"
+-import Mark from "mark.js"
+-import {
+-  FullLoading,
+-  LinkWithBase,
+-  Paginator,
+-  SelectWrapper,
+-} from "~/components"
+-import { useFetch, usePath, useRouter, useT } from "~/hooks"
+-import { getMainColor, me, password } from "~/store"
+-import { SearchNode } from "~/types"
++import { BsArrowLeft, BsSearch, BsX } from "solid-icons/bs"
++import { currentLang } from "~/app/i18n"
++import { LinkWithBase } from "~/components"
++import { usePath, useRouter, useT } from "~/hooks"
++import { getSetting, me, password } from "~/store"
++import { FsSearchResp, SearchNode } from "~/types"
+ import {
+   bus,
+   encodePath,
+-  fsSearch,
+   getFileSize,
+-  handleResp,
+-  hoverColor,
++  handleRespWithoutNotify,
+   pathJoin,
++  r,
+ } from "~/utils"
+ import { isMac } from "~/utils/compatibility"
+ import { getIconByObj } from "~/utils/icon"
++import { Container } from "../Container"
+ 
+-// class MarkKeywords {
+-//   root
+-//   rootHTML
+-//   style
+-
+-//   /**
+-//    * Keyword highlight
+-//    * @param root Find root elements
+-//    * @param style The default background is highly bright yellow
+-//    */
+-//   constructor(config: { root: Element | null; style?: string }) {
+-//     if (!config.root) return
+-//     this.root = config.root
+-//     this.rootHTML = config.root.innerHTML
+-//     this.style = config.style ?? "background-color: #FF0"
+-//   }
+-
+-//   /** mark keyword */
+-//   light(keyword: string) {
+-//     const handler = (root: any) => {
+-//       if (
+-//         root.nodeName === "#text" &&
+-//         root.parentNode.childNodes.length === 1
+-//       ) {
+-//         root.parentNode.innerHTML = root.parentNode.innerHTML.replace(
+-//           new RegExp(keyword, "g"),
+-//           `<span class="mark" style="${this.style}">${keyword}</span>`,
+-//         )
+-//       } else {
+-//         for (const node of root.childNodes) {
+-//           handler(node)
+-//         }
+-//       }
+-//     }
+-
+-//     if (!this.root) return
+-
+-//     // reset HTML
+-//     this.root.innerHTML = this.rootHTML!
++const zh = () => String(currentLang()).startsWith("zh")
++export const searchText = (
++  key:
++    | "clear"
++    | "back"
++    | "loading"
++    | "error"
++    | "retry"
++    | "location"
++    | "size"
++    | "scope",
++) =>
++  ({
++    clear: zh() ? "清空搜索" : "Clear search",
++    back: zh() ? "返回目录" : "Back to folder",
++    loading: zh() ? "正在搜索…" : "Searching…",
++    error: zh() ? "搜索失败，请重试" : "Search failed. Try again.",
++    retry: zh() ? "重试" : "Retry",
++    location: zh() ? "所在位置" : "Location",
++    size: zh() ? "大小" : "Size",
++    scope: zh() ? "搜索范围" : "Search in",
++  })[key]
+ 
+-//     if (!keyword) return
+-//     handler(this.root)
+-//   }
+-// }
+-
+-function NodeName(props: { keywords: string; name: string }) {
+-  let ref: HTMLSpanElement
+-  onMount(() => {
+-    // const highlighter = new MarkKeywords({
+-    //   root: ref!,
+-    //   style: `background-color: var(--hope-colors-info5); border-radius: var(--hope-radii-md); margin: 0 1px; padding: 0 1px;`,
+-    // })
+-    // highlighter.light(props.keywords)
+-    const mark = new Mark(ref!)
+-    mark.mark(props.keywords, {
+-      separateWordSearch: true,
+-      diacritics: true,
+-    })
++// Keep requests owned by the home layout, independent of the folder renderer.
++export function createFileSearch() {
++  const { pathname } = useRouter()
++  const [query, setQuery] = createSignal("")
++  const [scope, setScope] = createSignal(0)
++  const [page, setPage] = createSignal(1)
++  const [composing, setComposing] = createSignal(false)
++  const [loading, setLoading] = createSignal(false)
++  const [error, setError] = createSignal(false)
++  const [data, setData] = createSignal({
++    content: [] as SearchNode[],
++    total: 0,
+   })
+-  return (
+-    <hope.span
+-      ref={ref!}
+-      css={{
+-        mark: {
+-          bg: "$info4",
+-          rounded: "$md",
+-          px: "1px",
+-          // mx: "1px",
+-          color: "$info11",
+-          fontWeight: "$bold",
++  const active = createMemo(
++    () => !!query().trim() && getSetting("search_index") !== "none",
++  )
++  const pageSize = 100
++  let input: HTMLInputElement | undefined
++  let timer: ReturnType<typeof setTimeout> | undefined
++  let request: AbortController | undefined
++  let generation = 0
++  const cancel = () => {
++    generation++
++    clearTimeout(timer)
++    request?.abort()
++  }
++  const clear = () => {
++    cancel()
++    setQuery("")
++    setPage(1)
++    setScope(0)
++    setData({ content: [], total: 0 })
++    setLoading(false)
++    setError(false)
++  }
++  const run = async () => {
++    cancel()
++    if (!active() || composing()) return
++    const version = generation
++    const controller = new AbortController()
++    request = controller
++    setLoading(true)
++    setError(false)
++    try {
++      const resp = (await r.post(
++        "/fs/search",
++        {
++          parent: pathname(),
++          keywords: query().trim(),
++          password: password(),
++          scope: scope(),
++          page: page(),
++          per_page: pageSize,
+         },
++        { signal: controller.signal, timeout: 30000 },
++      )) as unknown as FsSearchResp
++      if (version !== generation || controller.signal.aborted) return
++      if (resp.code === 401) {
++        clear()
++        handleRespWithoutNotify(resp)
++        return
++      }
++      if (resp.code !== 200 || !Array.isArray(resp.data?.content))
++        throw new Error("search")
++      const base = (me().base_path || "/").replace(/\/+$/, "")
++      const content = resp.data.content.map((node) => {
++        let parent = node.parent || "/"
++        // Strip the user's root literally and only at a path boundary.
++        if (base && (parent === base || parent.startsWith(base + "/")))
++          parent = parent.slice(base.length) || "/"
++        if (!parent.startsWith("/")) parent = "/" + parent
++        return {
++          ...node,
++          parent,
++          path: encodePath(pathJoin(parent, node.name)),
++        }
++      })
++      setData({ content, total: resp.data.total })
++    } catch {
++      if (version === generation && !controller.signal.aborted) setError(true)
++    } finally {
++      if (version === generation) setLoading(false)
++    }
++  }
++  createEffect(
++    on([query, scope, page, composing], () => {
++      cancel()
++      setData({ content: [], total: 0 })
++      setError(false)
++      setLoading(active())
++      if (active() && !composing()) timer = setTimeout(() => void run(), 300)
++    }),
++  )
++  createEffect(on(pathname, clear, { defer: true }))
++  createEffect(on(() => me().id, clear, { defer: true }))
++  const focus = () => input?.focus()
++  const tool = (name: string) => {
++    if (name === "search") focus()
++  }
++  const shortcut = (event: KeyboardEvent) => {
++    if (
++      (event.ctrlKey || (isMac && event.metaKey)) &&
++      event.key.toLowerCase() === "k" &&
++      input?.isConnected
++    ) {
++      event.preventDefault()
++      focus()
++    }
++  }
++  bus.on("tool", tool)
++  document.addEventListener("keydown", shortcut)
++  onCleanup(() => {
++    cancel()
++    bus.off("tool", tool)
++    document.removeEventListener("keydown", shortcut)
++  })
++  return {
++    query,
++    active,
++    scope,
++    page,
++    pageSize,
++    data,
++    loading,
++    error,
++    run,
++    clear,
++    focus,
++    setInput: (element: HTMLInputElement) => {
++      input = element
++    },
++    setComposing,
++    changeQuery: (value: string) => {
++      setPage(1)
++      setQuery(value)
++    },
++    changeScope: (value: number) => {
++      setPage(1)
++      setScope(value)
++    },
++    changePage: setPage,
++  }
++}
++export const SearchContext =
++  createContext<ReturnType<typeof createFileSearch>>()
++const useSearch = () => useContext(SearchContext)!
++
++export const SearchInput = () => {
++  const search = useSearch()
++  const t = useT()
++  return (
++    <form
++      class="drive-search drive-inline-search"
++      role="search"
++      onSubmit={(event) => {
++        event.preventDefault()
++        void search.run()
+       }}
+     >
+-      {props.name}
+-    </hope.span>
++      <Icon as={BsSearch} />
++      <input
++        ref={search.setInput}
++        type="search"
++        aria-label={t("home.search.search")}
++        placeholder={t("home.search.search")}
++        value={search.query()}
++        onInput={(event) => search.changeQuery(event.currentTarget.value)}
++        onCompositionStart={() => search.setComposing(true)}
++        onCompositionEnd={(event) => {
++          search.setComposing(false)
++          search.changeQuery(event.currentTarget.value)
++        }}
++        onKeyDown={(event) => {
++          if (event.key === "Enter" && event.isComposing) event.preventDefault()
++          if (event.key === "Escape" && !event.isComposing) {
++            search.clear()
++            event.preventDefault()
++          }
++        }}
++      />
++      <Show
++        when={search.query()}
++        fallback={
++          <span class="drive-search-shortcut">{isMac ? "Cmd" : "Ctrl"} K</span>
++        }
++      >
++        <button
++          type="button"
++          class="drive-search-clear"
++          aria-label={searchText("clear")}
++          onClick={() => {
++            search.clear()
++            search.focus()
++          }}
++        >
++          <Icon as={BsX} />
++        </button>
++      </Show>
++    </form>
+   )
+ }
+ 
+-const SearchResult = (props: { node: SearchNode; keywords: string }) => {
++function SearchName(props: { name: string; query: string }) {
++  const parts = createMemo(() => {
++    const terms = props.query
++      .trim()
++      .split(/\s+/)
++      .filter(Boolean)
++      .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
++    return terms.length
++      ? props.name.split(new RegExp(`(${terms.join("|")})`, "giu"))
++      : [props.name]
++  })
++  return (
++    <For each={parts()}>
++      {(part, index) => (index() % 2 ? <mark>{part}</mark> : part)}
++    </For>
++  )
++}
++const SearchResult = (props: { node: SearchNode; query: string }) => {
+   const { setPathAs } = usePath()
++  const search = useSearch()
+   return (
+-    <HStack
+-      w="$full"
+-      borderBottom={`1px solid ${hoverColor()}`}
+-      _hover={{
+-        bgColor: hoverColor(),
+-      }}
+-      rounded="$md"
+-      cursor="pointer"
+-      px="$2"
+-      as={LinkWithBase}
++    <LinkWithBase
++      class="drive-search-result"
+       href={`${props.node.path}?from=search`}
+       target={props.node.is_dir ? undefined : "_blank"}
+       rel={props.node.is_dir ? undefined : "noopener noreferrer"}
+-      // encode
+-      onMouseEnter={() => {
+-        setPathAs(props.node.path, props.node.is_dir)
++      onMouseEnter={() => setPathAs(props.node.path, props.node.is_dir)}
++      onClick={() => {
++        if (props.node.is_dir) search.clear()
+       }}
+     >
+-      <Icon
+-        class="icon"
+-        boxSize="$6"
+-        color={getMainColor()}
+-        as={getIconByObj(props.node)}
+-        mr="$1"
+-      />
+-      <VStack flex={1} p="$1" spacing="$1" w="$full" alignItems="start">
+-        <Text
+-          css={{
+-            wordBreak: "break-all",
+-          }}
+-        >
+-          <NodeName keywords={props.keywords} name={props.node.name} />
+-          <Show when={props.node.size > 0 || !props.node.is_dir}>
+-            <Badge colorScheme="info" ml="$2">
+-              {getFileSize(props.node.size)}
+-            </Badge>
+-          </Show>
+-        </Text>
+-        <Text
+-          color="$neutral10"
+-          size="xs"
+-          css={{
+-            wordBreak: "break-all",
+-          }}
+-        >
+-          {props.node.parent}
+-        </Text>
+-      </VStack>
+-    </HStack>
++      <Icon as={getIconByObj(props.node)} class="drive-search-file-icon" />
++      <span class="drive-search-file-name">
++        <strong>
++          <SearchName name={props.node.name} query={props.query} />
++        </strong>
++        <small>{props.node.parent}</small>
++      </span>
++      <span class="drive-search-location">{props.node.parent}</span>
++      <span class="drive-search-size">
++        {props.node.is_dir ? "—" : getFileSize(props.node.size)}
++      </span>
++    </LinkWithBase>
+   )
+ }
+ 
+-const Search = () => {
+-  const pageSize = 100
+-  const { isOpen, onOpen, onClose, onToggle } = createDisclosure()
++export const Search = () => {
++  const search = useSearch()
+   const t = useT()
+-  const handler = (name: string) => {
+-    if (name === "search") {
+-      onOpen()
+-    }
+-  }
+-  bus.on("tool", handler)
+-  const searchEvent = (e: KeyboardEvent) => {
+-    if ((e.ctrlKey || (isMac && e.metaKey)) && e.key.toLowerCase() === "k") {
+-      e.preventDefault()
+-      onToggle()
+-    }
+-  }
+-  document.addEventListener("keydown", searchEvent)
+-  onCleanup(() => {
+-    bus.off("tool", handler)
+-    document.removeEventListener("keydown", searchEvent)
+-  })
+-  const [keywords, setKeywords] = createSignal("")
+   const { pathname } = useRouter()
+-  const [loading, searchReq] = useFetch(fsSearch)
+-  const [data, setData] = createSignal({
+-    content: [] as SearchNode[],
+-    total: 0,
+-  })
+-  const [scope, setScope] = createSignal(0)
+-  const scopes = ["all", "folder", "file"]
+-  let resetPaginator: () => void
+-  const search = async (page = 1) => {
+-    page === 1 && resetPaginator?.()
+-    if (loading()) return
+-    setData({
+-      content: [],
+-      total: 0,
+-    })
+-    const resp = await searchReq(
+-      pathname(),
+-      keywords(),
+-      password(),
+-      scope(),
+-      page,
+-      pageSize,
+-    )
+-    handleResp(resp, (data) => {
+-      const content = data.content
+-      if (!content) {
+-        return
+-      }
+-      content.forEach((node) => {
+-        if (me().base_path && node.parent.startsWith(me().base_path)) {
+-          const pattern = new RegExp("^" + me().base_path)
+-          node.parent = node.parent.replace(pattern, "") || "/"
+-          if (!node.parent.startsWith("/")) {
+-            node.parent = "/" + node.parent
+-          }
+-        }
+-        node.path = encodePath(pathJoin(node.parent, node.name))
+-      })
+-      setData(data)
+-    })
+-  }
++  const pages = () => Math.ceil(search.data().total / search.pageSize)
+   return (
+-    <Modal
+-      // blockScrollOnMount={false}
+-      opened={isOpen()}
+-      onClose={onClose}
+-      closeOnEsc={false}
+-      size={{
+-        "@initial": "sm",
+-        "@sm": "lg",
+-        "@md": "2xl",
+-      }}
+-      initialFocus="#search-input"
+-      scrollBehavior="inside"
+-    >
+-      <ModalOverlay bg="$blackAlpha5" />
+-      <ModalContent mx="$2">
+-        <ModalCloseButton />
+-        <ModalHeader>{t("home.search.search")}</ModalHeader>
+-        <ModalBody>
+-          <VStack w="$full" spacing="$2">
+-            <HStack w="$full" spacing="$2">
+-              <SelectWrapper
+-                w="$32"
+-                value={scope()}
+-                onChange={(v) => setScope(v)}
+-                options={scopes.map((v, i) => ({
+-                  value: i,
+-                  label: t(`home.search.scopes.${v}`),
+-                }))}
+-              />
+-              <Input
+-                id="search-input"
+-                value={keywords()}
+-                onInput={(e) => {
+-                  setKeywords(e.currentTarget.value)
+-                }}
+-                onKeyDown={(e) => {
+-                  if (e.key === "Enter" && keywords().length !== 0) {
+-                    search()
+-                  }
+-                }}
+-              />
+-              <IconButton
+-                flexShrink={0}
+-                aria-label="search"
+-                icon={<BsSearch />}
+-                onClick={() => search()}
+-                loading={loading()}
+-                disabled={keywords().length === 0}
+-              />
+-            </HStack>
+-            <Switch>
+-              <Match when={loading()}>
+-                <FullLoading />
+-              </Match>
+-              <Match when={data().content.length === 0}>
+-                <Text size="2xl" my="$8">
+-                  {t("home.search.no_result")}
+-                </Text>
+-              </Match>
+-            </Switch>
+-            <VStack w="$full">
+-              <For each={data().content}>
+-                {(item) => <SearchResult node={item} keywords={keywords()} />}
++    <Container>
++      <section
++        class="drive-search-page"
++        aria-label={t("home.search.search")}
++        aria-busy={search.loading()}
++      >
++        <div class="drive-search-summary">
++          <h1 aria-live="polite">
++            {search.loading()
++              ? searchText("loading")
++              : search.error()
++                ? searchText("error")
++                : zh()
++                  ? `${search.data().total} 个结果`
++                  : `${search.data().total} results`}
++          </h1>
++          <button type="button" class="drive-button" onClick={search.clear}>
++            <Icon as={BsArrowLeft} />
++            {searchText("back")}
++          </button>
++        </div>
++        <div class="drive-search-filters">
++          <select
++            aria-label={t("home.search.scopes.all")}
++            value={search.scope()}
++            onChange={(event) =>
++              search.changeScope(Number(event.currentTarget.value))
++            }
++          >
++            <For each={["all", "folder", "file"]}>
++              {(scope, index) => (
++                <option value={index()}>
++                  {t(`home.search.scopes.${scope}`)}
++                </option>
++              )}
++            </For>
++          </select>
++          <span>
++            {searchText("scope")}: {pathname()}
++          </span>
++        </div>
++        <Show when={search.error()}>
++          <div class="drive-search-empty" role="alert">
++            <p>{searchText("error")}</p>
++            <button
++              type="button"
++              class="drive-button"
++              onClick={() => void search.run()}
++            >
++              {searchText("retry")}
++            </button>
++          </div>
++        </Show>
++        <Show when={!search.loading() && !search.error()}>
++          <Show
++            when={search.data().content.length}
++            fallback={
++              <p class="drive-search-empty">{t("home.search.no_result")}</p>
++            }
++          >
++            <div class="drive-search-columns" aria-hidden="true">
++              <span>{zh() ? "名称" : "Name"}</span>
++              <span class="drive-search-location">
++                {searchText("location")}
++              </span>
++              <span>{searchText("size")}</span>
++            </div>
++            <div class="drive-search-results">
++              <For each={search.data().content}>
++                {(node) => <SearchResult node={node} query={search.query()} />}
+               </For>
+-            </VStack>
+-            <Paginator
+-              total={data().total}
+-              defaultPageSize={pageSize}
+-              onChange={(page) => {
+-                search(page)
+-              }}
+-              setResetCallback={(reset) => (resetPaginator = reset)}
+-            />
+-          </VStack>
+-        </ModalBody>
+-      </ModalContent>
+-    </Modal>
++            </div>
++            <Show when={pages() > 1}>
++              <nav
++                class="drive-search-pagination"
++                aria-label={zh() ? "搜索结果分页" : "Search result pages"}
++              >
++                <button
++                  type="button"
++                  class="drive-button"
++                  disabled={search.page() === 1}
++                  onClick={() => search.changePage(search.page() - 1)}
++                >
++                  {zh() ? "上一页" : "Previous"}
++                </button>
++                <span>
++                  {search.page()} / {pages()}
++                </span>
++                <button
++                  type="button"
++                  class="drive-button"
++                  disabled={search.page() >= pages()}
++                  onClick={() => search.changePage(search.page() + 1)}
++                >
++                  {zh() ? "下一页" : "Next"}
++                </button>
++              </nav>
++            </Show>
++          </Show>
++        </Show>
++      </section>
++    </Container>
+   )
+ }
+-
+-export { Search }
+diff --git a/src/pages/home/header/Header.tsx b/src/pages/home/header/Header.tsx
+index c37a0f4..5f0d8e4 100644
+--- a/src/pages/home/header/Header.tsx
++++ b/src/pages/home/header/Header.tsx
+@@ -1,23 +1,15 @@
+-import {
+-  HStack,
+-  Icon,
+-  Kbd,
+-  Menu,
+-  MenuContent,
+-  MenuItem,
+-  MenuTrigger,
+-} from "@hope-ui/solid"
++import { Icon, Menu, MenuContent, MenuItem, MenuTrigger } from "@hope-ui/solid"
+ import { currentLang } from "~/app/i18n"
+ import { Show } from "solid-js"
+ import { getSetting, local, objStore, State, me, userCan } from "~/store"
+-import { BsSearch, BsPlusLg, BsFolderPlus, BsArrowUp } from "solid-icons/bs"
++import { BsPlusLg, BsFolderPlus, BsArrowUp } from "solid-icons/bs"
+ import { useT, useRouter } from "~/hooks"
+ import { Container } from "../Container"
+ import { DriveAccount, DriveSidebarToggle } from "../DriveChrome"
+ import { MobileNavigation } from "./MobileNavigation"
+ import { UserMethods } from "~/types"
+ import { bus } from "~/utils"
+-import { isMac } from "~/utils/compatibility"
++import { SearchInput } from "../folder/Search"
+ 
+ export const Header = () => {
+   const t = useT()
+@@ -74,18 +66,7 @@ export const Header = () => {
+               getSetting("search_index") !== "none"
+             }
+           >
+-            <button
+-              aria-label={t("home.search.search")}
+-              class="drive-search"
+-              onClick={() => bus.emit("tool", "search")}
+-            >
+-              <Icon as={BsSearch} />
+-              <span>{t("home.search.search")}</span>
+-              <HStack class="drive-search-shortcut">
+-                <Kbd>{isMac ? "Cmd" : "Ctrl"}</Kbd>
+-                <Kbd>K</Kbd>
+-              </HStack>
+-            </button>
++            <SearchInput />
+           </Show>
+           <div class="drive-header-tools">
+             <DriveAccount />
+diff --git a/src/pages/home/header/layout.tsx b/src/pages/home/header/layout.tsx
+index 2acd6e4..f225a00 100644
+--- a/src/pages/home/header/layout.tsx
++++ b/src/pages/home/header/layout.tsx
+@@ -43,7 +43,7 @@ export const Layout = () => {
+           class="drive-layout-trigger"
+           aria-label={label()}
+         >
+-          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
++          <svg viewBox="0 0 24 24" aria-hidden="true">
+             <path
+               fill="currentColor"
+               d="M2 2h8v8H2zM14 2h8v8h-8zM2 14h8v8H2zM14 14h8v8h-8z"

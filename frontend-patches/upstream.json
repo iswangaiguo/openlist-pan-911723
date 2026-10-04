@@ -21,6 +21,7 @@
     "recent-files.patch",
     "mobile-navigation.patch",
     "desktop-sidebar.patch",
-    "dropbox-layout-search.patch"
+    "dropbox-layout-search.patch",
+    "inline-search.patch"
   ]
 }
