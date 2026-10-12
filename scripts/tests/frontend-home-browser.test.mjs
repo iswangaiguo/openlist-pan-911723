@@ -41,11 +41,11 @@ test(
         .click()
       await page
         .getByRole("checkbox", { name: "Select all", exact: true })
-        .check()
+        .press("Space")
       assert.equal(await page.locator(".drive-file-section").count(), 0)
       await page
         .getByRole("checkbox", { name: "Select all", exact: true })
-        .uncheck()
+        .press("Space")
       const screenshotDir = process.env.HOME_SCREENSHOT_DIR
       if (screenshotDir) fs.mkdirSync(screenshotDir, { recursive: true })
       for (const width of [1440, 768, 390, 320]) {
