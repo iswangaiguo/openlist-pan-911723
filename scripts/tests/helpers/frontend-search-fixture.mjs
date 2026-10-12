@@ -2,7 +2,7 @@ import fs from "node:fs"
 import path from "node:path"
 import http from "node:http"
 
-export function createSearchFixture(dist) {
+export function createSearchFixture(dist, { permission = 0 } = {}) {
   const searches = []
   const folder = {
     parent: "/private.[1]",
@@ -44,7 +44,7 @@ export function createSearchFixture(dist) {
           id: 1,
           username: "admin",
           role: 2,
-          permission: 0,
+          permission,
           base_path: "/private.[1]",
           disabled: false,
           otp: false,

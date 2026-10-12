@@ -1,0 +1,433 @@
+diff --git a/src/pages/home/Body.tsx b/src/pages/home/Body.tsx
+index c8f0892..f4da4d5 100644
+--- a/src/pages/home/Body.tsx
++++ b/src/pages/home/Body.tsx
+@@ -4,7 +4,7 @@ import { Obj } from "./Obj"
+ import { Readme } from "./Readme"
+ import { Container } from "./Container"
+ import { DriveSelection } from "./DriveSelection"
+-import { DriveHeading, DriveViewToolbar } from "./DriveChrome"
++import { DriveHeading, DriveViewToolbar, DriveFileSection } from "./DriveChrome"
+ import { Sidebar } from "./Sidebar"
+ 
+ export const Body = () => {
+@@ -23,6 +23,7 @@ export const Body = () => {
+         <Nav />
+         <DriveHeading />
+         <div class="drive-list-toolbar">
++          <DriveFileSection />
+           <DriveSelection />
+           <DriveViewToolbar />
+         </div>
+diff --git a/src/pages/home/DriveChrome.tsx b/src/pages/home/DriveChrome.tsx
+index 3e1e79c..f4ed25d 100644
+--- a/src/pages/home/DriveChrome.tsx
++++ b/src/pages/home/DriveChrome.tsx
+@@ -11,7 +11,7 @@ import {
+ } from "solid-icons/bs"
+ import { useRouter, usePath, useT } from "~/hooks"
+ import { currentLang } from "~/app/i18n"
+-import { getSetting, me, objStore, State, userCan } from "~/store"
++import { getSetting, me, objStore, State, userCan, haveSelected } from "~/store"
+ import { UserMethods } from "~/types"
+ import { Layout } from "./header/layout"
+ import { bus } from "~/utils"
+@@ -200,6 +200,17 @@ export const DriveHeading = () => {
+             ? driveText("files")
+             : pathname().split("/").filter(Boolean).pop()}
+         </h1>
++        <Show when={objStore.state === State.Folder}>
++          <p class="drive-heading-description">
++            {String(currentLang()).startsWith("zh")
++              ? pathname() === "/"
++                ? "你的文件，井然有序。"
++                : "浏览、整理与分享此文件夹中的内容。"
++              : pathname() === "/"
++                ? "A place for everything you work on."
++                : "Browse, organize and share this folder."}
++          </p>
++        </Show>
+       </div>
+       <div class="drive-actions">
+         <button
+@@ -239,3 +250,21 @@ export const DriveHeading = () => {
+     </div>
+   )
+ }
++
++export const DriveFileSection = () => (
++  <Show
++    when={
++      [State.Folder, State.FetchingMore].includes(objStore.state) &&
++      !haveSelected()
++    }
++  >
++    <div class="drive-file-section">
++      <span>
++        {String(currentLang()).startsWith("zh")
++          ? "文件与文件夹"
++          : "Files and folders"}
++      </span>
++      <span class="drive-item-count">{objStore.total}</span>
++    </div>
++  </Show>
++)
+diff --git a/src/pages/home/Layout.tsx b/src/pages/home/Layout.tsx
+index f747a7d..dc91c93 100644
+--- a/src/pages/home/Layout.tsx
++++ b/src/pages/home/Layout.tsx
+@@ -6,6 +6,7 @@ import { getSetting } from "~/store"
+ import { notify } from "~/utils"
+ import { DriveRail, DriveSidebarContext } from "./DriveChrome"
+ import "./drive.css"
++import "./drive-home.css"
+ import { Body } from "./Body"
+ import { Footer } from "./Footer"
+ import { Header } from "./header/Header"
+diff --git a/src/pages/home/drive-home.css b/src/pages/home/drive-home.css
+new file mode 100644
+index 0000000..bee61d1
+--- /dev/null
++++ b/src/pages/home/drive-home.css
+@@ -0,0 +1,341 @@
++/* Shared file workspace: compact navigation, a quiet canvas and clear actions. */
++.drive-shell,
++.drive-mobile-drawer {
++  --drive-rail: #f7f5f2;
++  --drive-hover: #f5f5f4;
++  --drive-line: #e8e7e5;
++  --drive-selected: #e8efff;
++}
++.drive-shell[data-drive-mode="dark"],
++.drive-mobile-drawer[data-drive-mode="dark"] {
++  --drive-rail: #202124;
++  --drive-hover: #292b30;
++  --drive-line: #383a40;
++  --drive-selected: #203956;
++}
++.drive-shell {
++  grid-template-columns: 216px minmax(0, 1fr);
++}
++.drive-rail {
++  padding: 24px 12px 20px;
++  border-right: 0;
++}
++.drive-rail .drive-brand {
++  padding: 0 12px;
++  min-height: 40px;
++}
++.drive-rail-label {
++  margin: 36px 12px 14px;
++  font-size: 11px;
++  letter-spacing: 0.08em;
++}
++.drive-nav-item {
++  min-height: 44px;
++  padding: 10px 12px;
++  border-radius: 6px;
++}
++.drive-nav-current {
++  color: var(--drive-text);
++  background: var(--drive-line);
++}
++.drive-nav-current:hover {
++  background: var(--drive-selected);
++}
++.drive-shell .drive-container {
++  max-width: none;
++  padding-inline: 36px;
++}
++.drive-header {
++  border-bottom: 0;
++}
++.drive-header-inner {
++  height: 80px;
++  gap: 14px;
++}
++.drive-sidebar-toggle {
++  border-color: transparent;
++  background: transparent;
++}
++.drive-inline-search {
++  border-radius: 8px;
++  min-height: 44px;
++  background: var(--drive-hover);
++}
++.drive-search-shortcut {
++  border: 1px solid var(--drive-line);
++  padding: 2px 6px;
++  border-radius: 4px;
++}
++.drive-header-tools .drive-desktop-account {
++  padding: 4px 0 4px 8px;
++}
++.drive-avatar {
++  background: #e9d9c4;
++  color: #513f2a;
++}
++.drive-shell .body {
++  padding-top: 18px;
++  gap: 16px;
++}
++.drive-shell .nav {
++  font-size: 12px;
++  line-height: 20px;
++}
++.drive-heading {
++  align-items: center;
++  margin: 4px 0 14px;
++  gap: 24px;
++}
++.drive-heading-title {
++  flex-direction: column;
++  align-items: flex-start;
++  gap: 0;
++  min-width: 0;
++}
++.drive-heading h1 {
++  font-size: 32px;
++  font-weight: 650;
++  letter-spacing: -1px;
++  line-height: 1.25;
++}
++.drive-heading-description {
++  margin: 9px 0 0;
++  color: var(--drive-muted);
++  font-size: 13px;
++  line-height: 1.6;
++}
++.drive-actions {
++  gap: 8px;
++}
++.drive-heading-refresh {
++  border-color: transparent;
++}
++.drive-button {
++  border-radius: 6px;
++  min-height: 42px;
++  padding-inline: 16px;
++}
++.drive-button-primary {
++  background: #0061ff;
++  border-color: #0061ff;
++  color: #fff;
++}
++.drive-button-primary:hover {
++  background: #0052d9;
++  border-color: #0052d9;
++}
++.drive-list-toolbar {
++  min-height: 48px;
++  height: auto;
++  border-bottom: 1px solid var(--drive-line);
++  gap: 12px;
++}
++.drive-file-section {
++  display: flex;
++  align-items: center;
++  gap: 10px;
++  flex-shrink: 0;
++  min-height: 44px;
++  font-size: 13px;
++  font-weight: 600;
++}
++.drive-item-count {
++  min-width: 24px;
++  padding: 2px 7px;
++  border-radius: 5px;
++  background: var(--drive-hover);
++  color: var(--drive-muted);
++  text-align: center;
++  font-size: 11px;
++  font-variant-numeric: tabular-nums;
++}
++.drive-list-toolbar .drive-file-tools {
++  padding: 0;
++  background: transparent;
++}
++.drive-shell .drive-list-title {
++  background: var(--drive-hover);
++  border-radius: 6px 6px 0 0;
++}
++.drive-shell .drive-file-row .list-item {
++  min-height: 58px;
++  padding-block: 12px;
++}
++.drive-shell .drive-file-row-renaming .list-item {
++  padding-block: 4px;
++}
++.drive-shell .list-item .name {
++  font-weight: 400;
++}
++.drive-shell .list-item .size,
++.drive-shell .list-item .modified {
++  font-size: 12px;
++}
++.drive-shell .grid-item {
++  border: 1px solid var(--drive-line);
++  border-radius: 8px;
++  overflow: hidden;
++  padding: 8px;
++  transition: background 0.15s;
++}
++.drive-shell .grid-item:hover {
++  transform: none;
++  background: var(--drive-hover);
++}
++.drive-shell .grid-item.selected {
++  background: var(--drive-selected);
++  border-color: var(--drive-blue);
++}
++.drive-shell .grid-item .item-thumbnail {
++  background: var(--drive-hover);
++  border-radius: 4px;
++}
++.drive-search-page {
++  padding-top: 24px;
++}
++.drive-search-columns {
++  background: var(--drive-hover);
++  border-radius: 6px 6px 0 0;
++}
++.drive-shell .drive-usage {
++  border-top: 1px solid var(--drive-line);
++  padding-top: 20px;
++}
++.drive-shell .drive-directory-count {
++  color: var(--drive-muted);
++  font-size: 12px;
++}
++@media (min-width: 761px) and (max-width: 1100px) {
++  .drive-shell {
++    grid-template-columns: 192px minmax(0, 1fr);
++  }
++  .drive-shell .drive-container {
++    padding-inline: 24px;
++  }
++  .drive-heading {
++    flex-wrap: wrap;
++    gap: 16px;
++  }
++}
++@media (min-width: 761px) {
++  .drive-shell.drive-sidebar-collapsed {
++    grid-template-columns: minmax(0, 1fr);
++  }
++}
++@media (max-width: 760px) {
++  .drive-shell {
++    display: block;
++  }
++  .drive-shell .drive-container {
++    padding-inline: 16px;
++  }
++  .drive-header-inner {
++    height: 68px;
++    min-height: 68px;
++    gap: 10px;
++    padding-block: 12px;
++  }
++  .drive-mobile-create {
++    display: none;
++  }
++  .drive-header-inner > .drive-search {
++    max-width: none;
++    flex: 1;
++    min-width: 0;
++    background: var(--drive-hover);
++    border-radius: 8px;
++  }
++  .drive-shell .body {
++    padding-top: 12px;
++    gap: 12px;
++  }
++  .drive-heading {
++    flex-wrap: wrap;
++    gap: 16px;
++    margin: 2px 0 8px;
++  }
++  .drive-heading-title {
++    width: 100%;
++  }
++  .drive-heading h1 {
++    font-size: 28px;
++    white-space: normal;
++    overflow-wrap: anywhere;
++  }
++  .drive-heading-description {
++    margin-top: 6px;
++    font-size: 12px;
++  }
++  .drive-actions {
++    width: 100%;
++    gap: 8px;
++  }
++  .drive-heading-upload,
++  .drive-heading-mkdir {
++    width: auto;
++    padding-inline: 14px;
++    border-radius: 6px;
++    min-height: 40px;
++  }
++  .drive-heading-upload {
++    background: #0061ff;
++    border-color: #0061ff;
++    color: white;
++    order: 0;
++  }
++  .drive-heading-upload:hover {
++    background: #0052d9;
++    border-color: #0052d9;
++  }
++  .drive-heading-mkdir {
++    order: 1;
++    border-color: var(--drive-line);
++    background: var(--drive-bg);
++  }
++  .drive-heading-upload span,
++  .drive-heading-mkdir span {
++    display: inline;
++  }
++  .drive-heading-upload svg,
++  .drive-heading-mkdir svg {
++    width: 17px;
++    height: 17px;
++  }
++  .drive-heading-layout {
++    margin-left: auto;
++  }
++  .drive-heading-refresh {
++    display: inline-flex;
++    order: 2;
++    width: 36px;
++    min-height: 40px;
++  }
++  .drive-file-section {
++    font-size: 12px;
++    gap: 6px;
++  }
++  .drive-list-toolbar {
++    flex-wrap: wrap;
++    gap: 4px 8px;
++    padding-block: 4px;
++  }
++  .drive-list-toolbar .drive-file-tools {
++    height: auto;
++    min-height: 0;
++  }
++  .drive-list-toolbar .drive-selection-actions {
++    flex-wrap: wrap;
++  }
++  .drive-shell .drive-file-row .list-item {
++    min-height: 56px;
++    padding-block: 10px;
++  }
++  .drive-shell .drive-file-row-renaming .list-item {
++    padding-block: 4px;
++  }
++}
++@media (prefers-reduced-motion: reduce) {
++  .drive-shell .grid-item {
++    transition: none;
++  }
++}
