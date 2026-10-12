@@ -22,6 +22,7 @@
     "mobile-navigation.patch",
     "desktop-sidebar.patch",
     "dropbox-layout-search.patch",
-    "inline-search.patch"
+    "inline-search.patch",
+    "dropbox-home.patch"
   ]
 }
