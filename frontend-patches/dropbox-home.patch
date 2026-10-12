@@ -86,10 +86,10 @@ index f747a7d..dc91c93 100644
  import { Header } from "./header/Header"
 diff --git a/src/pages/home/drive-home.css b/src/pages/home/drive-home.css
 new file mode 100644
-index 0000000..bee61d1
+index 0000000..95ad8c7
 --- /dev/null
 +++ b/src/pages/home/drive-home.css
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,356 @@
 +/* Shared file workspace: compact navigation, a quiet canvas and clear actions. */
 +.drive-shell,
 +.drive-mobile-drawer {
@@ -429,5 +429,20 @@ index 0000000..bee61d1
 +@media (prefers-reduced-motion: reduce) {
 +  .drive-shell .grid-item {
 +    transition: none;
++  }
++}
++@media (max-width: 380px) {
++  .drive-actions {
++    gap: 6px;
++    flex-wrap: wrap;
++  }
++  .drive-heading-upload,
++  .drive-heading-mkdir {
++    padding-inline: 10px;
++    white-space: nowrap;
++    flex-shrink: 0;
++  }
++  .drive-heading-refresh {
++    width: 32px;
 +  }
 +}
