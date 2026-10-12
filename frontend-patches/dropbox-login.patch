@@ -1,0 +1,840 @@
+diff --git a/src/pages/login/SSOLogin.tsx b/src/pages/login/SSOLogin.tsx
+index fdc0b00..4857cb9 100644
+--- a/src/pages/login/SSOLogin.tsx
++++ b/src/pages/login/SSOLogin.tsx
+@@ -6,6 +6,7 @@ import { base_path, changeToken, r } from "~/utils"
+ import { getSetting, getSettingBool } from "~/store"
+ import { useRouter } from "~/hooks"
+ import { onCleanup } from "solid-js"
++import { currentLang } from "~/app/i18n"
+ 
+ const SSOLogin = () => {
+   const ssoSignEnabled = getSettingBool("sso_login_enabled")
+@@ -55,7 +56,14 @@ const SSOLogin = () => {
+         icon = FiLogIn
+     }
+     return (
+-      <Icon cursor="pointer" boxSize="$8" as={icon} p="$0_5" onclick={login} />
++      <button type="button" class="login-alternative" onClick={login}>
++        <Icon boxSize="$5" as={icon} />
++        <span>
++          {String(currentLang()).startsWith("zh")
++            ? `使用 ${loginPlatform || "SSO"} 登录`
++            : `Continue with ${loginPlatform || "SSO"}`}
++        </span>
++      </button>
+     )
+   }
+ }
+diff --git a/src/pages/login/index.tsx b/src/pages/login/index.tsx
+index fec89c0..5a03012 100644
+--- a/src/pages/login/index.tsx
++++ b/src/pages/login/index.tsx
+@@ -1,14 +1,8 @@
+ import {
+   Image,
+-  Center,
+-  Flex,
+-  Heading,
+-  Text,
+   Input,
+   Button,
+   useColorModeValue,
+-  HStack,
+-  VStack,
+   Checkbox,
+   Icon,
+ } from "@hope-ui/solid"
+@@ -25,7 +19,8 @@ import {
+   hashPwd,
+ } from "~/utils"
+ import { PResp, Resp } from "~/types"
+-import LoginBg from "./LoginBg"
++import { currentLang } from "~/app/i18n"
++import "./login.css"
+ import { createStorageSignal } from "@solid-primitives/storage"
+ import { getSetting, getSettingBool } from "~/store"
+ import { SSOLogin } from "./SSOLogin"
+@@ -35,13 +30,15 @@ const supported = () =>
+ 
+ const Login = () => {
+   const logos = getSetting("logo").split("\n")
+-  const logo = useColorModeValue(logos[0], logos.pop())
++  const logo = useColorModeValue(logos[0], logos[1] || logos[0])
+   const t = useT()
+   const title = createMemo(() => {
+     return `${t("login.login_to")} ${getSetting("site_title")}`
+   })
+   useTitle(title)
+-  const bgColor = useColorModeValue("white", "$neutral1")
++  const mode = useColorModeValue("light", "dark")
++  const label = (zh: string, en: string) =>
++    String(currentLang()).startsWith("zh") ? zh : en
+   const [username, setUsername] = createSignal(
+     localStorage.getItem("username") || "",
+   )
+@@ -225,147 +222,238 @@ const Login = () => {
+   }
+ 
+   return (
+-    <Center zIndex="$docked" w="$full" h="100vh">
+-      <VStack
+-        bgColor={bgColor()}
+-        rounded="$xl"
+-        p="24px"
+-        w={{
+-          "@initial": "90%",
+-          "@sm": "364px",
+-        }}
+-        spacing="$4"
+-      >
+-        <Flex alignItems="center" justifyContent="space-around">
+-          <Image mr="$2" boxSize="$12" src={logo()} />
+-          <Heading color="$info9" fontSize="$2xl">
+-            {title()}
+-          </Heading>
+-        </Flex>
+-        <Show
+-          when={!needOpt()}
+-          fallback={
+-            <Input
+-              id="totp"
+-              name="otp"
+-              placeholder={t("login.otp-tips")}
+-              value={opt()}
+-              onInput={(e) => setOpt(e.currentTarget.value)}
+-              onKeyDown={(e) => {
+-                if (e.key === "Enter") {
+-                  Login()
+-                }
+-              }}
+-            />
+-          }
+-        >
+-          <Input
+-            name="username"
+-            placeholder={t("login.username-tips")}
+-            value={username()}
+-            onInput={(e) => setUsername(e.currentTarget.value)}
+-          />
+-          <Show when={!useauthn()}>
+-            <Input
+-              name="password"
+-              placeholder={t("login.password-tips")}
+-              type="password"
+-              value={password()}
+-              onInput={(e) => setPassword(e.currentTarget.value)}
+-              onKeyDown={(e) => {
+-                if (e.key === "Enter") {
+-                  Login()
+-                }
+-              }}
++    <main class="login-workspace" data-login-mode={mode()}>
++      <aside class="login-story">
++        <div class="login-brand">
++          <Show
++            when={logo()}
++            fallback={<span class="login-brand-mark">O</span>}
++          >
++            <Image
++              src={logo()}
++              alt=""
++              width="36px"
++              height="36px"
++              objectFit="contain"
+             />
+           </Show>
+-          <Flex
+-            px="$1"
+-            w="$full"
+-            fontSize="$sm"
+-            color="$neutral10"
+-            justifyContent="space-between"
+-            alignItems="center"
++          <span>{getSetting("site_title") || "OpenList"}</span>
++        </div>
++        <div class="login-story-content">
++          <p class="login-eyebrow">
++            {label("你的文件空间", "YOUR FILE WORKSPACE")}
++          </p>
++          <h2>
++            {label("每一份文件，", "Everything you need.")}
++            <br />
++            {label("都有它的位置。", "All in one place.")}
++          </h2>
++          <p class="login-story-description">
++            {label(
++              "整理、发现、分享。从这里，继续你的每一天。",
++              "Organize, discover and share. Pick up right where you left off.",
++            )}
++          </p>
++          <div class="login-art" aria-hidden="true">
++            <div class="login-art-sheet">
++              <span />
++              <span />
++              <span />
++            </div>
++            <div class="login-art-folder">
++              <div class="login-art-folder-tab" />
++              <div class="login-art-folder-face">
++                <span>O</span>
++              </div>
++            </div>
++            <div class="login-art-note">
++              <span />
++              <span />
++            </div>
++          </div>
++        </div>
++        <p class="login-story-footer">
++          {label(
++            "为井然有序的每一天。",
++            "A little more room for what matters.",
++          )}
++        </p>
++      </aside>
++      <section class="login-panel" aria-labelledby="login-title">
++        <header class="login-panel-header">
++          <span class="login-mobile-brand">
++            {getSetting("site_title") || "OpenList"}
++          </span>
++          <div class="login-preferences">
++            <SwitchLanguageWhite />
++            <SwitchColorMode />
++          </div>
++        </header>
++        <div class="login-form-wrap">
++          <p class="login-eyebrow">{label("欢迎回来", "WELCOME BACK")}</p>
++          <h1 id="login-title">
++            {needOpt()
++              ? label("验证你的身份", "Verify your identity")
++              : label("登录你的文件空间", "Sign in to your workspace")}
++          </h1>
++          <p class="login-intro">
++            {needOpt()
++              ? label(
++                  "输入身份验证器中的一次性验证码。",
++                  "Enter the one-time code from your authenticator.",
++                )
++              : label(
++                  "继续访问你的文件与分享。",
++                  "Continue to your files and shared work.",
++                )}
++          </p>
++          <form
++            class="login-form"
++            onSubmit={(event) => {
++              event.preventDefault()
++              if (!loading()) void Login()
++            }}
+           >
+-            <Checkbox
+-              checked={remember() === "true"}
+-              onChange={() =>
+-                setRemember(remember() === "true" ? "false" : "true")
++            <Show
++              when={!needOpt()}
++              fallback={
++                <div class="login-field">
++                  <label for="totp">
++                    {label("验证码", "Verification code")}
++                  </label>
++                  <Input
++                    id="totp"
++                    name="otp"
++                    autocomplete="one-time-code"
++                    inputMode="numeric"
++                    placeholder={t("login.otp-tips")}
++                    value={opt()}
++                    onInput={(e) => setOpt(e.currentTarget.value)}
++                  />
++                </div>
+               }
+             >
+-              {t("login.remember")}
+-            </Checkbox>
+-            <Text as="a" target="_blank" href={t("login.forget_url")}>
+-              {t("login.forget")}
+-            </Text>
+-          </Flex>
+-        </Show>
+-        <HStack w="$full" spacing="$2">
+-          <Show when={!useauthn()}>
++              <div class="login-field">
++                <label for="login-username">
++                  {label("用户名", "Username")}
++                </label>
++                <Input
++                  id="login-username"
++                  name="username"
++                  autocomplete="username webauthn"
++                  placeholder={t("login.username-tips")}
++                  value={username()}
++                  onInput={(e) => setUsername(e.currentTarget.value)}
++                />
++              </div>
++              <Show when={!useauthn()}>
++                <div class="login-field">
++                  <label for="login-password">
++                    {label("密码", "Password")}
++                  </label>
++                  <Input
++                    id="login-password"
++                    name="password"
++                    autocomplete="current-password"
++                    placeholder={t("login.password-tips")}
++                    type="password"
++                    value={password()}
++                    onInput={(e) => setPassword(e.currentTarget.value)}
++                  />
++                </div>
++              </Show>
++              <div class="login-options">
++                <Checkbox
++                  checked={remember() === "true"}
++                  onChange={() =>
++                    setRemember(remember() === "true" ? "false" : "true")
++                  }
++                >
++                  {t("login.remember")}
++                </Checkbox>
++                <a
++                  target="_blank"
++                  rel="noopener noreferrer"
++                  href={t("login.forget_url")}
++                >
++                  {t("login.forget")}
++                </a>
++              </div>
++            </Show>
++            <Show when={ldapLoginEnabled && !needOpt()}>
++              <div class="login-ldap">
++                <Checkbox
++                  checked={useLdap()}
++                  onChange={() => setUseLdap(!useLdap())}
++                >
++                  {ldapLoginTips || "LDAP"}
++                </Checkbox>
++              </div>
++            </Show>
+             <Button
+-              colorScheme="primary"
++              type="submit"
++              class="login-submit"
+               w="$full"
++              loading={loading()}
++            >
++              {useauthn()
++                ? label("使用通行密钥登录", "Sign in with a passkey")
++                : t("login.login")}
++            </Button>
++            <Show when={!useauthn()}>
++              <button
++                type="button"
++                class="login-clear"
++                onClick={() => {
++                  if (needOpt()) setOpt("")
++                  else {
++                    setUsername("")
++                    setPassword("")
++                  }
++                }}
++              >
++                {t("login.clear")}
++              </button>
++            </Show>
++          </form>
++          <div class="login-alternatives">
++            <SSOLogin />
++            <Show when={AuthnSignEnabled && !needOpt()}>
++              <button
++                type="button"
++                class="login-alternative"
++                onClick={AuthnSwitch}
++                aria-pressed={useauthn()}
++              >
++                <Icon as={IoFingerPrint} />
++                <span>
++                  {useauthn()
++                    ? label("使用密码登录", "Use a password instead")
++                    : label("使用通行密钥", "Use a passkey")}
++                </span>
++              </button>
++            </Show>
++            <button
++              type="button"
++              class="login-guest"
+               onClick={() => {
+-                if (needOpt()) {
+-                  setOpt("")
+-                } else {
+-                  setUsername("")
+-                  setPassword("")
+-                }
++                changeToken()
++                to(
++                  decodeURIComponent(searchParams.redirect || base_path || "/"),
++                  true,
++                )
+               }}
+             >
+-              {t("login.clear")}
+-            </Button>
+-          </Show>
+-          <Button w="$full" loading={loading()} onClick={Login}>
+-            {t("login.login")}
+-          </Button>
+-        </HStack>
+-        <Show when={ldapLoginEnabled}>
+-          <Checkbox
+-            w="$full"
+-            checked={useLdap() === true}
+-            onChange={() => setUseLdap(!useLdap())}
+-          >
+-            {ldapLoginTips}
+-          </Checkbox>
+-        </Show>
+-        <Button
+-          w="$full"
+-          colorScheme="accent"
+-          onClick={() => {
+-            changeToken()
+-            to(
+-              decodeURIComponent(searchParams.redirect || base_path || "/"),
+-              true,
+-            )
+-          }}
+-        >
+-          {t("login.use_guest")}
+-        </Button>
+-        <Flex
+-          mt="$2"
+-          justifyContent="space-evenly"
+-          alignItems="center"
+-          color="$neutral10"
+-          w="$full"
+-        >
+-          <SwitchLanguageWhite />
+-          <SwitchColorMode />
+-          <SSOLogin />
+-          <Show when={AuthnSignEnabled}>
+-            <Icon
+-              cursor="pointer"
+-              boxSize="$8"
+-              as={IoFingerPrint}
+-              p="$0_5"
+-              onclick={AuthnSwitch}
+-            />
+-          </Show>
+-        </Flex>
+-      </VStack>
+-      <LoginBg />
+-    </Center>
++              {t("login.use_guest")}
++              <span aria-hidden="true"> →</span>
++            </button>
++          </div>
++        </div>
++        <footer class="login-panel-footer">
++          {getSetting("site_title") || "OpenList"}
++        </footer>
++      </section>
++    </main>
+   )
+ }
+ 
+diff --git a/src/pages/login/login.css b/src/pages/login/login.css
+new file mode 100644
+index 0000000..da4e317
+--- /dev/null
++++ b/src/pages/login/login.css
+@@ -0,0 +1,389 @@
++.login-workspace {
++  --login-bg: #fff;
++  --login-text: #1e1919;
++  --login-muted: #736c64;
++  --login-line: #dedbd7;
++  --login-hover: #f7f5f2;
++  --login-blue: #0061ff;
++  width: 100%;
++  display: grid;
++  grid-template-columns: minmax(0, 1fr) minmax(440px, 1fr);
++  min-height: 100vh;
++  min-height: 100dvh;
++  background: var(--login-bg);
++  color: var(--login-text);
++}
++.login-workspace[data-login-mode="dark"] {
++  --login-bg: #181a1e;
++  --login-text: #f1f1f1;
++  --login-muted: #b4b0ab;
++  --login-line: #45474c;
++  --login-hover: #24272e;
++  --login-blue: #8ab5ff;
++}
++.login-story {
++  display: flex;
++  flex-direction: column;
++  padding: 40px 48px 32px;
++  background: #063bce;
++  color: #fff;
++  overflow: hidden;
++}
++.login-brand {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  font-size: 20px;
++  font-weight: 650;
++  overflow-wrap: anywhere;
++}
++.login-brand-mark {
++  display: grid;
++  place-items: center;
++  width: 36px;
++  height: 36px;
++  flex-shrink: 0;
++  background: #fff;
++  color: #0061ff;
++  border-radius: 6px;
++  font-size: 22px;
++}
++.login-story-content {
++  margin: auto 0;
++  padding-block: 56px 32px;
++  max-width: 540px;
++}
++.login-eyebrow {
++  font-size: 11px;
++  letter-spacing: 0.12em;
++  font-weight: 600;
++  margin: 0 0 18px;
++  line-height: 1.5;
++}
++.login-story .login-eyebrow {
++  color: #c7d8ff;
++}
++.login-story h2 {
++  font-size: clamp(32px, 3.4vw, 56px);
++  line-height: 1.15;
++  letter-spacing: -0.04em;
++  font-weight: 600;
++  margin: 0;
++}
++.login-story-description {
++  max-width: 380px;
++  color: #d6e2ff;
++  font-size: 15px;
++  line-height: 1.8;
++  margin: 24px 0 0;
++}
++.login-story-footer {
++  margin: 0;
++  color: #c7d8ff;
++  font-size: 12px;
++}
++.login-art {
++  position: relative;
++  height: 220px;
++  width: min(100%, 380px);
++  margin: 48px auto 0;
++}
++.login-art-sheet {
++  position: absolute;
++  left: 28%;
++  top: 8px;
++  width: 140px;
++  height: 165px;
++  padding: 30px 22px;
++  background: #f8f5ec;
++  transform: rotate(10deg);
++  border-radius: 3px;
++}
++.login-art-sheet span {
++  display: block;
++  height: 5px;
++  background: #bdd0f2;
++  margin-bottom: 13px;
++}
++.login-art-sheet span:last-child {
++  width: 60%;
++}
++.login-art-folder {
++  position: absolute;
++  top: 68px;
++  left: 10%;
++  width: 72%;
++  height: 145px;
++  transform: rotate(-7deg);
++}
++.login-art-folder-tab {
++  width: 44%;
++  height: 25px;
++  border-radius: 7px 12px 0 0;
++  background: #9ac3ff;
++}
++.login-art-folder-face {
++  position: absolute;
++  inset: 20px 0 0;
++  display: flex;
++  align-items: flex-end;
++  padding: 20px;
++  background: #b6d7ff;
++  border-radius: 0 6px 6px 6px;
++  color: #063bce;
++  font-size: 34px;
++  font-weight: 650;
++}
++.login-art-note {
++  position: absolute;
++  right: 0;
++  bottom: 0;
++  width: 88px;
++  height: 88px;
++  background: #ffe1a2;
++  padding: 26px 18px;
++  transform: rotate(12deg);
++}
++.login-art-note span {
++  display: block;
++  height: 4px;
++  margin-bottom: 12px;
++  background: #bf8c35;
++}
++.login-art-note span:last-child {
++  width: 60%;
++}
++.login-panel {
++  min-width: 0;
++  display: flex;
++  flex-direction: column;
++  padding: 28px 48px 24px;
++}
++.login-panel-header {
++  display: flex;
++  justify-content: flex-end;
++  align-items: center;
++  min-height: 40px;
++  gap: 16px;
++}
++.login-mobile-brand {
++  display: none;
++}
++.login-preferences {
++  display: flex;
++  align-items: center;
++  gap: 12px;
++  color: var(--login-muted);
++}
++.login-preferences svg {
++  color: var(--login-muted);
++}
++.login-form-wrap {
++  width: 100%;
++  max-width: 368px;
++  margin: auto;
++  padding-block: 48px;
++}
++.login-form-wrap .login-eyebrow {
++  color: var(--login-muted);
++  margin-bottom: 12px;
++}
++.login-form-wrap h1 {
++  font-size: 30px;
++  line-height: 1.3;
++  font-weight: 600;
++  letter-spacing: -0.035em;
++  margin: 0;
++}
++.login-intro {
++  color: var(--login-muted);
++  font-size: 14px;
++  line-height: 1.6;
++  margin: 12px 0 30px;
++}
++.login-form {
++  display: flex;
++  flex-direction: column;
++  gap: 20px;
++}
++.login-field {
++  display: flex;
++  flex-direction: column;
++  gap: 8px;
++}
++.login-field label {
++  font-size: 13px;
++  font-weight: 600;
++}
++.login-field .hope-input {
++  height: 48px;
++  border: 1px solid var(--login-line);
++  border-radius: 5px;
++  background: var(--login-bg);
++  color: var(--login-text);
++  font-size: 16px;
++  padding-inline: 12px;
++  box-shadow: none;
++}
++.login-field .hope-input::placeholder {
++  color: var(--login-muted);
++  font-size: 13px;
++}
++.login-field .hope-input:focus {
++  border-color: var(--login-blue);
++  box-shadow: 0 0 0 1px var(--login-blue);
++}
++.login-options {
++  display: flex;
++  justify-content: space-between;
++  align-items: center;
++  gap: 12px;
++  flex-wrap: wrap;
++  font-size: 12px;
++}
++.login-options .hope-checkbox__label,
++.login-ldap .hope-checkbox__label {
++  font-size: 12px;
++  color: var(--login-muted);
++}
++.login-options a {
++  color: var(--login-text);
++  text-decoration: underline;
++  text-underline-offset: 3px;
++}
++.login-workspace .login-submit {
++  height: 48px;
++  background: #0061ff;
++  color: #fff;
++  border-radius: 5px;
++  font-size: 14px;
++  font-weight: 600;
++}
++.login-workspace .login-submit:hover {
++  background: #0052d9;
++}
++.login-clear {
++  align-self: center;
++  border: 0;
++  background: transparent;
++  color: var(--login-muted);
++  cursor: pointer;
++  font: inherit;
++  font-size: 12px;
++  padding: 4px 12px;
++  margin-top: -8px;
++}
++.login-clear:hover {
++  color: var(--login-text);
++  text-decoration: underline;
++}
++.login-alternatives {
++  display: flex;
++  flex-direction: column;
++  gap: 12px;
++  border-top: 1px solid var(--login-line);
++  margin-top: 24px;
++  padding-top: 24px;
++}
++.login-alternative {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  gap: 10px;
++  min-height: 44px;
++  width: 100%;
++  border: 1px solid var(--login-line);
++  border-radius: 5px;
++  background: var(--login-bg);
++  color: var(--login-text);
++  font: inherit;
++  font-size: 13px;
++  cursor: pointer;
++  padding: 10px 12px;
++}
++.login-alternative:hover {
++  background: var(--login-hover);
++}
++.login-alternative svg {
++  width: 20px;
++  height: 20px;
++  flex-shrink: 0;
++}
++.login-guest {
++  min-height: 40px;
++  border: 0;
++  background: transparent;
++  color: var(--login-muted);
++  font: inherit;
++  font-size: 13px;
++  cursor: pointer;
++}
++.login-guest:hover {
++  color: var(--login-blue);
++}
++.login-workspace button:focus-visible,
++.login-workspace a:focus-visible {
++  outline: 2px solid var(--login-blue);
++  outline-offset: 4px;
++}
++.login-panel-footer {
++  text-align: center;
++  color: var(--login-muted);
++  font-size: 11px;
++  overflow-wrap: anywhere;
++}
++@media (min-width: 1600px) {
++  .login-story {
++    padding-inline: max(48px, calc((100vw - 1440px) / 2));
++  }
++}
++@media (max-width: 1000px) {
++  .login-story {
++    padding-inline: 32px;
++  }
++  .login-panel {
++    padding-inline: 32px;
++  }
++}
++@media (max-width: 760px) {
++  .login-workspace {
++    display: flex;
++    flex-direction: column;
++  }
++  .login-story {
++    display: none;
++  }
++  .login-panel {
++    flex: 1;
++    padding: 20px 24px;
++    min-height: 100vh;
++    min-height: 100dvh;
++  }
++  .login-panel-header {
++    justify-content: space-between;
++  }
++  .login-mobile-brand {
++    display: block;
++    font-size: 18px;
++    font-weight: 650;
++    overflow-wrap: anywhere;
++    min-width: 0;
++  }
++  .login-preferences {
++    flex-shrink: 0;
++  }
++  .login-form-wrap {
++    padding-block: 40px;
++  }
++  .login-form-wrap h1 {
++    font-size: 28px;
++  }
++}
++@media (max-width: 380px) {
++  .login-panel {
++    padding-inline: 20px;
++  }
++  .login-form-wrap h1 {
++    font-size: 25px;
++  }
++}

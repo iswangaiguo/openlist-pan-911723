@@ -23,6 +23,7 @@
     "desktop-sidebar.patch",
     "dropbox-layout-search.patch",
     "inline-search.patch",
-    "dropbox-home.patch"
+    "dropbox-home.patch",
+    "dropbox-login.patch"
   ]
 }
