@@ -306,7 +306,9 @@ export class S3Client {
     const epUrl = new URL(this.endpoint)
     let urlStr = ""
 
-    const cleanKey = key ? getKey(key, false) : ""
+    // Encode each key segment ourselves: the URL setter leaves "%" untouched,
+    // so a key like "a%41.txt" would otherwise address "aA.txt".
+    const cleanKey = key ? rfc3986UriEncode(getKey(key, false), false) : ""
 
     if (this.isPathStyle) {
       const basePath = epUrl.pathname.replace(/\/+$/, "")
@@ -806,7 +808,7 @@ export class S3Client {
     sourceEtag?: string,
   ): Promise<string | void> {
     if (size !== undefined && size > maxCopyObjectSize) {
-      return this.copyMultipart(srcKey, dstKey, size)
+      return this.copyMultipart(srcKey, dstKey, size, sourceEtag)
     }
 
     const cleanSrc = getKey(srcKey, false)
@@ -842,6 +844,7 @@ export class S3Client {
     srcKey: string,
     dstKey: string,
     size: number,
+    sourceEtag?: string,
   ): Promise<void> {
     const cleanSrc = getKey(srcKey, false)
     const cleanDst = getKey(dstKey, false)
@@ -873,10 +876,13 @@ export class S3Client {
           "x-amz-copy-source": encodedSource,
           "x-amz-copy-source-range": `bytes=${start}-${end}`,
         }
+        // Every part must come from the same source version.
+        if (sourceEtag)
+          partHeaders["x-amz-copy-source-if-match"] = `"${sourceEtag}"`
 
         const partResp = await this.fetch("PUT", partUrl, null, partHeaders)
         const partText = await partResp.text()
-        if (!partResp.ok) {
+        if (!partResp.ok || /<Error[\s>]/.test(partText)) {
           throw parseS3Error(partText, partResp.status)
         }
 
@@ -901,10 +907,13 @@ export class S3Client {
       const completeResp = await this.fetch("POST", completeUrl, completeBody, {
         "content-type": "application/xml",
       })
-      if (!completeResp.ok) {
-        const completeText = await completeResp.text().catch(() => "")
+      // S3 can report a failed completion inside a 200 response; callers
+      // delete the source after this returns, so require the success body.
+      const completeText = await completeResp.text()
+      if (!completeResp.ok || /<Error[\s>]/.test(completeText))
         throw parseS3Error(completeText, completeResp.status)
-      }
+      if (!/<CompleteMultipartUploadResult[\s>]/.test(completeText))
+        throw new Error("Invalid S3 copy completion response")
     } catch (err) {
       // Abort multipart on failure
       const abortUrl = this.getUrl(cleanDst, { uploadId })
@@ -977,9 +986,11 @@ export class S3Client {
           host = hostSplit[1].replace(/\/+$/, "")
         }
 
+        // Encode the key so "#", "?" and "%" in names stay part of the path.
+        const encodedKey = rfc3986UriEncode(cleanKey, false)
         let pathPart = this.isPathStyle
-          ? `/${this.bucket}/${cleanKey}`
-          : `/${cleanKey}`
+          ? `/${this.bucket}/${encodedKey}`
+          : `/${encodedKey}`
         if (removeBucket && pathPart.startsWith(`/${this.bucket}`)) {
           pathPart = pathPart.substring(`/${this.bucket}`.length)
           if (!pathPart) pathPart = "/"

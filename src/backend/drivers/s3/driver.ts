@@ -389,7 +389,7 @@ export class S3Driver implements StorageDriver {
   ): Promise<void> {
     const current = await this.client.headObject(key)
     if (!current) return // The successful deletion response may have been lost.
-    if (current.etag !== etag || current.size !== size)
+    if ((etag && current.etag !== etag) || current.size !== size)
       throw new Error("Source changed while renaming; source retained")
     await this.client.deleteObject(key)
   }
@@ -404,16 +404,36 @@ export class S3Driver implements StorageDriver {
     const parentDir = getDirName(oldPath)
     const newPath = joinPath(parentDir, newName)
 
-    const head = await this.client.headObject(oldPath)
+    await this.moveKey(oldPath, newPath)
+  }
+
+  /** Copy then delete, removing the source only after the copy is confirmed. */
+  private async moveKey(src: string, dst: string): Promise<void> {
+    const head = await this.client.headObject(src)
     if (head) {
-      // File rename
-      await this.client.copyObject(oldPath, newPath, head.size)
-      await this.client.deleteObject(oldPath)
-    } else {
-      // Directory rename
-      await this.copyDirRecursive(oldPath, newPath)
-      await this.removeDirRecursive(oldPath)
+      await this.copyVerified(src, dst, head.size, head.etag)
+      await this.deleteRenamedSource(src, head.etag, head.size)
+      return
     }
+    // Directory: delete exactly the objects that were copied, so files
+    // added to the source while copying are never removed uncopied.
+    const copied = await this.copyDirRecursive(src, dst)
+    for (const file of copied)
+      await this.deleteRenamedSource(file.key, file.etag, file.size)
+  }
+
+  private async copyVerified(
+    src: string,
+    dst: string,
+    size: number,
+    etag: string,
+  ): Promise<void> {
+    await this.client.copyObject(src, dst, size, etag || undefined)
+    const copied = await this.client.headObject(dst)
+    if (!copied || copied.size !== size)
+      throw new Error(
+        `Destination copy could not be confirmed; source retained: ${src}`,
+      )
   }
 
   async move(
@@ -429,14 +449,7 @@ export class S3Driver implements StorageDriver {
     const srcPath = this.getRemotePath(srcPhys)
     const dstPath = this.getRemotePath(dstPhys)
 
-    const head = await this.client.headObject(srcPath)
-    if (head) {
-      await this.client.copyObject(srcPath, dstPath, head.size)
-      await this.client.deleteObject(srcPath)
-    } else {
-      await this.copyDirRecursive(srcPath, dstPath)
-      await this.removeDirRecursive(srcPath)
-    }
+    await this.moveKey(srcPath, dstPath)
   }
 
   async copy(
@@ -453,24 +466,35 @@ export class S3Driver implements StorageDriver {
 
     const head = await this.client.headObject(srcPath)
     if (head) {
-      await this.client.copyObject(srcPath, dstPath, head.size)
+      await this.copyVerified(srcPath, dstPath, head.size, head.etag)
     } else {
       await this.copyDirRecursive(srcPath, dstPath)
     }
   }
 
-  private async copyDirRecursive(src: string, dst: string): Promise<void> {
+  private async copyDirRecursive(
+    src: string,
+    dst: string,
+  ): Promise<{ key: string; etag: string; size: number }[]> {
     const version = this.addition.list_object_version === "v2" ? "v2" : "v1"
     const rawFiles = await this.client.listObjects(src, version, true)
+    const copied: { key: string; etag: string; size: number }[] = []
     for (const file of rawFiles) {
       const childSrc = joinPath(src, file.name)
       const childDst = joinPath(dst, file.name)
       if (file.isFolder) {
-        await this.copyDirRecursive(childSrc, childDst)
+        copied.push(...(await this.copyDirRecursive(childSrc, childDst)))
       } else {
-        await this.client.copyObject(childSrc, childDst, file.size)
+        await this.client.copyObject(
+          childSrc,
+          childDst,
+          file.size,
+          file.etag || undefined,
+        )
+        copied.push({ key: childSrc, etag: file.etag || "", size: file.size })
       }
     }
+    return copied
   }
 
   async remove(
