@@ -8,6 +8,9 @@ on:
 
 jobs:
   sync:
+    # Mirroring to Gitee is optional: skip (instead of failing) when the
+    # GITEE_REPO_URL repository variable isn't configured.
+    if: ${{ vars.GITEE_REPO_URL != '' }}
     runs-on: ubuntu-latest
     name: Sync Repository
     steps:
