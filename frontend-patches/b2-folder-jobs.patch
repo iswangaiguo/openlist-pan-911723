@@ -1,5 +1,5 @@
 diff --git a/src/pages/home/folder/Folder.tsx b/src/pages/home/folder/Folder.tsx
-index 284e5d1..cb94d40 100644
+index 284e5d1..fb12ac4 100644
 --- a/src/pages/home/folder/Folder.tsx
 +++ b/src/pages/home/folder/Folder.tsx
 @@ -10,10 +10,12 @@ import {
@@ -17,7 +17,7 @@ index 284e5d1..cb94d40 100644
  import lightGallery from "lightgallery"
  import lgThumbnail from "lightgallery/plugins/thumbnail"
  import lgZoom from "lightgallery/plugins/zoom"
-@@ -66,6 +68,36 @@ const Folder = () => {
+@@ -66,6 +68,48 @@ const Folder = () => {
      bus.off("gallery")
      dynamicGallery?.destroy()
    })
@@ -26,11 +26,19 @@ index 284e5d1..cb94d40 100644
 +  const { refresh } = usePath()
 +  const { isShare } = useRouter()
 +  const watching = new Set<string>()
++  // Jobs this view could not advance (e.g. no permission) are left to the
++  // cron; retrying them would refresh the listing in a loop.
++  const stopped = new Set<string>()
 +  createEffect(() => {
-+    if (isShare()) return
++    if (isShare() || !objStore.write) return
 +    for (const obj of objStore.objs) {
 +      const job = (obj as any).migration
-+      if (!job || job.state === "paused" || watching.has(job.source_path))
++      if (
++        !job ||
++        job.state === "paused" ||
++        watching.has(job.source_path) ||
++        stopped.has(job.source_path)
++      )
 +        continue
 +      watching.add(job.source_path)
 +      driveB2Job(job.source_path)
@@ -44,11 +52,15 @@ index 284e5d1..cb94d40 100644
 +            )
 +          }
 +        })
-+        .catch(() => {})
-+        .finally(() => {
-+          watching.delete(job.source_path)
-+          refresh(undefined, true)
-+        })
++        .then(
++          () => refresh(undefined, true),
++          (error) => {
++            // A pause is shown on the row (with Resume); anything else stops here.
++            if (error?.paused) refresh(undefined, true)
++            else stopped.add(job.source_path)
++          },
++        )
++        .finally(() => watching.delete(job.source_path))
 +    }
 +  })
    const t = useT()
@@ -110,10 +122,10 @@ index a155607..927b83e 100644
                  <Show when={(props.obj as any).migration?.state === "paused"}>
 diff --git a/src/utils/b2-jobs.ts b/src/utils/b2-jobs.ts
 new file mode 100644
-index 0000000..a28fd4c
+index 0000000..422e121
 --- /dev/null
 +++ b/src/utils/b2-jobs.ts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,35 @@
 +import { r } from "./request"
 +
 +const active = new Map<string, Promise<void>>()
@@ -122,7 +134,8 @@ index 0000000..a28fd4c
 + * Advance a B2 folder rename/move/copy job one bounded step per request until
 + * it finishes. Every caller watching the same job shares one poller; the
 + * server's lease keeps other tabs and the cron from doing the same step twice.
-+ * Rejects when the job pauses (its error is shown on the folder row).
++ * Rejects when the job pauses (error.paused is true; the folder row shows it)
++ * or when a step fails, e.g. without write permission.
 + */
 +export function driveB2Job(sourcePath: string): Promise<void> {
 +  const running = active.get(sourcePath)
@@ -136,7 +149,9 @@ index 0000000..a28fd4c
 +        if (step.code !== 200 || !step.data) throw new Error(step.message)
 +        if (step.data.done) return
 +        if (step.data.state === "paused")
-+          throw new Error(step.data.error || "B2 sync paused")
++          throw Object.assign(new Error(step.data.error || "B2 sync paused"), {
++            paused: true,
++          })
 +        await new Promise((resolve) => setTimeout(resolve, 250))
 +      }
 +    } finally {

@@ -64,7 +64,16 @@ test("a paused or failed job stops polling and reports its error", async () => {
   const { driveB2Job } = await harness([
     step({ state: "paused", error: "B2 source version changed", done: false }),
   ])
-  await assert.rejects(driveB2Job("/B2/old"), /source version changed/)
+  await assert.rejects(driveB2Job("/B2/old"), (error) => {
+    assert.match(error.message, /source version changed/)
+    assert.equal(error.paused, true)
+    return true
+  })
+  // Other failures (e.g. no write permission) are not pauses: callers stop.
   globalThis.__b2Replies = [{ code: 403, message: "Forbidden", data: null }]
-  await assert.rejects(driveB2Job("/B2/old"), /Forbidden/)
+  await assert.rejects(driveB2Job("/B2/old"), (error) => {
+    assert.match(error.message, /Forbidden/)
+    assert.equal(error.paused, undefined)
+    return true
+  })
 })
