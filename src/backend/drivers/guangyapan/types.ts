@@ -66,15 +66,63 @@ export interface GypTokenResp {
   error_description: string
 }
 
+/**
+ * 驱动运行期回写存储 addition 的状态变更集合：
+ * 覆盖 token、图形验证 token 与短信登录一次性字段。
+ */
+export interface GuangYaPanStateChanges {
+  access_token?: string
+  refresh_token?: string
+  captcha_token?: string
+  verify_code?: string
+  verification_id?: string
+  send_code?: boolean
+}
+
+/** POST /v1/auth/verification 的响应：下发短信并返回 verification_id */
+export interface GypVerificationResp {
+  verification_id: string
+  error: string
+  error_description: string
+}
+
+/** POST /v1/auth/verification/verify 的响应：校验短信码返回 verification_token */
+export interface GypVerifyResp {
+  verification_token: string
+  error: string
+  error_description: string
+}
+
+/** POST /v1/shield/captcha/init 的响应 */
+export interface GypCaptchaInitResp {
+  captcha_token: string
+  expires_in: number
+  error: string
+  error_description: string
+}
+
+/** get_res_center_token 返回的 OSS 临时凭据（嵌套在 data.creds 下） */
+export interface GypUploadCreds {
+  accessKeyID: string
+  secretAccessKey: string
+  sessionToken: string
+  expiration: string
+}
+
 export interface GypUploadTokenData {
   taskId: string
   objectPath: string
   bucketName: string
   endPoint: string
   fullEndPoint: string
-  accessKeyID: string
-  secretAccessKey: string
-  sessionToken: string
+  /**
+   * 实时接口把 OSS 凭据嵌套在 creds 下，而不是平铺在 data 上。
+   * 平铺字段保留为可选，仅用于兼容旧版响应。
+   */
+  creds?: GypUploadCreds
+  accessKeyID?: string
+  secretAccessKey?: string
+  sessionToken?: string
 }
 
 export interface GypUploadTokenResp {

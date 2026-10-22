@@ -188,7 +188,7 @@ function getProxyBaseUrl(env?: EnvContext): string {
  * KV 代理健康探测（唯一实现）。
  *
  * isAvailable() 与 health() 共用，避免两处各自实现导致判定标准漂移。
- * 判定：HTTP 200 表示代理与 KV 均可用；401 表示代理可达但鉴权失败，
+ * 判定：HTTP 200 且返回合法 key 列表表示代理与 KV 均可用；401 表示代理可达但鉴权失败，
  * 属于「代理部署存在但密钥不对」。
  *
  * 注意两个调用方对 401 的取舍不同，故这里只返回原始探测结果，
@@ -221,7 +221,26 @@ async function probeProxy(
       method: "GET",
       headers: buildProxyHeaders(env),
     })
-    return { ok: response.ok, status: response.status }
+    if (!response.ok) {
+      return { ok: false, status: response.status }
+    }
+    try {
+      const payload = await response.json()
+      if (!payload || !Array.isArray(payload.keys)) {
+        return {
+          ok: false,
+          status: response.status,
+          error: "KV proxy health response is not a valid key listing",
+        }
+      }
+      return { ok: true, status: response.status }
+    } catch {
+      return {
+        ok: false,
+        status: response.status,
+        error: "KV proxy health response is not valid JSON",
+      }
+    }
   } catch (err: any) {
     return { ok: false, status: 0, error: err?.message || String(err) }
   }
@@ -434,8 +453,11 @@ export const kvDriver: Driver = {
 
     // 模式1: Binding 模式
     if (kv) {
-      // Cloudflare returns name/list_complete and an opaque cursor; EdgeOne
-      // returns key/complete and uses the last key as the next cursor.
+      // 两种平台的 list() 返回形态不同，必须逐页识别（issue #125）：
+      //   Cloudflare Workers KV：keys: [{ name }]、list_complete、cursor（服务端下发）
+      //   EdgeOne KV：keys: [{ key }]、complete（下一页游标取本页最后一个 key）
+      // 游标无法推进或超出页数上限时直接抛错：既不空转消耗 list 配额，
+      // 也不会把被截断的列表当作完整结果返回。
       const keys: string[] = []
       let cursor = ""
       let complete = false
@@ -444,7 +466,7 @@ export const kvDriver: Driver = {
       while (!complete && guard < 1000) {
         guard += 1
 
-        const page = await kv.list({ prefix, cursor, limit: 256 })
+        const page: any = await kv.list({ prefix, cursor, limit: 256 })
         const pageKeys = Array.isArray(page?.keys) ? page.keys : []
         const cloudflare = typeof page?.list_complete === "boolean"
 
@@ -499,6 +521,13 @@ export const kvDriver: Driver = {
     if (kv) {
       try {
         await kv.get("__health_check__")
+        // list 探测：list 是最稀缺的配额（Cloudflare 免费版仅 1000 次/天），
+        // 且 DB_FORMAT=key 的 load/save 依赖它。只探测 get 会让「list 配额
+        // 耗尽 / list 接口异常」的环境误报为就绪（issue #125：env_check
+        // 全绿但初始化 500）。prefix 不会命中真实键，取回空页即 1 次操作；
+        // 且 health 只在手动诊断路径（env_check / debug / admin）被调用，
+        // 不在每请求路径上，不会放大配额消耗。
+        await kv.list({ prefix: "__health_check__", cursor: "", limit: 256 })
         return {
           driver: "kv",
           mode: "binding",

@@ -42,6 +42,17 @@ export interface MultipartSession {
   partMd5s: (string | undefined)[]
   /** 驱动名 + 存储引用，用于 chunk/complete 时重新 resolve 驱动 */
   storage_driver: string
+  /**
+   * 会话所有者的用户 id。
+   *
+   * 安全不变量：分片会话是**用户私有状态**，续传/完成/查询都必须校验所有者。
+   * 历史缺陷：会话只按 `path + size` 复用，不含用户维度，导致不同用户（即使
+   * base_path 不同）会命中同一个会话并互相续传（实测：两个不同根目录的用户
+   * 拿到同一个 upload_id，且 resumed=true）。
+   */
+  owner_id?: number
+  /** 创建会话时的用户根目录，用于校验会话未被跨根复用 */
+  owner_root?: string
   created_at: number
   error?: string
 }
