@@ -806,14 +806,15 @@ export class S3Client {
     dstKey: string,
     size?: number,
     sourceEtag?: string,
+    sourceBucket = this.bucket,
   ): Promise<string | void> {
     if (size !== undefined && size > maxCopyObjectSize) {
-      return this.copyMultipart(srcKey, dstKey, size, sourceEtag)
+      return this.copyMultipart(srcKey, dstKey, size, sourceEtag, sourceBucket)
     }
 
     const cleanSrc = getKey(srcKey, false)
     const cleanDst = getKey(dstKey, false)
-    const encodedSource = rfc3986UriEncode(`${this.bucket}/${cleanSrc}`, false)
+    const encodedSource = rfc3986UriEncode(`${sourceBucket}/${cleanSrc}`, false)
 
     const url = this.getUrl(cleanDst)
     const extraHeaders: Record<string, string> = {
@@ -845,10 +846,11 @@ export class S3Client {
     dstKey: string,
     size: number,
     sourceEtag?: string,
+    sourceBucket = this.bucket,
   ): Promise<void> {
     const cleanSrc = getKey(srcKey, false)
     const cleanDst = getKey(dstKey, false)
-    const encodedSource = rfc3986UriEncode(`${this.bucket}/${cleanSrc}`, false)
+    const encodedSource = rfc3986UriEncode(`${sourceBucket}/${cleanSrc}`, false)
 
     // 1. Create Multipart Upload
     const initUrl = this.getUrl(cleanDst, { uploads: "" })

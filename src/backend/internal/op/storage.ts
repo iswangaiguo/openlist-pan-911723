@@ -1879,6 +1879,40 @@ export async function removeItems(
   }
 }
 
+/**
+ * A driver only knows its own storage, so handing it another mount's path
+ * would write into the wrong bucket. Only S3 mounts sharing an endpoint and
+ * credentials (e.g. one Backblaze B2 account) can copy server-side.
+ */
+async function transferAcrossStorages(
+  srcDriver: StorageDriver,
+  srcStorage: any,
+  dstStorage: any,
+  srcPhysical: string,
+  dstPhysical: string,
+  move: boolean,
+): Promise<void> {
+  const dstDriver = await getDriver(dstStorage.driver, dstStorage)
+  // Local mounts share one filesystem and use absolute physical paths.
+  if (
+    String(srcStorage.driver).toLowerCase() === "local" &&
+    String(dstStorage.driver).toLowerCase() === "local"
+  ) {
+    if (move) await srcDriver.move("", "", [], srcPhysical, dstPhysical)
+    else await srcDriver.copy("", "", [], srcPhysical, dstPhysical)
+    return
+  }
+  if (
+    !(srcDriver instanceof S3Driver) ||
+    !(dstDriver instanceof S3Driver) ||
+    !srcDriver.canTransferTo(dstDriver)
+  )
+    throw new Error(
+      "Moving or copying between different storages is not supported",
+    )
+  await srcDriver.transferTo(dstDriver, srcPhysical, dstPhysical, move)
+}
+
 export async function moveItems(
   srcDir: string,
   dstDir: string,
@@ -1905,6 +1939,17 @@ export async function moveItems(
         [srcResolved.storage, dstResolved.storage],
         requestContext,
         async () => {
+          if (srcResolved.storage!.id !== dstResolved.storage!.id) {
+            await transferAcrossStorages(
+              driver,
+              srcResolved.storage,
+              dstResolved.storage,
+              srcResolved.physical!,
+              dstResolved.physical!,
+              true,
+            )
+            return
+          }
           await driver.move(
             srcDir,
             dstDir,
@@ -1953,6 +1998,17 @@ export async function copyItems(
         [srcResolved.storage, dstResolved.storage],
         requestContext,
         async () => {
+          if (srcResolved.storage!.id !== dstResolved.storage!.id) {
+            await transferAcrossStorages(
+              driver,
+              srcResolved.storage,
+              dstResolved.storage,
+              srcResolved.physical!,
+              dstResolved.physical!,
+              false,
+            )
+            return
+          }
           await driver.copy(
             srcDir,
             dstDir,
