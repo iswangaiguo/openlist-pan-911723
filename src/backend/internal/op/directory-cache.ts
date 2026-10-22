@@ -9,8 +9,50 @@ export interface DirectoryCacheContext {
 }
 
 // Private metadata only: never cache a response, permissions or signed URLs.
-const MAX_BYTES = 512 * 1024
+// D1 rows are limited to about 2MB; the compact format fits ~25k entries.
+const MAX_BYTES = 1_500_000
 const MAX_ENTRIES = 256
+// Keep the whole cache well below the 500MB D1 free-plan database limit.
+const MAX_TOTAL_BYTES = 50_000_000
+// Bump when the payload format changes; old rows then simply stop matching.
+const FORMAT = 2
+
+type CompactEntry = [string, number, 0 | 1, string, number, string?]
+
+function encodeItems(items: FileItem[]): string {
+  return JSON.stringify(
+    items.map(({ name, size, is_dir, modified, created, type }) => {
+      const row: CompactEntry = [
+        name,
+        Number(size) || 0,
+        is_dir ? 1 : 0,
+        modified,
+        Number(type) || 0,
+      ]
+      if (created !== undefined) row.push(created)
+      return row
+    }),
+  )
+}
+
+function decodeItems(payload: string): FileItem[] {
+  const rows = JSON.parse(payload)
+  if (!Array.isArray(rows)) throw new Error("Invalid directory cache")
+  return rows.map((row) => {
+    if (!Array.isArray(row) || typeof row[0] !== "string")
+      throw new Error("Invalid directory cache")
+    const [name, size, isDir, modified, type, created] = row as CompactEntry
+    return {
+      name,
+      size,
+      is_dir: isDir === 1,
+      modified,
+      ...(created !== undefined ? { created } : {}),
+      type,
+      sign: "",
+    } as FileItem
+  })
+}
 const initialized = new WeakMap<object, Promise<void>>()
 const flights = new WeakMap<object, Map<string, Promise<FileItem[]>>>()
 const ddl = [
@@ -68,6 +110,7 @@ async function keyFor(
   ttl: number,
 ): Promise<string> {
   const input = JSON.stringify([
+    FORMAT,
     storage.id,
     storage.driver,
     storage.mount_path,
@@ -160,8 +203,7 @@ export async function cachedDirectory(
       .first()
     revision = Number(row.revision)
     if (row.payload && row.expires_at > Date.now()) {
-      const items = JSON.parse(row.payload)
-      if (!Array.isArray(items)) throw new Error("Invalid directory cache")
+      const items = decodeItems(row.payload)
       context?.onDirectoryCache?.("HIT")
       return items
     }
@@ -181,18 +223,8 @@ export async function cachedDirectory(
     job = (async () => {
       const items = await load() // Errors are never cached.
       // Allowlist excludes raw links, auth headers and provider tokens.
-      const metadata = items.map(
-        ({ name, size, is_dir, modified, created, type }) => ({
-          name,
-          size,
-          is_dir,
-          modified,
-          created,
-          type,
-          sign: "",
-        }),
-      )
-      const payload = JSON.stringify(metadata)
+      const payload = encodeItems(items)
+      const metadata = decodeItems(payload)
       if (new TextEncoder().encode(payload).length <= MAX_BYTES) {
         const now = Date.now()
         try {
@@ -227,6 +259,15 @@ export async function cachedDirectory(
               (SELECT key FROM openlist_directory_cache ORDER BY updated_at DESC LIMIT -1 OFFSET ?)`,
               )
               .bind(MAX_ENTRIES),
+            // Evict the oldest entries beyond the total size budget.
+            db
+              .prepare(
+                `DELETE FROM openlist_directory_cache WHERE key IN
+              (SELECT key FROM (SELECT key, SUM(length(payload))
+                OVER (ORDER BY updated_at DESC, key) AS total
+                FROM openlist_directory_cache) WHERE total > ?)`,
+              )
+              .bind(MAX_TOTAL_BYTES),
           ])
         } catch {
           /* A failed cache write doesn't fail the directory read. */

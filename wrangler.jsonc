@@ -21,7 +21,10 @@
     "DB_DRIVER": "d1",
     "DB_CIPHER": "aes-256-gcm",
     "DIRECTORY_CACHE_ENABLED": "true",
-    "DIRECTORY_CACHE_MAX_SECONDS": "300"
+    "DIRECTORY_CACHE_MAX_SECONDS": "300",
+    // Reuse presigned download links for 5 minutes (they stay valid for hours),
+    // saving a B2 HEAD request on every download and video seek.
+    "CACHE_DOWNLOAD_LINK": "true"
   },
   "d1_databases": [
     { "binding": "DB", "database_name": "openlist-911723" }

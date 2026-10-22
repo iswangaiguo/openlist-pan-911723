@@ -166,7 +166,7 @@ test("provider errors and oversized payloads never enter shared cache", async ()
     }),
   )
   await cachedDirectory(storage, "/a", "/a", a.context, async () => [
-    file("x".repeat(600000)),
+    file("x".repeat(1_600_000)),
   ])
   assert.equal(
     a.db.sqlite
@@ -192,4 +192,66 @@ test("TTL reductions take effect immediately and cache capacity stays bounded", 
       .get()!.n,
     256,
   )
+})
+
+test("large folders fit the compact format and round-trip every field", async () => {
+  const a = setup()
+  const items = Array.from({ length: 10000 }, (_, i) => ({
+    ...file(`IMG_20260101_${String(i).padStart(6, "0")}.jpg`),
+    size: 1234567 + i,
+    created: "2026-01-01T00:00:00Z",
+  }))
+  items.push({ ...file("Folder"), is_dir: true, size: 0, type: 1 } as any)
+  const first = await cachedDirectory(storage, "/big", "/B2/big", a.context, async () => items)
+  let loads = 0
+  const second = await cachedDirectory(storage, "/big", "/B2/big", a.context, async () => {
+    loads++
+    return []
+  })
+  assert.equal(loads, 0)
+  assert.deepEqual(second, first)
+  assert.equal(second.length, 10001)
+  assert.deepEqual(second[5], {
+    name: "IMG_20260101_000005.jpg",
+    size: 1234572,
+    is_dir: false,
+    modified: "2026-09-26",
+    created: "2026-01-01T00:00:00Z",
+    type: 2,
+    sign: "",
+  })
+  assert.equal(second[10000].is_dir, true)
+  assert.ok(!("raw_url" in second[0]))
+})
+
+test("old-format rows are ignored instead of being misread", async () => {
+  const a = setup()
+  await a.read()
+  a.db.sqlite.exec(
+    `UPDATE openlist_directory_cache SET payload = '[{"name":"stale"}]'`,
+  )
+  // A row in the old object format can't decode, so the cache is bypassed.
+  const result = await a.read()
+  assert.equal(result[0].name, "lesson.mp4")
+})
+
+test("the cache stays within its total size budget", async () => {
+  const a = setup()
+  await a.read({ ...storage, modified: "v0" }) // creates the tables
+  const insert = a.db.sqlite.prepare(
+    "INSERT INTO openlist_directory_cache VALUES (?, 'extra', 0, ?, ?, ?)",
+  )
+  const big = "x".repeat(1_400_000)
+  for (let i = 0; i < 40; i++)
+    insert.run(`old-${i}`, Date.now() + 60000, i + 1, big)
+  await a.read()
+  const { total, newest } = a.db.sqlite
+    .prepare(
+      `SELECT SUM(length(payload)) AS total,
+       MAX(CASE WHEN scope = '1' THEN 1 ELSE 0 END) AS newest
+       FROM openlist_directory_cache`,
+    )
+    .get() as any
+  assert.ok(total <= 50_000_000, `total ${total}`)
+  assert.equal(newest, 1)
 })
