@@ -1886,6 +1886,7 @@ fsRouter.post("/multipart/init", async (c) => {
         driver_session: info?.session || "",
         partMd5s: new Array(totalChunks).fill(undefined),
         storage_driver: resolved.storage!.driver,
+        storage_id: resolved.storage!.id,
         owner_id: user.id,
         owner_root: getActualPath(user, "/"),
         created_at: Date.now(),

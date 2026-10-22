@@ -8,6 +8,8 @@ import {
   findReceivingSession,
   snapshot,
   claimCompletion,
+  pruneSessions,
+  abortExpiredSessions,
   type MultipartSession,
 } from "./multipart"
 
@@ -99,4 +101,53 @@ test("oversized streaming chunks are cancelled without buffering the whole reque
   } as any)
   assert.equal(await readPartBody(req, 10), undefined)
   assert.equal(cancelled, true)
+})
+
+test("cron cancels expired unfinished uploads before forgetting them", async () => {
+  const env = { DB: uploadDatabase() }
+  const put = async (id: string, extra: Partial<MultipartSession>) => {
+    await putSession({ ...session(), upload_id: id, scope: id, ...extra }, env)
+    await recordPart({ ...session(), upload_id: id }, 0, '"p"', env)
+  }
+  await put("abandoned", { storage_id: 7 })
+  await put("legacy", {})
+  await put("flaky", { storage_id: 7 })
+  await put("done", { storage_id: 7, state: "completed" })
+  await put("active", { storage_id: 7 })
+  const expire = (ids: string[], at: number) =>
+    env.DB.sqlite
+      .prepare(
+        `UPDATE openlist_upload_sessions SET expires_at = ? WHERE upload_id IN (${ids.map(() => "?").join(",")})`,
+      )
+      .run(at, ...ids)
+  expire(["abandoned", "legacy", "flaky", "done"], Date.now() - 1000)
+
+  // Ordinary cleanup must leave unfinished uploads for the cron to cancel.
+  await pruneSessions(env)
+  const ids = () =>
+    env.DB.sqlite
+      .prepare("SELECT upload_id FROM openlist_upload_sessions ORDER BY upload_id")
+      .all()
+      .map((r: any) => r.upload_id)
+  assert.deepEqual(ids(), ["abandoned", "active", "flaky", "legacy"])
+
+  const cancelled: string[] = []
+  const result = await abortExpiredSessions(env, async (s) => {
+    if (s.upload_id === "flaky") throw new Error("B2 unavailable")
+    cancelled.push(s.upload_id)
+  })
+  assert.deepEqual(cancelled, ["abandoned"]) // legacy has no storage to resolve
+  assert.deepEqual(result, { aborted: 2, failed: 1 })
+  assert.deepEqual(ids(), ["active", "flaky"])
+  assert.equal(
+    env.DB.sqlite
+      .prepare("SELECT COUNT(*) AS n FROM openlist_upload_parts WHERE upload_id = 'abandoned'")
+      .get()!.n,
+    0,
+  )
+
+  // After the grace period a session that never cancels is dropped anyway.
+  expire(["flaky"], Date.now() - 8 * 24 * 60 * 60 * 1000)
+  await pruneSessions(env)
+  assert.deepEqual(ids(), ["active"])
 })
