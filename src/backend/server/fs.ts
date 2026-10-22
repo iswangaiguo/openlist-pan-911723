@@ -15,7 +15,18 @@ import {
 import { resolveShare } from "../internal/op/share"
 import { getDb, resolvePath } from "../internal/model/db"
 import { getUserFromContext } from "./middlewares"
-import { canWrite, canRemove, getActualPath, isAdmin } from "../pkg/permission"
+import {
+  can,
+  canCopy,
+  canMove,
+  canRemove,
+  canRename,
+  canWrite,
+  getActualPath,
+  isAdmin,
+  isWithinUserRoot,
+  PermissionBit,
+} from "../pkg/permission"
 import {
   getNearestMeta,
   canAccess,
@@ -46,10 +57,12 @@ import {
   prepareRenameTicket,
   prepareB2Rename,
 } from "./rename_steps"
-import { seedRouter } from "./seed"
 import { S3Driver } from "../drivers/s3/driver"
 import { withDirectoryMutation } from "../internal/op/directory-cache"
 import { readB2RenameJob, isB2MigrationLocked } from "./b2_rename"
+import { invalidatePaths } from "../internal/cache"
+import { seedRouter, torrentLegacyRouter } from "./seed"
+import { r2CanSignDirectUpload } from "../drivers/r2/driver"
 
 /**
  * 该路径所属存储是否禁止目录列表（对齐 Go handles.FsList 的 DisableIndex 判断）。
@@ -84,6 +97,7 @@ import {
 
 export const fsRouter = new Hono()
 fsRouter.route("/seed", seedRouter)
+fsRouter.route("/torrent", torrentLegacyRouter)
 
 const getStorageRequestContext = (c: any, readOnly = false) => {
   const context: import("../internal/op/storage").StorageRequestContext = {
@@ -166,31 +180,90 @@ fsRouter.get("/usage", async (c) => {
 const permissionDenied = (c: any) =>
   c.json({ code: 403, message: "Permission denied", data: null }, 403)
 
-// ---- 上传大小限制（M-5：防止超大请求体被整体读入内存导致 Worker OOM）----
-// 单次整体上传（/put /form）与分片单片（/upload/part）分开设限，
-// 均可通过环境变量 MAX_UPLOAD / MAX_UPPART 覆盖。
-const DEFAULT_MAX_UPLOAD = 25 * 1024 * 1024 // 25MB
-const DEFAULT_MAX_UPPART = 16 * 1024 * 1024 // 16MB
-
-function getUploadSizeLimit(c: any, part: boolean): number {
-  const env = c.env || {}
-  const key = part ? "MAX_UPPART" : "MAX_UPLOAD"
-  const raw =
-    env[key] || (typeof process !== "undefined" ? process.env?.[key] : "")
-  if (raw) {
-    const n = parseInt(String(raw), 10)
-    if (Number.isFinite(n) && n > 0) return n
+/**
+ * 目录级写权限（meta.write_users）的**执行点**。
+ *
+ * 安全不变量：`meta.write_users` 是「该目录只允许这些用户写入」的白名单，
+ * 它必须在**真正写入时**校验，而非只在 `/fs/list` 的响应里回填 `write` 字段。
+ *
+ * 历史缺陷：该白名单只影响界面提示（列表返回 write=false），写接口从不复查，
+ * 因此「界面显示禁止写入」与「实际能写入」不一致——用户看到只读提示，但上传
+ * 依然成功（实测：write_users=[其他用户] 时 /fs/put 仍返回 200 并创建文件）。
+ *
+ * 返回 true 表示应当拒绝。管理员放行（与 pkg/meta 的约定一致）。
+ */
+async function deniedByMetaWriteAcl(
+  c: any,
+  user: any,
+  targetPaths: string[],
+): Promise<boolean> {
+  if (isAdmin(user)) return false
+  for (const p of targetPaths) {
+    let meta: Meta | null = null
+    try {
+      meta = await getNearestMeta(p, c.env)
+    } catch {
+      meta = null
+    }
+    if (!meta) continue
+    if (!canWriteMeta(user, meta, p)) return true
   }
-  return part ? DEFAULT_MAX_UPPART : DEFAULT_MAX_UPLOAD
+  return false
 }
 
-/** 返回超限时的上限字节数；未超限或无法判断（无 Content-Length）返回 null */
-function exceedsUploadLimit(c: any, part = false): number | null {
-  const contentLength = parseInt(c.req.header("Content-Length") || "0", 10)
-  if (!contentLength) return null
-  const max = getUploadSizeLimit(c, part)
-  return contentLength > max ? max : null
+/**
+ * 归档读取的 meta 访问校验：与 `/fs/list`、`/fs/get` 共用同一套判定
+ * （密码保护 + read_users 白名单）。
+ *
+ * 安全不变量：归档接口读的是**同一份文件内容**，必须与直连下载受同样的
+ * 访问控制。历史缺陷：归档列表直接 `driver.get() → fetch()`，完全跳过 meta
+ * 判定——实测「直连被密码保护而 401」的文件，归档列表却能读出其条目。
+ */
+async function deniedByMetaReadAcl(
+  c: any,
+  user: any,
+  targetPath: string,
+  password: string,
+): Promise<boolean> {
+  if (isAdmin(user)) return false
+  let meta: Meta | null = null
+  try {
+    meta = await getNearestMeta(targetPath, c.env)
+  } catch {
+    meta = null
+  }
+  if (!meta) return false
+  return !canAccess(user, meta, targetPath, password || "")
 }
+
+/**
+ * 归档条目相对路径的安全化。
+ *
+ * 安全不变量：ZIP 条目名是**不可信输入**，只能被当作「只能向下展开的相对路径」。
+ * 历史缺陷：条目名只做了反斜杠转换，`../bob/x` 与目标目录拼接后会被
+ * resolvePath 归一化，从而把文件写到解压目录（乃至用户根）之外。
+ *
+ * 返回 null 表示该条目应被跳过（绝对路径 / 盘符 / 含 `..` / 空）。
+ */
+function safeArchiveEntryPath(rel: string): string | null {
+  const cleaned = String(rel || "")
+    .replace(/\\/g, "/")
+    .replace(/^\/+/, "")
+  if (!cleaned || cleaned.includes("\0")) return null
+  if (/^[A-Za-z]:/.test(cleaned)) return null
+  const parts = cleaned.split("/").filter(Boolean)
+  if (parts.length === 0) return null
+  if (parts.some((p) => p === "." || p === "..")) return null
+  return parts.join("/")
+}
+
+// 上传大小限制统一实现在 pkg/upload-limit.ts（S3 网关复用同一份，
+// 避免出现「/fs/put 有上限、S3 PutObject 无上限」的不对称）。
+import {
+  getUploadSizeLimit,
+  readBodyWithinLimit,
+  tooLargeResponse,
+} from "../pkg/upload-limit"
 
 // 分享请求错误统一出口：
 // - 密码错误 → 403，前端据此弹出提取码输入框（State.NeedPassword）
@@ -218,9 +291,23 @@ fsRouter.post("/dirs", async (c) => {
     return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
   }
   const requestContext = getStorageRequestContext(c, true)
+  // 对齐 Go handles.FsDirs：force_root（以全局根为起点）只对管理员开放
+  if (body.force_root && !isAdmin(user)) {
+    return c.json({ code: 403, message: "Permission denied", data: null }, 403)
+  }
   let reqPath = rawPath
-  if (!body.force_root || !isAdmin(user)) {
+  if (!body.force_root) {
     reqPath = getActualPath(user, reqPath)
+  }
+  if (body.refresh) {
+    try {
+      await invalidatePaths([reqPath], c.env)
+    } catch (err) {
+      console.warn(
+        `[fs/dirs] refresh: invalidating cache for "${reqPath}" failed:`,
+        err,
+      )
+    }
   }
   try {
     // Share path support for completeness
@@ -257,6 +344,20 @@ fsRouter.post("/dirs", async (c) => {
       return c.json({ code: 200, message: "success", data: dirs })
     }
 
+    // 对齐 Go handles.FsDirs：目录树接口必须与 /fs/list 受同一套 meta 判定
+    // （密码保护 + read_users 白名单）。历史缺陷：只列目录不做任何校验，
+    // 任何登录用户都能直接枚举出受保护目录的结构。
+    const dirMeta = await getNearestMeta(reqPath, c.env)
+    if (!canAccess(user, dirMeta, reqPath, body.password || "")) {
+      return c.json(
+        {
+          code: 403,
+          message: "password is incorrect or you have no permission",
+          data: null,
+        },
+        403,
+      )
+    }
     const { content } = await listItems(reqPath, requestContext)
     const dirs = content
       .filter((item: any) => item.is_dir)
@@ -286,6 +387,19 @@ fsRouter.post("/list", async (c) => {
   const page = parseInt(body.page, 10) || 1
   const perPage = parseInt(body.per_page, 10) || 0
 
+  // 对齐 Go 版 handles.FsList：refresh=true 时失效该路径的文件树/链接
+  // 缓存，允许用户在缓存 TTL 内手动刷新（此前 refresh 参数未实现，
+  // 缓存内的错误列表最长 30 分钟无法自救）。
+  if (body.refresh) {
+    try {
+      await invalidatePaths([reqPath], c.env)
+    } catch (err) {
+      console.warn(
+        `[fs] refresh: invalidating cache for "${reqPath}" failed:`,
+        err,
+      )
+    }
+  }
   const paginateItems = <T>(items: T[]) => {
     const total = items.length
     if (perPage <= 0) {
@@ -520,18 +634,31 @@ fsRouter.post("/list", async (c) => {
       if (!storage) return []
       const tools: string[] = []
       const driver = storage as any
-      // Only advertise presigned PUT when the driver is configured to issue it.
-      let addition: any = {}
+      // S3 系列驱动支持 s3_presigned 直传，但只在存储显式开启 enable_direct_upload 时宣告。
+      // 必须按「归一化后的驱动名」判断（小写 + 去非字母数字）：驱动名里可能含
+      // 空格（如 "Cloudflare R2"），拿原始字符串做 `^` 锚定正则会漏判。
+      const normDriverName = String(driver.driver || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "")
+      let addition: any = driver.addition
       try {
-        addition = typeof driver.addition === "string"
-          ? JSON.parse(driver.addition)
-          : driver.addition || {}
-      } catch {}
+        if (typeof addition === "string") addition = JSON.parse(addition)
+      } catch {
+        addition = {}
+      }
+      addition = addition || {}
       if (
-        /^(s3|minio|cos|oss|r2|b2|cloudflare_r2)/i.test(driver.driver || "") &&
+        /^(s3|minio|cos|oss|r2|b2|cfr2|cloudflarer2)/.test(normDriverName) &&
         addition.enable_direct_upload === true
       ) {
-        tools.push("s3_presigned")
+        // Cloudflare R2 的例外：binding 模式没有预签名能力，直传必然失败，
+        // 因此只在解析不到绑定（即实际会走 S3 兼容 API）时才宣告该工具。
+        const canSignDirectUpload = /^(r2|cfr2|cloudflarer2)$/.test(
+          normDriverName,
+        )
+          ? r2CanSignDirectUpload(addition, c.env)
+          : true
+        if (canSignDirectUpload) tools.push("s3_presigned")
       }
       // 驱动自声明的 direct_upload_tools 字段（驱动扩展点）
       if (Array.isArray(driver.direct_upload_tools)) {
@@ -547,7 +674,9 @@ fsRouter.post("/list", async (c) => {
     // 对齐 Go 的路径级缓存策略；前端/上层可据此决定该目录的列表缓存时长。
     const cacheExpiration = storage
       ? resolveCacheExpiration(storage, reqPath)
-      : undefined
+      : 0 // Virtual directories must not be cached; a cached Virtual result
+          // would persist after the real storage comes online, causing the
+          // 'always shows root / Virtual provider' symptom for subsequent requests.
     return c.json({
       code: 200,
       message: "success",
@@ -807,6 +936,7 @@ fsRouter.post("/mkdir", async (c) => {
     return c.json({ code: 400, message: e.message, data: null }, 400)
   }
   const reqPath = getActualPath(user, rawPath)
+  if (await deniedByMetaWriteAcl(c, user, [reqPath])) return permissionDenied(c)
   const requestContext = getStorageRequestContext(c)
   try {
     await makeDirectory(reqPath, requestContext)
@@ -820,7 +950,9 @@ fsRouter.route("/rename", renameStepsRouter)
 
 fsRouter.post("/rename", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  // 重命名使用独立的 RENAME 权限位（此前误用 WRITE_CONTENT，导致「只有上传
+  // 权限的用户也能改名」而「只授予 RENAME 的用户反被拒绝」）。
+  if (!canRename(user)) return permissionDenied(c)
   const {
     path: oldPath,
     name: newName,
@@ -847,6 +979,8 @@ fsRouter.post("/rename", async (c) => {
         })
     }
     const actualOldPath = getActualPath(user, oldPath || "/")
+    if (await deniedByMetaWriteAcl(c, user, [actualOldPath]))
+      return permissionDenied(c)
     await renameItem(actualOldPath, cleanName, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
@@ -856,6 +990,7 @@ fsRouter.post("/rename", async (c) => {
 
 fsRouter.post("/remove", async (c) => {
   const user = await getUserFromContext(c)
+  // 删除使用独立的 DELETE 权限位（此前误用 WRITE_CONTENT）。
   if (!canRemove(user)) return permissionDenied(c)
   const { dir, names } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(names) || names.length === 0) {
@@ -895,7 +1030,8 @@ fsRouter.post("/remove", async (c) => {
 
 fsRouter.post("/move", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  // 移动使用独立的 MOVE 权限位（此前误用 WRITE_CONTENT）。
+  if (!canMove(user)) return permissionDenied(c)
   const { src_dir, dst_dir, names } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(names) || names.length === 0) {
     return c.json(
@@ -919,6 +1055,14 @@ fsRouter.post("/move", async (c) => {
   try {
     const actualSrcDir = getActualPath(user, src_dir || "/")
     const actualDstDir = getActualPath(user, dst_dir || "/")
+    const aclPaths = [
+      actualDstDir,
+      ...cleanNames.map((n) =>
+        `${actualSrcDir}/${n}`.replace(/\/{2,}/g, "/"),
+      ),
+    ]
+    if (await deniedByMetaWriteAcl(c, user, aclPaths))
+      return permissionDenied(c)
     await moveItems(actualSrcDir, actualDstDir, cleanNames, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
@@ -928,7 +1072,8 @@ fsRouter.post("/move", async (c) => {
 
 fsRouter.post("/copy", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  // 复制使用独立的 COPY 权限位（此前误用 WRITE_CONTENT）。
+  if (!canCopy(user)) return permissionDenied(c)
   const { src_dir, dst_dir, names } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(names) || names.length === 0) {
     return c.json(
@@ -952,6 +1097,14 @@ fsRouter.post("/copy", async (c) => {
   try {
     const actualSrcDir = getActualPath(user, src_dir || "/")
     const actualDstDir = getActualPath(user, dst_dir || "/")
+    const aclPaths = [
+      actualDstDir,
+      ...cleanNames.map((n) =>
+        `${actualDstDir}/${n}`.replace(/\/{2,}/g, "/"),
+      ),
+    ]
+    if (await deniedByMetaWriteAcl(c, user, aclPaths))
+      return permissionDenied(c)
     await copyItems(actualSrcDir, actualDstDir, cleanNames, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
@@ -975,21 +1128,12 @@ fsRouter.put("/put", async (c) => {
     return c.json({ code: 400, message: e.message, data: null }, 400)
   }
   const reqPath = getActualPath(user, rawPath)
+  if (await deniedByMetaWriteAcl(c, user, [reqPath])) return permissionDenied(c)
   const requestContext = getStorageRequestContext(c)
-  const tooLarge = exceedsUploadLimit(c)
-  if (tooLarge !== null) {
-    return c.json(
-      {
-        code: 413,
-        message: `File too large (max ${tooLarge} bytes)`,
-        data: null,
-      },
-      413,
-    )
-  }
   try {
-    const buffer = await c.req.arrayBuffer()
-    await putItem(reqPath, Buffer.from(buffer), requestContext)
+    const body = await readBodyWithinLimit(c)
+    if (!body.ok) return tooLargeResponse(c, body.limit)
+    await putItem(reqPath, body.buffer, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null })
@@ -1012,18 +1156,8 @@ fsRouter.put("/form", async (c) => {
     return c.json({ code: 400, message: e.message, data: null }, 400)
   }
   const reqPath = getActualPath(user, rawPath)
+  if (await deniedByMetaWriteAcl(c, user, [reqPath])) return permissionDenied(c)
   const requestContext = getStorageRequestContext(c)
-  const tooLarge = exceedsUploadLimit(c)
-  if (tooLarge !== null) {
-    return c.json(
-      {
-        code: 413,
-        message: `File too large (max ${tooLarge} bytes)`,
-        data: null,
-      },
-      413,
-    )
-  }
   try {
     const form = await c.req.formData()
     const file = form.get("file")
@@ -1035,6 +1169,9 @@ fsRouter.put("/form", async (c) => {
       })
     }
     const buffer = Buffer.from(await (file as File).arrayBuffer())
+    // multipart 的 Content-Length 只覆盖整个表单，仍需按文件实际字节复核
+    const max = getUploadSizeLimit(c, false)
+    if (buffer.length > max) return tooLargeResponse(c, max)
     await putItem(reqPath, buffer, requestContext)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
@@ -1115,17 +1252,6 @@ fsRouter.put("/upload/part", async (c) => {
       data: null,
     })
   }
-  const tooLarge = exceedsUploadLimit(c, true)
-  if (tooLarge !== null) {
-    return c.json(
-      {
-        code: 413,
-        message: `Part too large (max ${tooLarge} bytes)`,
-        data: null,
-      },
-      413,
-    )
-  }
   try {
     await assertUploadPathWritable(c.env, dirPath)
     const resolved = await resolvePath(dirPath)
@@ -1136,7 +1262,10 @@ fsRouter.put("/upload/part", async (c) => {
     if (typeof (driver as any).uploadPart !== "function") {
       throw new Error("storage does not support chunked upload")
     }
-    const buffer = Buffer.from(await c.req.arrayBuffer())
+    // 按实际收到的字节数复核单片上限（Content-Length 可被省略或伪造）
+    const body = await readBodyWithinLimit(c, true)
+    if (!body.ok) return tooLargeResponse(c, body.limit, "Part")
+    const buffer = body.buffer
     let result
     try {
       result = await (driver as any).uploadPart(session, partNumber, buffer)
@@ -1192,6 +1321,8 @@ fsRouter.post("/upload/complete", async (c) => {
         requestContext,
       )
     }
+    // 上传完成：失效目标目录的文件树缓存
+    await invalidatePaths([dirPath], c.env)
     return c.json({ code: 200, message: "success", data: null })
   } catch (e: any) {
     return c.json({ code: 500, message: safeErrorMessage(e), data: null })
@@ -1235,6 +1366,10 @@ fsRouter.post("/search", async (c) => {
         scope: body.scope !== undefined ? parseInt(body.scope, 10) : 0,
         page: body.page ? parseInt(body.page, 10) : 1,
         per_page: body.per_page ? parseInt(body.per_page, 10) : 30,
+        // 与 /fs/list 同一套 meta 判定（密码 + read_users），
+        // 对齐 Go handles.Search 里 SearchFiltered 的 filter 闭包
+        user,
+        password: body.password || "",
       },
       c.env,
     )
@@ -1262,6 +1397,9 @@ fsRouter.post("/other", async (c) => {
   // to mint presigned direct-upload URLs (s3/driver.ts:371-378), which is a
   // write — it must obey the same gate as /fs/put. Without this, a guest could
   // obtain a direct-upload URL and bypass the upload permission check.
+  //
+  // 体积边界说明：这里签发的直传 URL 由客户端直接写对象存储，数据不经过本站，
+  // 因此 MAX_UPLOAD / MAX_UPPART 覆盖不到该路径——上限由下游存储自行约束。
   if (!canWrite(user)) return permissionDenied(c)
   try {
     await assertUploadPathWritable(c.env, reqPath)
@@ -1272,6 +1410,14 @@ fsRouter.post("/other", async (c) => {
     const driver = await getDriver(resolved.storage.driver, resolved.storage)
     if (typeof (driver as any).other === "function") {
       const data = await (driver as any).other(method, resolved.relative, body)
+      // other() 可能触发落盘（如 S3 直传 URL 的签发流程）：按已知路径失效缓存。
+      // 直传的实际写入发生在客户端，无法精确感知完成时机，这里失效目标目录
+      // 及（若给定）文件路径，将陈旧窗口压到最小；失效失败不影响响应。
+      const targets = [reqPath]
+      if (typeof body?.file_name === "string" && body.file_name) {
+        targets.push(`${reqPath === "/" ? "" : reqPath}/${body.file_name}`)
+      }
+      await invalidatePaths(targets, c.env)
       return c.json({ code: 200, message: "success", data })
     }
     return c.json(
@@ -1291,7 +1437,7 @@ fsRouter.post("/other", async (c) => {
 
 fsRouter.post("/batch_rename", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!canRename(user)) return permissionDenied(c)
   const { src_dir, rename_objects } = await c.req.json().catch(() => ({}))
   if (!Array.isArray(rename_objects) || rename_objects.length === 0) {
     return c.json(
@@ -1302,6 +1448,12 @@ fsRouter.post("/batch_rename", async (c) => {
   const dirPath = getActualPath(user, src_dir || "/")
   const requestContext = getStorageRequestContext(c)
   try {
+    const aclPaths = rename_objects
+      .map((obj: any) => obj?.src_name)
+      .filter((n: any) => typeof n === "string" && n)
+      .map((n: string) => `${dirPath}/${n}`.replace(/\/{2,}/g, "/"))
+    if (await deniedByMetaWriteAcl(c, user, aclPaths))
+      return permissionDenied(c)
     for (const obj of rename_objects) {
       const srcName = obj?.src_name
       const newName = obj?.new_name
@@ -1318,7 +1470,7 @@ fsRouter.post("/batch_rename", async (c) => {
 
 fsRouter.post("/regex_rename", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!canRename(user)) return permissionDenied(c)
   const { src_dir, src_name_regex, new_name_regex } = await c.req
     .json()
     .catch(() => ({}))
@@ -1338,6 +1490,8 @@ fsRouter.post("/regex_rename", async (c) => {
         const newName = item.name.replace(srcRegex, new_name_regex || "")
         validateFileName(newName)
         const fullPath = `${dirPath}/${item.name}`.replace(/\/{2,}/g, "/")
+        if (await deniedByMetaWriteAcl(c, user, [fullPath]))
+          return permissionDenied(c)
         await renameItem(fullPath, newName, requestContext)
       }
     }
@@ -1351,7 +1505,7 @@ fsRouter.post("/regex_rename", async (c) => {
 
 fsRouter.post("/recursive_move", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!canMove(user)) return permissionDenied(c)
   const { src_dir, dst_dir, conflict_policy } = await c.req
     .json()
     .catch(() => ({}))
@@ -1389,6 +1543,13 @@ fsRouter.post("/recursive_move", async (c) => {
             if (policy === "skip") continue
           }
           if (policy !== "overwrite") existing.add(item.name)
+          if (
+            await deniedByMetaWriteAcl(c, user, [
+              dstPath,
+              `${dir}/${item.name}`.replace(/\/{2,}/g, "/"),
+            ])
+          )
+            return permissionDenied(c)
           await moveItems(dir, dstPath, [item.name], requestContext)
           count++
         }
@@ -1408,9 +1569,10 @@ fsRouter.post("/recursive_move", async (c) => {
 
 fsRouter.post("/remove_empty_directory", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!canRemove(user)) return permissionDenied(c)
   const { src_dir } = await c.req.json().catch(() => ({}))
   const srcPath = getActualPath(user, src_dir || "/")
+  if (await deniedByMetaWriteAcl(c, user, [srcPath])) return permissionDenied(c)
   const requestContext = getStorageRequestContext(c)
   try {
     const removeEmptyDirs = async (dir: string): Promise<void> => {
@@ -1495,10 +1657,55 @@ fsRouter.post("/get_direct_upload_info", async (c) => {
   const user = await getUserFromContext(c)
   if (!canWrite(user)) return permissionDenied(c)
   const { path, file_name, file_size } = await c.req.json().catch(() => ({}))
-  const reqPath = getActualPath(user, path || "/")
+  // 对齐 Go FsGetDirectUploadInfo 的四重校验：
+  //  1) file_name 必须是单层相对文件名（拒绝 / \ .. 与空值），否则可能签发
+  //     指向目标目录之外的直传凭证；
+  //  2) 目标目录需通过用户权限位，或 meta.write 强制开放（write_content_bypass）；
+  //  3) 目标目录需通过 meta.write_users 白名单；
+  //  4) 目标不得跨越存储挂载边界（单段文件名也可能命中嵌套挂载点）。
+  let cleanName: string
   try {
-    await assertUploadPathWritable(c.env, reqPath)
-    const resolved = await resolvePath(reqPath)
+    cleanName = validateFileName(file_name)
+  } catch (e: any) {
+    return c.json({ code: 403, message: safeErrorMessage(e), data: null }, 403)
+  }
+  const dirPath = getActualPath(user, path || "/")
+  const dstPath = dirPath === "/" ? `/${cleanName}` : `${dirPath}/${cleanName}`
+  const parentMeta = await getNearestMeta(dirPath, c.env)
+  if (!canWrite(user) && !canWriteContentBypassUserPerms(parentMeta, dirPath)) {
+    return permissionDenied(c)
+  }
+  if (await deniedByMetaWriteAcl(c, user, [dirPath])) return permissionDenied(c)
+  // 挂载边界：目标文件与所在目录必须落在同一个存储挂载点内
+  const normMount = (s: any) =>
+    "/" + String(s?.mount_path || "").split("/").filter(Boolean).join("/")
+  try {
+    const [parentResolved, targetResolved] = await Promise.all([
+      resolvePath(dirPath),
+      resolvePath(dstPath),
+    ])
+    if (
+      normMount(parentResolved.storage) !== normMount(targetResolved.storage)
+    ) {
+      return permissionDenied(c)
+    }
+  } catch {
+    return permissionDenied(c)
+  }
+  // Overwrite:false 时目标已存在则拒绝签发（对齐 Go）
+  if (c.req.header("Overwrite") === "false") {
+    try {
+      const { item } = await getItem(dstPath, getStorageRequestContext(c))
+      if (item) {
+        return c.json({ code: 403, message: "file exists", data: null }, 403)
+      }
+    } catch {
+      // 目标不存在 / 无法读取：继续签发流程
+    }
+  }
+  try {
+    await assertUploadPathWritable(c.env, dirPath)
+    const resolved = await resolvePath(dirPath)
     if (resolved.isVirtual || !resolved.storage) {
       return c.json({ code: 200, message: "success", data: null })
     }
@@ -1508,9 +1715,12 @@ fsRouter.post("/get_direct_upload_info", async (c) => {
     if (typeof d.getDirectUploadInfo === "function") {
       const info = await d.getDirectUploadInfo(
         resolved.relative,
-        file_name,
+        cleanName,
         file_size,
       )
+      // 直传 URL 签发后客户端会向该路径写入新文件：预失效目录与目标路径
+      // （本分支已把校验后的目录/文件名归一化为 dirPath / dstPath）
+      await invalidatePaths([dirPath, dstPath], c.env)
       return c.json({ code: 200, message: "success", data: info })
     }
     // 回退到 other("direct_upload") / other("get_direct_upload_info")
@@ -1518,10 +1728,14 @@ fsRouter.post("/get_direct_upload_info", async (c) => {
       for (const m of ["direct_upload", "get_direct_upload_info"]) {
         try {
           const info = await d.other(m, resolved.relative, {
-            file_name,
+            file_name: cleanName,
             file_size,
           })
-          if (info) return c.json({ code: 200, message: "success", data: info })
+          if (info) {
+            // 同上：直传 URL 签发后预失效目录与目标路径
+            await invalidatePaths([dirPath, dstPath], c.env)
+            return c.json({ code: 200, message: "success", data: info })
+          }
         } catch {
           // 尝试下一个 method
         }
@@ -1565,7 +1779,7 @@ async function ownedMultipartSession(c: any, user: any, uploadId: string) {
 
 fsRouter.post("/multipart/init", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user)) return permissionDenied(c)
+  if (!user || !canWrite(user)) return permissionDenied(c)
 
   const rawPath = decodeURIComponent(c.req.header("File-Path") || "")
   const size = Number(c.req.header("X-File-Size") || "0")
@@ -1592,6 +1806,8 @@ fsRouter.post("/multipart/init", async (c) => {
 
   const { dir, name } = splitUploadPath(rawPath)
   const actualDir = getActualPath(user, dir)
+  if (await deniedByMetaWriteAcl(c, user, [actualDir, `${actualDir}/${name}`.replace(/\/{2,}/g, "/")]))
+    return permissionDenied(c)
   const requestContext = getStorageRequestContext(c)
 
   try {
@@ -1670,6 +1886,9 @@ fsRouter.post("/multipart/init", async (c) => {
         driver_session: info?.session || "",
         partMd5s: new Array(totalChunks).fill(undefined),
         storage_driver: resolved.storage!.driver,
+        storage_id: resolved.storage!.id,
+        owner_id: user.id,
+        owner_root: getActualPath(user, "/"),
         created_at: Date.now(),
       }
       // 秒传：驱动返回 reuse 标记
@@ -1725,6 +1944,7 @@ fsRouter.put("/multipart/chunk", async (c) => {
     ? await ownedMultipartSession(c, user, uploadId)
     : undefined
 
+  // 会话所有者校验：非本人会话按「不存在」处理（不泄露会话是否存在）
   if (!session) {
     return c.json(
       { code: 404, message: "upload session not found", data: null },
@@ -1753,18 +1973,6 @@ fsRouter.put("/multipart/chunk", async (c) => {
     return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
   }
 
-  const tooLarge = exceedsUploadLimit(c, true)
-  if (tooLarge !== null) {
-    return c.json(
-      {
-        code: 413,
-        message: `Part too large (max ${tooLarge} bytes)`,
-        data: null,
-      },
-      413,
-    )
-  }
-
   const requestContext = getStorageRequestContext(c)
   try {
     const resolved = await resolvePath(
@@ -1780,6 +1988,9 @@ fsRouter.put("/multipart/chunk", async (c) => {
       session.chunk_size,
       session.size - chunkIndex * session.chunk_size,
     )
+    // 每片按精确字节数读取，只需确认期望大小未超过当前单片上限
+    const maxPart = getUploadSizeLimit(c, true)
+    if (expected > maxPart) return tooLargeResponse(c, maxPart, "Part")
     const lengthHeader = c.req.header("Content-Length")
     if (
       !c.req.raw.body ||
@@ -1917,6 +2128,15 @@ fsRouter.post("/multipart/complete", async (c) => {
     session.state = "completed"
     session.error = undefined
     await putSession(session, c.env)
+    // 分片收尾：失效上传文件及其目录的缓存（对齐 op 层 put 的失效范围）
+    {
+      const { dir, name } = splitUploadPath(session.path)
+      const actualDir = getActualPath(user, dir)
+      await invalidatePaths(
+        [actualDir, `${actualDir === "/" ? "" : actualDir}/${name}`],
+        c.env,
+      )
+    }
     return c.json({ code: 200, message: "success", data: mpSnapshot(session) })
   } catch (e: any) {
     session.state = "failed_retriable"
@@ -2049,9 +2269,15 @@ async function fetchArchiveBytes(
   // 环境变量 SSRF_ALLOWED_HOSTS 加入白名单
   const trustedHosts = getTrustedHosts(resolved.storage?.addition, c.env)
   assertSafeUrl(item.raw_url, "Archive download", trustedHosts)
-  const resp = await fetch(item.raw_url, {
-    headers: item.raw_url_headers || {},
-  })
+  // 使用与 /d、/p 代理相同的**逐跳**校验：默认 fetch 会自动跟随 3xx，攻击者
+  // 可以先让 raw_url 指向通过 isSafeUrl 的公网域名，再 302 跳到内网/云元数据。
+  // 历史缺陷：这里只校验初始 URL 后直接 fetch，绕过逐跳防护（raw.ts 已做）。
+  const { safeProxyFetch } = await import("./raw")
+  const resp = await safeProxyFetch(
+    item.raw_url,
+    item.raw_url_headers || {},
+    trustedHosts,
+  )
   if (!resp.ok) throw new Error(`archive download failed: HTTP ${resp.status}`)
   return await resp.arrayBuffer()
 }
@@ -2129,8 +2355,9 @@ function calcFileTypeSafe(name: string, isDir: boolean): number {
 
 fsRouter.post("/archive/meta", async (c) => {
   const user = await getUserFromContext(c)
-  if (!user || user.disabled)
-    return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  if (!user || user.disabled) return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  // 归档读取需要独立能力位：READ_ARCHIVES
+  if (!can(user, PermissionBit.READ_ARCHIVES)) return permissionDenied(c)
   const body = await c.req.json().catch(() => ({}))
   const path = String(body.path || c.req.query("path") || "").trim()
   if (!path)
@@ -2153,6 +2380,17 @@ fsRouter.post("/archive/meta", async (c) => {
     )
   }
   try {
+    // 与 /fs/get 共用 meta 判定：密码保护的归档不能靠归档接口绕过密码
+    if (
+      await deniedByMetaReadAcl(
+        c,
+        user,
+        getActualPath(user, path),
+        String(body.password || ""),
+      )
+    ) {
+      return permissionDenied(c)
+    }
     const bytes = await fetchArchiveBytes(c, user, path)
     const archive = parseZip(bytes)
     const tree = buildArchiveTree(archive)
@@ -2174,8 +2412,9 @@ fsRouter.post("/archive/meta", async (c) => {
 
 fsRouter.post("/archive/list", async (c) => {
   const user = await getUserFromContext(c)
-  if (!user || user.disabled)
-    return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  if (!user || user.disabled) return c.json({ code: 401, message: "Unauthorized", data: null }, 401)
+  // 归档读取需要独立能力位：READ_ARCHIVES
+  if (!can(user, PermissionBit.READ_ARCHIVES)) return permissionDenied(c)
   const body = await c.req.json().catch(() => ({}))
   const path = String(body.path || c.req.query("path") || "").trim()
   const innerPath = String(body.inner_path || "")
@@ -2201,6 +2440,17 @@ fsRouter.post("/archive/list", async (c) => {
     )
   }
   try {
+    // 与 /fs/get 共用 meta 判定：密码保护的归档不能靠归档接口绕过密码
+    if (
+      await deniedByMetaReadAcl(
+        c,
+        user,
+        getActualPath(user, path),
+        String(body.password || ""),
+      )
+    ) {
+      return permissionDenied(c)
+    }
     const bytes = await fetchArchiveBytes(c, user, path)
     const archive = parseZip(bytes)
     const prefix = innerPath ? innerPath.replace(/^\/+|\/+$/g, "") + "/" : ""
@@ -2238,7 +2488,8 @@ fsRouter.post("/archive/list", async (c) => {
 
 fsRouter.post("/archive/decompress", async (c) => {
   const user = await getUserFromContext(c)
-  if (!canWrite(user))
+  // 解压写文件：需要 WRITE_CONTENT（写目标）+ DECOMPRESS（解压能力）
+  if (!canWrite(user) || !can(user, PermissionBit.DECOMPRESS))
     return c.json({ code: 403, message: "Permission denied", data: null }, 403)
   const body = await c.req.json().catch(() => ({}))
   const srcDir = String(body.src_dir || "").trim()
@@ -2259,6 +2510,13 @@ fsRouter.post("/archive/decompress", async (c) => {
   }
   try {
     let count = 0
+    // 目标目录必须落在**调用者自己的根目录**之内。
+    // 历史缺陷：dst_dir 被当作全局虚拟路径直接拼接，既未套用 base_path，
+    // 也未做角色范围校验，受限用户可写到任意目录。
+    const actualDstDir = getActualPath(user, dstDir)
+    if (!isWithinUserRoot(user, actualDstDir)) return permissionDenied(c)
+    if (await deniedByMetaWriteAcl(c, user, [actualDstDir]))
+      return permissionDenied(c)
     for (const name of names) {
       const srcPath = srcDir ? `${srcDir}/${name}` : `/${name}`
       const fmtDecomp = detectArchiveFormat(name)
@@ -2279,7 +2537,21 @@ fsRouter.post("/archive/decompress", async (c) => {
         if (prefix && !entry.name.startsWith(prefix)) continue
         const rel = prefix ? entry.name.slice(prefix.length) : entry.name
         if (!rel || rel.endsWith("/")) continue
-        const targetPath = `${dstDir.replace(/\/+$/, "")}/${rel}`
+        // zip-slip 防护：条目名视为「只能向下展开的相对路径」
+        const safeRel = safeArchiveEntryPath(rel)
+        if (!safeRel) {
+          console.warn(
+            `[Archive] skipping unsafe entry path: ${entry.name}`,
+          )
+          continue
+        }
+        const targetPath = `${actualDstDir.replace(/\/+$/, "")}/${safeRel}`
+        if (!isWithinUserRoot(user, targetPath)) {
+          console.warn(
+            `[Archive] skipping entry escaping user root: ${entry.name}`,
+          )
+          continue
+        }
         const content = await extractZipEntry(bytes, entry)
         await putItem(
           targetPath,

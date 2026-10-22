@@ -24,6 +24,7 @@
     "dropbox-layout-search.patch",
     "inline-search.patch",
     "dropbox-home.patch",
-    "dropbox-login.patch"
+    "dropbox-login.patch",
+    "b2-folder-jobs.patch"
   ]
 }

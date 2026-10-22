@@ -42,6 +42,19 @@ export interface MultipartSession {
   partMd5s: (string | undefined)[]
   /** 驱动名 + 存储引用，用于 chunk/complete 时重新 resolve 驱动 */
   storage_driver: string
+  /** Storage that owns the provider upload; lets cron cancel abandoned ones. */
+  storage_id?: number
+  /**
+   * 会话所有者的用户 id。
+   *
+   * 安全不变量：分片会话是**用户私有状态**，续传/完成/查询都必须校验所有者。
+   * 历史缺陷：会话只按 `path + size` 复用，不含用户维度，导致不同用户（即使
+   * base_path 不同）会命中同一个会话并互相续传（实测：两个不同根目录的用户
+   * 拿到同一个 upload_id，且 resumed=true）。
+   */
+  owner_id?: number
+  /** 创建会话时的用户根目录，用于校验会话未被跨根复用 */
+  owner_root?: string
   created_at: number
   error?: string
 }
@@ -406,27 +419,111 @@ export function newUploadId(): string {
 }
 
 /** Remove expired local records. Provider-side unfinished uploads use the bucket lifecycle policy. */
+// Unfinished uploads still hold provider-side parts (billed on B2) until
+// they are cancelled; cleanup leaves them to the cron for this long.
+const UNFINISHED_STATES = ["receiving", "failed_retriable", "failed_permanent"]
+const ABORT_GRACE = 7 * 24 * 60 * 60 * 1000
+
 export async function pruneSessions(env?: any): Promise<void> {
   const now = Date.now()
   const db = await database(env)
   if (db) {
+    const stale = `expires_at <= ? AND (state NOT IN ('receiving', 'failed_retriable', 'failed_permanent') OR expires_at <= ?)`
     await db.batch([
       db
         .prepare(
           `DELETE FROM openlist_upload_parts WHERE upload_id IN
-        (SELECT upload_id FROM openlist_upload_sessions WHERE expires_at <= ?)`,
+        (SELECT upload_id FROM openlist_upload_sessions WHERE ${stale})`,
         )
-        .bind(now),
+        .bind(now, now - ABORT_GRACE),
       db
-        .prepare(`DELETE FROM openlist_upload_sessions WHERE expires_at <= ?`)
-        .bind(now),
+        .prepare(`DELETE FROM openlist_upload_sessions WHERE ${stale}`)
+        .bind(now, now - ABORT_GRACE),
     ])
   } else {
     for (const [id, s] of sessions) {
-      if (now - s.created_at >= SESSION_TTL) {
+      const age = now - s.created_at
+      if (
+        age >= SESSION_TTL &&
+        (!UNFINISHED_STATES.includes(s.state) ||
+          age >= SESSION_TTL + ABORT_GRACE)
+      ) {
         sessions.delete(id)
         completionLocks.delete(id)
       }
     }
   }
+}
+
+async function deleteSessionRecord(uploadId: string, env?: any) {
+  const db = await database(env)
+  if (!db) {
+    sessions.delete(uploadId)
+    completionLocks.delete(uploadId)
+    return
+  }
+  await db.batch([
+    db
+      .prepare("DELETE FROM openlist_upload_parts WHERE upload_id = ?")
+      .bind(uploadId),
+    db
+      .prepare("DELETE FROM openlist_upload_sessions WHERE upload_id = ?")
+      .bind(uploadId),
+  ])
+}
+
+/**
+ * Cancel provider uploads of expired, unfinished sessions, then forget them.
+ * A failed cancel is retried on the next run; after the grace period the
+ * record is dropped by pruneSessions (a B2 lifecycle rule covers the rest).
+ * Sessions created before storage_id was recorded can't be resolved and are
+ * simply removed.
+ */
+export async function abortExpiredSessions(
+  env: any,
+  abort: (session: MultipartSession) => Promise<void>,
+  limit = 20,
+): Promise<{ aborted: number; failed: number }> {
+  const now = Date.now()
+  const db = await database(env)
+  let expired: MultipartSession[]
+  if (db) {
+    const rows = await db
+      .prepare(
+        `SELECT payload, state FROM openlist_upload_sessions
+      WHERE expires_at <= ? AND state IN ('receiving', 'failed_retriable', 'failed_permanent')
+      ORDER BY expires_at LIMIT ?`,
+      )
+      .bind(now, limit)
+      .all()
+    expired = rows.results.map((row: any) => ({
+      ...JSON.parse(row.payload),
+      state: row.state,
+    }))
+  } else {
+    expired = Array.from(sessions.values())
+      .filter(
+        (s) =>
+          now - s.created_at >= SESSION_TTL &&
+          UNFINISHED_STATES.includes(s.state),
+      )
+      .slice(0, limit)
+  }
+  let aborted = 0
+  let failed = 0
+  for (const session of expired) {
+    try {
+      if (session.storage_id !== undefined && session.driver_session)
+        await abort(session)
+      await deleteSessionRecord(session.upload_id, env)
+      aborted++
+    } catch (error) {
+      failed++
+      console.warn(
+        `[multipart] cancelling expired upload ${session.upload_id} failed:`,
+        error,
+      )
+    }
+  }
+  return { aborted, failed }
 }

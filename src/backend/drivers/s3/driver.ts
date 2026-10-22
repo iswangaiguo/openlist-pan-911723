@@ -389,7 +389,7 @@ export class S3Driver implements StorageDriver {
   ): Promise<void> {
     const current = await this.client.headObject(key)
     if (!current) return // The successful deletion response may have been lost.
-    if (current.etag !== etag || current.size !== size)
+    if ((etag && current.etag !== etag) || current.size !== size)
       throw new Error("Source changed while renaming; source retained")
     await this.client.deleteObject(key)
   }
@@ -404,16 +404,113 @@ export class S3Driver implements StorageDriver {
     const parentDir = getDirName(oldPath)
     const newPath = joinPath(parentDir, newName)
 
-    const head = await this.client.headObject(oldPath)
-    if (head) {
-      // File rename
-      await this.client.copyObject(oldPath, newPath, head.size)
-      await this.client.deleteObject(oldPath)
-    } else {
-      // Directory rename
-      await this.copyDirRecursive(oldPath, newPath)
-      await this.removeDirRecursive(oldPath)
+    await this.moveKey(oldPath, newPath)
+  }
+
+  /**
+   * Whether objects can be copied server-side into `target`: both mounts
+   * use the same S3 endpoint and credentials (e.g. two buckets or two root
+   * folders of one Backblaze B2 account), so no bytes pass through the Worker.
+   */
+  canTransferTo(target: S3Driver): boolean {
+    if (this.driverName.toLowerCase().includes("doge")) return false
+    const a = this.addition
+    const b = target.addition
+    const host = (endpoint: string) => {
+      try {
+        return new URL(endpoint.includes("://") ? endpoint : `https://${endpoint}`)
+          .host.toLowerCase()
+      } catch {
+        return ""
+      }
     }
+    return (
+      !!host(a.endpoint) &&
+      host(a.endpoint) === host(b.endpoint) &&
+      a.region === b.region &&
+      a.access_key_id === b.access_key_id &&
+      a.secret_access_key === b.secret_access_key &&
+      (a.session_token || "") === (b.session_token || "")
+    )
+  }
+
+  /** Move or copy an item into another mount that `canTransferTo` accepts. */
+  async transferTo(
+    target: S3Driver,
+    srcPhys: string,
+    dstPhys: string,
+    move: boolean,
+  ): Promise<void> {
+    if (!this.canTransferTo(target))
+      throw new Error("Moving or copying between different storages is not supported")
+    await this.checkDogeToken()
+    const src = this.getRemotePath(srcPhys)
+    const dst = target.getRemotePath(dstPhys)
+    if (move) await this.moveKey(src, dst, target)
+    else await this.copyKey(src, dst, target)
+  }
+
+  private assertNotIntoItself(src: string, dst: string, target: S3Driver) {
+    if (
+      target.addition.bucket === this.addition.bucket &&
+      (src === dst || isSubPath(src, dst))
+    )
+      throw new Error("Cannot move or copy a folder into itself")
+  }
+
+  /** Copy then delete, removing the source only after the copy is confirmed. */
+  private async moveKey(
+    src: string,
+    dst: string,
+    target: S3Driver = this,
+  ): Promise<void> {
+    const head = await this.client.headObject(src)
+    if (head) {
+      await this.copyVerified(src, dst, head.size, head.etag, target)
+      await this.deleteRenamedSource(src, head.etag, head.size)
+      return
+    }
+    this.assertNotIntoItself(src, dst, target)
+    // Directory: delete exactly the objects that were copied, so files
+    // added to the source while copying are never removed uncopied.
+    const copied = await this.copyDirRecursive(src, dst, target)
+    for (const file of copied)
+      await this.deleteRenamedSource(file.key, file.etag, file.size)
+  }
+
+  private async copyKey(
+    src: string,
+    dst: string,
+    target: S3Driver = this,
+  ): Promise<void> {
+    const head = await this.client.headObject(src)
+    if (head) {
+      await this.copyVerified(src, dst, head.size, head.etag, target)
+      return
+    }
+    this.assertNotIntoItself(src, dst, target)
+    await this.copyDirRecursive(src, dst, target)
+  }
+
+  private async copyVerified(
+    src: string,
+    dst: string,
+    size: number,
+    etag: string,
+    target: S3Driver = this,
+  ): Promise<void> {
+    await target.client.copyObject(
+      src,
+      dst,
+      size,
+      etag || undefined,
+      this.addition.bucket,
+    )
+    const copied = await target.client.headObject(dst)
+    if (!copied || copied.size !== size)
+      throw new Error(
+        `Destination copy could not be confirmed; source retained: ${src}`,
+      )
   }
 
   async move(
@@ -429,14 +526,7 @@ export class S3Driver implements StorageDriver {
     const srcPath = this.getRemotePath(srcPhys)
     const dstPath = this.getRemotePath(dstPhys)
 
-    const head = await this.client.headObject(srcPath)
-    if (head) {
-      await this.client.copyObject(srcPath, dstPath, head.size)
-      await this.client.deleteObject(srcPath)
-    } else {
-      await this.copyDirRecursive(srcPath, dstPath)
-      await this.removeDirRecursive(srcPath)
-    }
+    await this.moveKey(srcPath, dstPath)
   }
 
   async copy(
@@ -451,26 +541,36 @@ export class S3Driver implements StorageDriver {
     const srcPath = this.getRemotePath(srcPhys)
     const dstPath = this.getRemotePath(dstPhys)
 
-    const head = await this.client.headObject(srcPath)
-    if (head) {
-      await this.client.copyObject(srcPath, dstPath, head.size)
-    } else {
-      await this.copyDirRecursive(srcPath, dstPath)
-    }
+    await this.copyKey(srcPath, dstPath)
   }
 
-  private async copyDirRecursive(src: string, dst: string): Promise<void> {
+  private async copyDirRecursive(
+    src: string,
+    dst: string,
+    target: S3Driver = this,
+  ): Promise<{ key: string; etag: string; size: number }[]> {
     const version = this.addition.list_object_version === "v2" ? "v2" : "v1"
     const rawFiles = await this.client.listObjects(src, version, true)
+    const copied: { key: string; etag: string; size: number }[] = []
     for (const file of rawFiles) {
       const childSrc = joinPath(src, file.name)
       const childDst = joinPath(dst, file.name)
       if (file.isFolder) {
-        await this.copyDirRecursive(childSrc, childDst)
+        copied.push(
+          ...(await this.copyDirRecursive(childSrc, childDst, target)),
+        )
       } else {
-        await this.client.copyObject(childSrc, childDst, file.size)
+        await target.client.copyObject(
+          childSrc,
+          childDst,
+          file.size,
+          file.etag || undefined,
+          this.addition.bucket,
+        )
+        copied.push({ key: childSrc, etag: file.etag || "", size: file.size })
       }
     }
+    return copied
   }
 
   async remove(

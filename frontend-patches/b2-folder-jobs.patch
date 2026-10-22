@@ -1,0 +1,163 @@
+diff --git a/src/pages/home/folder/Folder.tsx b/src/pages/home/folder/Folder.tsx
+index 284e5d1..fb12ac4 100644
+--- a/src/pages/home/folder/Folder.tsx
++++ b/src/pages/home/folder/Folder.tsx
+@@ -10,10 +10,12 @@ import {
+ import { layout } from "~/store"
+ import { ContextMenu } from "./context-menu"
+ import { Pager } from "./Pager"
+-import { useLink, useT } from "~/hooks"
++import { useLink, usePath, useRouter, useT } from "~/hooks"
+ import { objStore, local } from "~/store"
+ import { ObjType } from "~/types"
+-import { bus } from "~/utils"
++import { bus, notify } from "~/utils"
++import { driveB2Job } from "~/utils/b2-jobs"
++import { currentLang } from "~/app/i18n"
+ import lightGallery from "lightgallery"
+ import lgThumbnail from "lightgallery/plugins/thumbnail"
+ import lgZoom from "lightgallery/plugins/zoom"
+@@ -66,6 +68,48 @@ const Folder = () => {
+     bus.off("gallery")
+     dynamicGallery?.destroy()
+   })
++  // B2 folder jobs advance one small step per request. Keep them moving
++  // while their folder is listed, then refresh to show the final state.
++  const { refresh } = usePath()
++  const { isShare } = useRouter()
++  const watching = new Set<string>()
++  // Jobs this view could not advance (e.g. no permission) are left to the
++  // cron; retrying them would refresh the listing in a loop.
++  const stopped = new Set<string>()
++  createEffect(() => {
++    if (isShare() || !objStore.write) return
++    for (const obj of objStore.objs) {
++      const job = (obj as any).migration
++      if (
++        !job ||
++        job.state === "paused" ||
++        watching.has(job.source_path) ||
++        stopped.has(job.source_path)
++      )
++        continue
++      watching.add(job.source_path)
++      driveB2Job(job.source_path)
++        .then(() => {
++          if (job.mode === "move" || job.mode === "copy") {
++            const zh = String(currentLang()).startsWith("zh")
++            notify.success(
++              job.mode === "move"
++                ? zh ? "B2 文件夹移动完成" : "B2 folder move completed"
++                : zh ? "B2 文件夹复制完成" : "B2 folder copy completed",
++            )
++          }
++        })
++        .then(
++          () => refresh(undefined, true),
++          (error) => {
++            // A pause is shown on the row (with Resume); anything else stops here.
++            if (error?.paused) refresh(undefined, true)
++            else stopped.add(job.source_path)
++          },
++        )
++        .finally(() => watching.delete(job.source_path))
++    }
++  })
+   const t = useT()
+   return (
+     <>
+diff --git a/src/pages/home/folder/InlineRename.tsx b/src/pages/home/folder/InlineRename.tsx
+index 2fe70d0..2c962b8 100644
+--- a/src/pages/home/folder/InlineRename.tsx
++++ b/src/pages/home/folder/InlineRename.tsx
+@@ -4,6 +4,7 @@ import { usePath, useRouter, useT } from "~/hooks"
+ import { me, objStore, userCan } from "~/store"
+ import { inlineRename, setInlineRename } from "~/store/inline_rename"
+ import { notify, pathJoin, validateFilename, r } from "~/utils"
++import { driveB2Job } from "~/utils/b2-jobs"
+ import { StoreObj } from "~/types"
+ 
+ const activeRenames = new Set<string>()
+@@ -110,13 +111,7 @@ export const InlineRename = (props: { obj: StoreObj }) => {
+           ))
+           void (async () => {
+             try {
+-              while (true) {
+-                const step: any = await r.post("/fs/rename/b2/step", { path: sourcePath })
+-                if (step.code !== 200 || !step.data) throw new Error(step.message)
+-                if (step.data.done) break
+-                if (step.data.state === "paused") throw new Error(step.data.error || "B2 rename paused")
+-                await new Promise((resolve) => setTimeout(resolve, 250))
+-              }
++              await driveB2Job(sourcePath)
+               notify.success(text("B2 目录名称同步完成", "B2 folder rename completed"))
+               if (pathname() === session.directory) refresh(undefined, true)
+             } catch (error) {
+diff --git a/src/pages/home/folder/ListItem.tsx b/src/pages/home/folder/ListItem.tsx
+index a155607..927b83e 100644
+--- a/src/pages/home/folder/ListItem.tsx
++++ b/src/pages/home/folder/ListItem.tsx
+@@ -179,9 +179,19 @@ export const ListItem = (props: { obj: StoreObj; index: number }) => {
+                 {props.obj.name}
+                 <Show when={(props.obj as any).migration}>
+                   <span style={{ "font-size": "11px", "margin-left": "8px", opacity: 0.7 }}>
+-                    {(props.obj as any).migration.state === "paused"
+-                      ? String(currentLang()).startsWith("zh") ? "B2 同步已暂停" : "B2 sync paused"
+-                      : `${String(currentLang()).startsWith("zh") ? "B2 同步" : "B2 syncing"} ${(props.obj as any).migration.processed}/${(props.obj as any).migration.discovered}`}
++                    {(() => {
++                      const job = (props.obj as any).migration
++                      const zh = String(currentLang()).startsWith("zh")
++                      const [running, paused] =
++                        job.mode === "move"
++                          ? zh ? ["B2 移动", "B2 移动已暂停"] : ["B2 moving", "B2 move paused"]
++                          : job.mode === "copy"
++                            ? zh ? ["B2 复制", "B2 复制已暂停"] : ["B2 copying", "B2 copy paused"]
++                            : zh ? ["B2 同步", "B2 同步已暂停"] : ["B2 syncing", "B2 sync paused"]
++                      return job.state === "paused"
++                        ? paused
++                        : `${running} ${job.processed}/${job.discovered}`
++                    })()}
+                   </span>
+                 </Show>
+                 <Show when={(props.obj as any).migration?.state === "paused"}>
+diff --git a/src/utils/b2-jobs.ts b/src/utils/b2-jobs.ts
+new file mode 100644
+index 0000000..422e121
+--- /dev/null
++++ b/src/utils/b2-jobs.ts
+@@ -0,0 +1,35 @@
++import { r } from "./request"
++
++const active = new Map<string, Promise<void>>()
++
++/**
++ * Advance a B2 folder rename/move/copy job one bounded step per request until
++ * it finishes. Every caller watching the same job shares one poller; the
++ * server's lease keeps other tabs and the cron from doing the same step twice.
++ * Rejects when the job pauses (error.paused is true; the folder row shows it)
++ * or when a step fails, e.g. without write permission.
++ */
++export function driveB2Job(sourcePath: string): Promise<void> {
++  const running = active.get(sourcePath)
++  if (running) return running
++  const job = (async () => {
++    try {
++      while (true) {
++        const step: any = await r.post("/fs/rename/b2/step", {
++          path: sourcePath,
++        })
++        if (step.code !== 200 || !step.data) throw new Error(step.message)
++        if (step.data.done) return
++        if (step.data.state === "paused")
++          throw Object.assign(new Error(step.data.error || "B2 sync paused"), {
++            paused: true,
++          })
++        await new Promise((resolve) => setTimeout(resolve, 250))
++      }
++    } finally {
++      active.delete(sourcePath)
++    }
++  })()
++  active.set(sourcePath, job)
++  return job
++}
