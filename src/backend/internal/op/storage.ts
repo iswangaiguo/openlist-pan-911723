@@ -77,6 +77,7 @@ import {
   b2OverlayNames,
   assertB2RenameWritable,
   startB2Rename,
+  startB2Transfer,
 } from "../../server/b2_rename"
 import {
   WeiyunDriver,
@@ -1913,6 +1914,42 @@ async function transferAcrossStorages(
   await srcDriver.transferTo(dstDriver, srcPhysical, dstPhysical, move)
 }
 
+/**
+ * Folders on B2 are moved/copied by a background job (one bounded step per
+ * request or cron run), so large folders finish even on the Workers free plan.
+ * Returns false when the item is a file or the storage isn't B2 on D1.
+ */
+async function startB2FolderTransfer(
+  driver: StorageDriver,
+  src: Awaited<ReturnType<typeof resolvePath>>,
+  dst: Awaited<ReturnType<typeof resolvePath>>,
+  srcVirtual: string,
+  dstVirtual: string,
+  mode: "move" | "copy",
+  requestContext?: StorageRequestContext,
+): Promise<boolean> {
+  if (
+    !(driver instanceof S3Driver) ||
+    !isB2Storage(src.storage) ||
+    !requestContext?.env?.DB
+  )
+    return false
+  const item = await driver.get(srcVirtual, src.physical!)
+  if (!item.is_dir) return false
+  if (src.relative === "/")
+    throw new Error("A storage mount root cannot be moved or copied")
+  await startB2Transfer(
+    requestContext.env,
+    src.storage,
+    srcVirtual,
+    src.physical!,
+    dstVirtual,
+    dst.physical!,
+    mode,
+  )
+  return true
+}
+
 export async function moveItems(
   srcDir: string,
   dstDir: string,
@@ -1950,6 +1987,18 @@ export async function moveItems(
             )
             return
           }
+          if (
+            await startB2FolderTransfer(
+              driver,
+              srcResolved,
+              dstResolved,
+              srcVirtual,
+              dstVirtual,
+              "move",
+              requestContext,
+            )
+          )
+            return
           await driver.move(
             srcDir,
             dstDir,
@@ -2009,6 +2058,18 @@ export async function copyItems(
             )
             return
           }
+          if (
+            await startB2FolderTransfer(
+              driver,
+              srcResolved,
+              dstResolved,
+              srcVirtual,
+              dstVirtual,
+              "copy",
+              requestContext,
+            )
+          )
+            return
           await driver.copy(
             srcDir,
             dstDir,

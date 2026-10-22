@@ -2,8 +2,11 @@ import { B2NativeClient, type B2File } from "../drivers/s3/b2-native"
 import type { S3Addition } from "../drivers/s3/types"
 
 type B2RenameState = "migrating" | "verifying" | "paused"
+/** rename/move delete each source after copying it; copy keeps the source. */
+export type B2TransferMode = "rename" | "move" | "copy"
 export type B2RenameJob = {
   id: string
+  mode: B2TransferMode
   storage_id: number
   source: string
   target: string
@@ -35,6 +38,7 @@ const schema = [
     source TEXT NOT NULL, target TEXT NOT NULL,
     source_virtual TEXT NOT NULL, target_virtual TEXT NOT NULL,
     fingerprint TEXT NOT NULL, state TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'rename',
     cursor TEXT, scanned INTEGER NOT NULL DEFAULT 0,
     processed INTEGER NOT NULL DEFAULT 0, error TEXT,
     lease_until INTEGER NOT NULL DEFAULT 0,
@@ -62,6 +66,16 @@ async function ready(db: any): Promise<void> {
   if (!pending) {
     const created: Promise<void> = (async () => {
       for (const sql of schema) await db.prepare(sql).run()
+      // Tables created before move/copy support lack the mode column.
+      try {
+        await db
+          .prepare(
+            "ALTER TABLE openlist_b2_rename_jobs ADD COLUMN mode TEXT NOT NULL DEFAULT 'rename'",
+          )
+          .run()
+      } catch (error) {
+        if (!/duplicate column/i.test(String(error))) throw error
+      }
     })()
     initialized.set(db, created)
     pending = created
@@ -176,49 +190,63 @@ export function b2ReadPaths(
 ): string[] {
   if (!job) return [physicalPath]
   const path = clean(virtualPath)
-  if (within(path, job.source_virtual))
-    throw new Error("Directory was renamed; use its new path")
+  // A copy keeps its source readable; rename/move hand it over to the target.
+  if (job.mode !== "copy" && within(path, job.source_virtual))
+    throw new Error(
+      job.mode === "move"
+        ? "Directory was moved; use its new path"
+        : "Directory was renamed; use its new path",
+    )
   if (!within(path, job.target_virtual)) return [physicalPath]
   const suffix = path.slice(job.target_virtual.length)
   return [physicalPath, "/" + job.source + suffix]
 }
 
+const parentOf = (path: string) => clean(path.slice(0, path.lastIndexOf("/")))
+
+/**
+ * While a job runs, the target folder is shown (with progress) in its parent,
+ * and a renamed/moved source no longer appears in its own parent.
+ */
 export function b2OverlayNames(
   job: B2RenameJob | null,
   virtualPath: string,
   items: any[],
 ): any[] {
-  if (
-    !job ||
-    clean(virtualPath) !==
-      clean(
-        job.source_virtual.slice(0, job.source_virtual.lastIndexOf("/")) || "/",
-      )
-  )
-    return items
+  if (!job) return items
+  const listed = clean(virtualPath)
+  const inSourceParent = listed === parentOf(job.source_virtual)
+  const inTargetParent = listed === parentOf(job.target_virtual)
+  if (!inSourceParent && !inTargetParent) return items
   const oldName = job.source_virtual.split("/").pop()!
   const newName = job.target_virtual.split("/").pop()!
-  const oldItem = items.find((item) => item.name === oldName)
-  const rest = items.filter(
-    (item) => item.name !== oldName && item.name !== newName,
-  )
-  rest.push({
-    ...(oldItem || {
-      size: 0,
-      modified: new Date().toISOString(),
-      sign: "",
-      type: 1,
-    }),
-    name: newName,
-    is_dir: true,
-    migration: {
-      state: job.state,
-      processed: job.processed,
-      discovered: job.scanned,
-      error: job.error,
-      source_path: job.source_virtual,
-    },
-  })
+  const oldItem = inSourceParent
+    ? items.find((item) => item.name === oldName)
+    : undefined
+  let rest = items
+  if (inSourceParent && job.mode !== "copy")
+    rest = rest.filter((item) => item.name !== oldName)
+  if (inTargetParent) {
+    rest = rest.filter((item) => item.name !== newName)
+    rest.push({
+      ...(oldItem || {
+        size: 0,
+        modified: new Date().toISOString(),
+        sign: "",
+        type: 1,
+      }),
+      name: newName,
+      is_dir: true,
+      migration: {
+        mode: job.mode,
+        state: job.state,
+        processed: job.processed,
+        discovered: job.scanned,
+        error: job.error,
+        source_path: job.source_virtual,
+      },
+    })
+  }
   return rest
 }
 
@@ -246,24 +274,49 @@ export async function startB2Rename(
   sourcePhysical: string,
   newName: string,
 ): Promise<B2RenameJob> {
+  if (newName === "." || newName === ".." || newName.includes("/"))
+    throw new Error("Invalid B2 directory rename")
+  const sibling = (path: string) =>
+    path.slice(0, path.lastIndexOf("/")) + "/" + newName
+  return startB2Transfer(
+    env,
+    storage,
+    sourceVirtual,
+    sourcePhysical,
+    sibling(clean(sourceVirtual)),
+    sibling(clean(sourcePhysical)),
+    "rename",
+  )
+}
+
+/**
+ * Start a background rename, move or copy of a folder within one B2 storage.
+ * Paths are virtual (as users see them) and physical (inside the storage).
+ */
+export async function startB2Transfer(
+  env: any,
+  storage: any,
+  sourceVirtual: string,
+  sourcePhysical: string,
+  targetVirtualPath: string,
+  targetPhysical: string,
+  mode: B2TransferMode,
+): Promise<B2RenameJob> {
   if (!isB2Storage(storage)) throw new Error("Storage is not Backblaze B2")
   const db = database(env)
   await ready(db)
   const source = clean(sourcePhysical).slice(1)
   const sourcePrefix = source + "/"
-  const parent = source.slice(0, source.lastIndexOf("/") + 1)
-  const target = parent + newName
-  const targetVirtual = clean(
-    sourceVirtual.slice(0, sourceVirtual.lastIndexOf("/")) + "/" + newName,
-  )
-  if (
-    !source ||
-    newName === "." ||
-    newName === ".." ||
-    newName.includes("/") ||
-    source === target
-  )
-    throw new Error("Invalid B2 directory rename")
+  const target = clean(targetPhysical).slice(1)
+  const targetVirtual = clean(targetVirtualPath)
+  if (!source || !target || source === target)
+    throw new Error(`Invalid B2 directory ${mode}`)
+  if (within("/" + target, "/" + source))
+    throw new Error("Cannot move or copy a folder into itself")
+  if (await getB2RenameJob(env, storage.id))
+    throw new Error(
+      "Another B2 folder operation is still running on this storage; try again when it finishes",
+    )
   const client = new B2NativeClient(additionFor(storage))
   await client.ensureRenameCapabilities()
   if (!(await client.list(sourcePrefix, undefined, 1)).files.length)
@@ -275,6 +328,7 @@ export async function startB2Rename(
     throw new Error("Target directory already exists")
   const job: B2RenameJob = {
     id: crypto.randomUUID(),
+    mode,
     storage_id: storage.id,
     source,
     target,
@@ -291,12 +345,13 @@ export async function startB2Rename(
   await db
     .prepare(
       `INSERT INTO openlist_b2_rename_jobs
-    (id, storage_id, source, target, source_virtual, target_virtual, fingerprint, state,
+    (id, mode, storage_id, source, target, source_virtual, target_virtual, fingerprint, state,
      cursor, scanned, processed, error, lease_until, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, 0, ?)`,
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, 0, NULL, 0, ?)`,
     )
     .bind(
       job.id,
+      job.mode,
       job.storage_id,
       job.source,
       job.target,
@@ -408,6 +463,10 @@ async function processItem(
     throw new Error(`B2 copy verification failed: ${item.source_key}`)
   if ((await client.exact(item.target_key))?.fileId !== item.target_id)
     throw new Error(`B2 target was replaced: ${item.target_key}`)
+  if (job.mode === "copy") {
+    await finishItem(db, job, item)
+    return true
+  }
   const current = await client.exact(item.source_key)
   if (current && current.fileId !== item.source_id)
     throw new Error(`B2 source was replaced: ${item.source_key}`)
@@ -415,6 +474,11 @@ async function processItem(
   // old name. A lost response is safe to retry: exact() then returns null.
   if (current) await client.hide(item.source_key)
   await client.deleteVersion(item.source_key, item.source_id)
+  await finishItem(db, job, item)
+  return true
+}
+
+async function finishItem(db: any, job: B2RenameJob, item: B2RenameItem) {
   await db.batch([
     db
       .prepare(
@@ -427,7 +491,6 @@ async function processItem(
       )
       .bind(Date.now(), job.id),
   ])
-  return true
 }
 
 /** One bounded Worker invocation. Cron or a client may safely call this again. */
@@ -519,7 +582,10 @@ export async function advanceB2Rename(
       ) as PromiseRejectedResult | undefined
       if (failure) throw failure.reason
     } else if (job.state === "verifying") {
-      if ((await client.list(sourcePrefix, undefined, 1)).files.length)
+      if (
+        job.mode !== "copy" &&
+        (await client.list(sourcePrefix, undefined, 1)).files.length
+      )
         throw new Error("B2 source prefix is not empty after migration")
       await db.batch([
         db
