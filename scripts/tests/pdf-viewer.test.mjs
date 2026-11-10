@@ -328,6 +328,47 @@ test("range-cache hook rejects changed or duplicated upstream code", () => {
   const patched = patchPdfRangeCache(source)
   assert.equal(patched.split(`openListFetchUrl${call.slice(8)}`).length, 3)
   assert.equal(patched.split("\nfunction fetchUrl(").length, 2)
+  // Run the generated wrapper: no hook, the hook's plain and fresh requests.
+  const wrapper = patched.slice(
+    patched.indexOf("function openListFetchUrl("),
+    patched.indexOf("\nfunction fetchUrl("),
+  )
+  const calls = []
+  const context = vm.createContext({
+    fetch: (url, options) => (calls.push({ url, options }), "fresh"),
+    fetchUrl: (...args) => (calls.push(args), "plain"),
+  })
+  const run = vm.runInContext(`${wrapper}\nopenListFetchUrl`, context)
+  const controller = new AbortController()
+  const headers = new Headers({ "X-Custom": "keep" })
+  const url = new URL("https://drive.example/p/a.pdf?sign=opaque%2Btoken")
+  assert.equal(run(url, headers, true, controller), "plain")
+  assert.deepEqual(calls.pop(), [url, headers, true, controller])
+  let hooked
+  context.openListPdfFetch = (...args) => (hooked = args)
+  run(url, headers, true, controller)
+  assert.equal(hooked[0], url)
+  assert.equal(hooked[1], headers)
+  assert.equal(hooked[2](), "plain")
+  assert.deepEqual(calls.pop(), [url, headers, true, controller])
+  assert.equal(hooked[2](true), "fresh")
+  const fresh = calls.pop()
+  assert.equal(fresh.url, url)
+  assert.deepEqual(
+    { ...fresh.options },
+    {
+      cache: "no-store",
+      method: "GET",
+      headers,
+      signal: controller.signal,
+      mode: "cors",
+      credentials: "include",
+      redirect: "follow",
+    },
+  )
+  run(url, headers, false, controller)
+  hooked[2](true)
+  assert.equal(calls.pop().options.credentials, "same-origin")
   for (const changed of [
     "unrecognized API",
     source + call,

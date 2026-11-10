@@ -83,3 +83,33 @@ test("previews use the cache module deployed with the installed viewer", () => {
   }
   assert.match(read("src/pages/manage/Header.tsx"), /clearDocumentCache\(\)/)
 })
+
+test("text, image and slide previews read through the same cache", () => {
+  const text = read("src/hooks/useUtil.ts")
+  assert.match(text, /await fetchDocument\(fileurl, id\)/)
+  // The uncached request, with its own error text, stays as the fallback.
+  assert.match(text, /return fetchText\(fileurl\)/)
+  const image = read("src/pages/home/previews/image.tsx")
+  assert.match(image, /useCachedUrl\(\(\) =>/)
+  assert.match(image, /src=\{imageSource\(\)\}/)
+  assert.doesNotMatch(image, /src=\{objStore\.raw_url\}\s+fallback=/)
+  assert.match(image, /fetchDocument\(url, identity\(\)\)/)
+  const slides = read("src/pages/home/previews/ppt.tsx")
+  assert.match(slides, /URL\.createObjectURL\(await fetchDocument\(/)
+  assert.match(slides, /URL\.revokeObjectURL\(cachedUrl\)/)
+})
+
+test("stored bytes are fetched fresh and belong to the URL they came from", () => {
+  const cache = read("src/utils/document-cache.ts")
+  assert.match(cache, /identity \? \{ cache: "no-store" as const \} : \{\}/)
+  assert.match(cache, /if \(signal\?\.aborted\) throw/)
+  const hook = read("src/hooks/useDocumentIdentity.ts")
+  assert.match(hook, /const id = untrack\(identity\)/)
+  assert.match(hook, /onCleanup\(\(\) => loading\.abort\(\)\)/)
+  // The identity is read when the URL changes, so the file's details must be
+  // in the store before its URL.
+  const path = read("src/hooks/usePath.ts")
+  const details = path.indexOf("ObjStore.setObj(data)")
+  const url = path.indexOf("ObjStore.setRawUrl(data.raw_url)")
+  assert.ok(details >= 0 && url > details)
+})
