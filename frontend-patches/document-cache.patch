@@ -254,10 +254,10 @@ index 6ea689a..2bdeeef 100644
              >
                <Match when={isHeif(objStore.obj.name)}>
 diff --git a/src/pages/home/previews/pdf.tsx b/src/pages/home/previews/pdf.tsx
-index c93c0d1..948d4fa 100644
+index c93c0d1..24e3403 100644
 --- a/src/pages/home/previews/pdf.tsx
 +++ b/src/pages/home/previews/pdf.tsx
-@@ -6,24 +6,29 @@ import {
+@@ -6,31 +6,60 @@ import {
    onCleanup,
    onMount,
    Show,
@@ -265,6 +265,7 @@ index c93c0d1..948d4fa 100644
  } from "solid-js"
  import { currentLang } from "~/app/i18n"
  import { BoxWithFullScreen } from "~/components"
++import { ModuleLoadError } from "~/components/ModuleLoadError"
 +import { useDocumentIdentity } from "~/hooks/useDocumentIdentity"
  import { objStore } from "~/store"
  import { joinBase } from "~/utils"
@@ -281,14 +282,45 @@ index c93c0d1..948d4fa 100644
    const { colorMode } = useColorMode()
    const [ready, setReady] = createSignal(false)
    const [failed, setFailed] = createSignal(false)
++  const [detail, setDetail] = createSignal("")
++  const [missing, setMissing] = createSignal(false)
    let frame: HTMLIFrameElement | undefined
++  let timeout: number | undefined
    const viewer = new URL(
 -    joinBase("static/pdfjs/6.3.289-openlist5/web/viewer.html"),
 +    joinBase("static/pdfjs/6.3.289-openlist6/web/viewer.html"),
      location.origin,
    )
    viewer.searchParams.set("locale", props.locale)
-@@ -45,9 +50,12 @@ const PDFFrame = (props: {
+   viewer.searchParams.set("theme", colorMode())
+   const chinese = () => props.locale.startsWith("zh")
++  // The viewer's path changes with every revision. A tab opened before an
++  // update still asks for the previous path and receives an empty page, which
++  // would otherwise stay blank until the timeout. Treat it like any other
++  // outdated module: reload the app once, or offer to.
++  const loaded = () => {
++    let entry: Document | null | undefined
++    try {
++      entry = frame?.contentDocument
++    } catch {
++      return
++    }
++    if (
++      !entry ||
++      entry.URL === "about:blank" ||
++      entry.documentElement?.dataset.openlistPdfViewer === "range"
++    )
++      return
++    window.clearTimeout(timeout)
++    setMissing(true)
++  }
+   onMount(() => {
+-    const timeout = window.setTimeout(() => setFailed(true), 30_000)
++    timeout = window.setTimeout(() => setFailed(true), 30_000)
+     const receive = (event: MessageEvent) => {
+       if (
+         event.origin !== location.origin ||
+@@ -45,11 +74,19 @@ const PDFFrame = (props: {
              type: "openlist:pdf:open",
              url: props.url,
              filename: props.filename,
@@ -300,8 +332,56 @@ index c93c0d1..948d4fa 100644
 +        props.stale()
        } else if (event.data?.type === "openlist:pdf:error") {
          window.clearTimeout(timeout)
++        // The cache must never be why a document cannot be read: the viewer
++        // has dropped it, so load this document once more without it.
++        if (props.cache) return props.stale()
++        const reason = event.data.detail
++        setDetail(typeof reason === "string" ? reason.slice(0, 80) : "")
          setFailed(true)
-@@ -107,6 +115,10 @@ const PDFFrame = (props: {
+       }
+     }
+@@ -74,9 +111,27 @@ const PDFFrame = (props: {
+         src={viewer.href}
+         title={props.filename || "PDF"}
+         allow="fullscreen"
++        onLoad={loaded}
+         style={{ width: "100%", height: "100%", border: "0", display: "block" }}
+       />
+-      <Show when={failed()}>
++      <Show when={missing()}>
++        <Box
++          position="absolute"
++          top="0"
++          right="0"
++          bottom="0"
++          left="0"
++          bg="$background"
++          display="flex"
++          alignItems="center"
++          justifyContent="center"
++          p="$4"
++          role="alert"
++        >
++          <ModuleLoadError error="Importing a module script failed: PDF viewer" />
++        </Box>
++      </Show>
++      <Show when={failed() && !missing()}>
+         <Box
+           position="absolute"
+           top="0"
+@@ -95,6 +150,11 @@ const PDFFrame = (props: {
+           <span>
+             {chinese() ? "PDF 预览加载失败" : "Unable to load PDF preview"}
+           </span>
++          <Show when={detail()}>
++            <span style={{ "font-size": "12px", opacity: "0.6" }}>
++              {detail()}
++            </span>
++          </Show>
+           <Button onClick={props.retry}>{chinese() ? "重试" : "Retry"}</Button>
+           <a href={props.url} target="_blank" rel="noopener noreferrer">
+             {chinese() ? "打开原文件" : "Open original file"}
+@@ -107,6 +167,10 @@ const PDFFrame = (props: {
  
  const PDFViewer = () => {
    const [attempt, setAttempt] = createSignal(0)
@@ -312,7 +392,7 @@ index c93c0d1..948d4fa 100644
    // A new URL/locale/retry replaces the iframe, cancelling its worker and all
    // outstanding range requests instead of leaving the previous file alive.
    const document = createMemo(() =>
-@@ -115,6 +127,8 @@ const PDFViewer = () => {
+@@ -115,6 +179,8 @@ const PDFViewer = () => {
            url: objStore.raw_url,
            locale: currentLang(),
            filename: objStore.obj.name,
@@ -321,7 +401,7 @@ index c93c0d1..948d4fa 100644
            attempt: attempt(),
          }
        : undefined,
-@@ -127,7 +141,9 @@ const PDFViewer = () => {
+@@ -127,7 +193,9 @@ const PDFViewer = () => {
              url={doc.url}
              locale={doc.locale}
              filename={doc.filename}

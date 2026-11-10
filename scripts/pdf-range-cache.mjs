@@ -194,6 +194,18 @@ export function createDocumentCache(scope = globalThis, options = {}) {
   }
 }
 
+// IndexedDB can stall without ever reporting an error (seen in Safari). The
+// document must still open, so nothing below waits on the cache indefinitely.
+const STALL = 2000
+const within = (promise, scope = globalThis) =>
+  new Promise((resolve, reject) => {
+    const timer = scope.setTimeout(
+      () => reject(new Error("Document cache did not respond")),
+      STALL,
+    )
+    promise.then(resolve, reject).finally(() => scope.clearTimeout(timer))
+  })
+
 const originOf = (url) => {
   try {
     return new URL(url).origin
@@ -233,7 +245,7 @@ export function createPdfSession(cache, { url, key, length, onStale }) {
     (queue = queue.then(work).catch(() => {
       state.enabled = false
     }))
-  const ready = cache.lookup(key, length).then(
+  const ready = within(cache.lookup(key, length)).then(
     ({ record, count }) => {
       state.record = record
       state.count = count
@@ -245,10 +257,12 @@ export function createPdfSession(cache, { url, key, length, onStale }) {
     },
   )
 
+  // Forget this document's bytes; never rejects and never waits for long.
+  const drop = () => within(queue.then(() => cache.remove(key))).catch(() => {})
+
   async function invalidate() {
     state.enabled = false
-    await queue
-    await cache.remove(key).catch(() => {})
+    await drop()
     if (state.served) onStale?.()
   }
 
@@ -382,8 +396,7 @@ export function createPdfSession(cache, { url, key, length, onStale }) {
     }
     const fresh = !record || changed(record, response.headers)
     if (record && fresh) {
-      await queue
-      await cache.remove(key).catch(() => {})
+      await drop()
       state.count = 0
     }
     state.record = {
@@ -467,6 +480,11 @@ export function createPdfSession(cache, { url, key, length, onStale }) {
     url,
     /** Resolves when everything read so far has been written. */
     idle: () => ready.then(() => queue),
+    /** After a failed open: stop caching and forget what was stored. */
+    discard() {
+      state.enabled = false
+      return drop()
+    },
     async fetch(headers, request) {
       await ready
       if (!state.enabled) return request()
@@ -511,6 +529,7 @@ export function installPdfRangeCache(scope, { onStale } = {}) {
       return !!session
     },
     idle: () => session?.idle() ?? Promise.resolve(),
+    discard: () => session?.discard() ?? Promise.resolve(),
   }
 }
 

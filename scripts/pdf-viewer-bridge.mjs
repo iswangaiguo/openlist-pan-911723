@@ -2,7 +2,20 @@
 // Never put a signed file URL in the iframe's location or persist it in settings.
 const origin = location.origin
 const query = new URLSearchParams(location.search)
-const send = (type) => parent.postMessage({ type }, origin)
+// Failures carry the error's class and HTTP status only: messages can quote
+// the signed file URL.
+const send = (type, error) =>
+  parent.postMessage(
+    error === undefined
+      ? { type }
+      : {
+          type,
+          detail: `${String(error?.name || "Error").slice(0, 60)}${
+            Number.isInteger(error?.status) ? ` ${error.status}` : ""
+          }`,
+        },
+    origin,
+  )
 const configure = (event) => {
   if (event.detail?.source !== window) return
   window.PDFViewerApplicationOptions.setAll({
@@ -84,10 +97,14 @@ try {
         await app.pdfViewer.pagesPromise
         await app.triggerPrinting()
       })
-      .catch(() => send("openlist:pdf:error"))
+      .catch(async (error) => {
+        // Whatever went wrong, the next attempt must not reuse cached bytes.
+        await rangeCache?.discard?.()
+        send("openlist:pdf:error", error)
+      })
   })
   send("openlist:pdf:ready")
-} catch {
+} catch (error) {
   cleanup()
-  send("openlist:pdf:error")
+  send("openlist:pdf:error", error)
 }

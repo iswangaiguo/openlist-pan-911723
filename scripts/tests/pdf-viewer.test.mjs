@@ -36,6 +36,7 @@ async function harness({
   let installedRetryPages
   const cached = []
   let stale
+  let discarded = 0
   const document = { documentElement: { style: {} } }
   const parent = {
     document: {
@@ -61,7 +62,11 @@ async function harness({
     triggerPrinting: async () => prints++,
     open: async (args) => {
       opens.push(args)
-      if (failOpen) throw new Error("bad PDF")
+      if (failOpen)
+        throw Object.assign(new Error("bad PDF /broken.pdf?secret=123"), {
+          name: "ResponseException",
+          status: 403,
+        })
     },
   }
   const context = vm.createContext({
@@ -91,7 +96,10 @@ async function harness({
         installPdfRangeCache: (target, hooks) => {
           assert.equal(target, window)
           stale = hooks.onStale
-          return { begin: (url, identity) => cached.push({ url, identity }) }
+          return {
+            begin: (url, identity) => cached.push({ url, identity }),
+            discard: async () => discarded++,
+          }
         },
       }
     },
@@ -101,7 +109,8 @@ async function harness({
         assert.equal(documentEvents.size, 0)
         throw new Error("iframe navigation cancelled boot")
       }
-      if (failBoot) throw new Error("missing module")
+      if (failBoot)
+        throw new TypeError("missing module https://x.example/a?secret=1")
       const configure = documentEvents.get("webviewerloaded")
       configure({ detail: { source: {} } })
       assert.deepEqual(options, {})
@@ -137,6 +146,7 @@ async function harness({
     retryPages: () => installedRetryPages,
     cached,
     stale: () => stale(),
+    discarded: () => discarded,
     message: async (
       data,
       origin = "https://drive.example",
@@ -279,6 +289,12 @@ test("document and module failures notify the parent without exposing signed URL
     file.messages.map((message) => message.type),
     ["openlist:pdf:ready", "openlist:pdf:error"],
   )
+  // Only the error class and status are reported, and the cache is dropped
+  // before the app is told, so its retry starts from the network.
+  assert.equal(boot.messages[0].detail, "TypeError")
+  assert.equal(file.messages[1].detail, "ResponseException 403")
+  assert.equal(file.discarded(), 1)
+  assert.equal(boot.discarded(), 0)
   assert.ok(
     file.messages.every(
       (message) => !JSON.stringify(message).includes("secret"),

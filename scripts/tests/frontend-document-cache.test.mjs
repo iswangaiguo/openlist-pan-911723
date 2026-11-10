@@ -84,6 +84,18 @@ test("previews use the cache module deployed with the installed viewer", () => {
   assert.match(read("src/pages/manage/Header.tsx"), /clearDocumentCache\(\)/)
 })
 
+test("an outdated viewer path or a cache failure recovers by itself", () => {
+  const pdf = read("src/pages/home/previews/pdf.tsx")
+  // A tab opened before an update asks for the previous viewer revision and
+  // gets an empty page: recognise it on load instead of waiting for a timeout.
+  assert.match(pdf, /onLoad=\{loaded\}/)
+  assert.match(pdf, /dataset\.openlistPdfViewer === "range"/)
+  assert.match(pdf, /<ModuleLoadError error="Importing a module script failed/)
+  // A failed open with the cache is retried once without it.
+  assert.match(pdf, /if \(props\.cache\) return props\.stale\(\)/)
+  assert.match(pdf, /stale=\{\(\) => setUncached\(true\)\}/)
+})
+
 test("text, image and slide previews read through the same cache", () => {
   const text = read("src/hooks/useUtil.ts")
   assert.match(text, /await fetchDocument\(fileurl, id\)/)

@@ -344,6 +344,50 @@ test("documents without an identity keep the uncached behaviour", async () => {
   }
 })
 
+test("a document that cannot be opened leaves nothing in the cache", async () => {
+  const body = Buffer.alloc(5 * CHUNK, "not a pdf ")
+  files.set("/p/broken.pdf", { body, etag: '"x"' })
+  const key = "1|/docs/broken.pdf|x",
+    size = body.length
+  await page.goto("about:blank")
+  requests.length = 0
+  await page.goto(
+    `${origin}/test.html?${new URLSearchParams({ file: "/p/broken.pdf?sign=first", key, size })}`,
+  )
+  await page.waitForFunction(() =>
+    window.messages.includes("openlist:pdf:error"),
+  )
+  assert.ok(requests.length > 0)
+  assert.equal(await stored(await viewer(), key, size), 0)
+})
+
+test("a store that never answers cannot keep a document from loading", async () => {
+  const frame = await open("plain.pdf")
+  const result = await frame.evaluate(async () => {
+    const { createDocumentCache, createPdfSession } =
+      await import("./openlist-cache.mjs")
+    // Safari has left IndexedDB requests pending forever.
+    const stalled = createDocumentCache({
+      indexedDB: { open: () => ({}) },
+      IDBKeyRange,
+    })
+    const session = createPdfSession(stalled, {
+      url: "x",
+      key: "k",
+      length: 1000,
+    })
+    const started = performance.now()
+    const first = await session.fetch(new Headers(), () => "network")
+    const ranged = await session.fetch(
+      new Headers({ Range: "bytes=0-99" }),
+      () => "range",
+    )
+    await session.discard()
+    return { first, ranged, bounded: performance.now() - started < 8000 }
+  })
+  assert.deepEqual(result, { first: "network", ranged: "range", bounded: true })
+})
+
 test("whole documents round-trip and the least recently used are evicted", async () => {
   const frame = await open("plain.pdf")
   const result = await frame.evaluate(async (chunk) => {
