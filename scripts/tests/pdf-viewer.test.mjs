@@ -291,7 +291,10 @@ test("document and module failures notify the parent without exposing signed URL
   )
   // Only the error class and status are reported, and the cache is dropped
   // before the app is told, so its retry starts from the network.
-  assert.equal(boot.messages[0].detail, "TypeError")
+  assert.equal(
+    boot.messages[0].detail,
+    "TypeError: missing module https://x.example/a",
+  )
   assert.equal(file.messages[1].detail, "ResponseException 403")
   assert.equal(file.discarded(), 1)
   assert.equal(boot.discarded(), 0)

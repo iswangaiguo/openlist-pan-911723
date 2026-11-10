@@ -254,10 +254,10 @@ index 6ea689a..2bdeeef 100644
              >
                <Match when={isHeif(objStore.obj.name)}>
 diff --git a/src/pages/home/previews/pdf.tsx b/src/pages/home/previews/pdf.tsx
-index c93c0d1..24e3403 100644
+index c93c0d1..6f9ea76 100644
 --- a/src/pages/home/previews/pdf.tsx
 +++ b/src/pages/home/previews/pdf.tsx
-@@ -6,31 +6,60 @@ import {
+@@ -6,31 +6,90 @@ import {
    onCleanup,
    onMount,
    Show,
@@ -270,6 +270,36 @@ index c93c0d1..24e3403 100644
  import { objStore } from "~/store"
  import { joinBase } from "~/utils"
 +import type { DocumentIdentity } from "~/utils/document-identity"
++
++// The bundled PDF.js needs these at start-up (Safari and iPadOS 17.4 or later).
++// Older browsers cannot run it at all, so say that instead of loading it.
++const viewerSupported = () =>
++  typeof (Promise as { withResolvers?: unknown }).withResolvers ===
++    "function" && typeof (AbortSignal as { any?: unknown }).any === "function"
++
++const UnsupportedBrowser = (props: { url: string; chinese: boolean }) => (
++  <Box
++    w="$full"
++    h="$full"
++    display="flex"
++    alignItems="center"
++    justifyContent="center"
++    flexDirection="column"
++    gap="$4"
++    p="$4"
++    textAlign="center"
++    role="alert"
++  >
++    <span>
++      {props.chinese
++        ? "此浏览器版本较旧，无法使用内置 PDF 预览器（需要 Safari / iPadOS 17.4 或更高版本）。"
++        : "This browser is too old for the built-in PDF viewer (Safari / iPadOS 17.4 or later is required)."}
++    </span>
++    <Button as="a" href={props.url} target="_blank" rel="noopener noreferrer">
++      {props.chinese ? "用浏览器打开 PDF" : "Open the PDF in the browser"}
++    </Button>
++  </Box>
++)
  
  const PDFFrame = (props: {
    url: string
@@ -320,7 +350,7 @@ index c93c0d1..24e3403 100644
      const receive = (event: MessageEvent) => {
        if (
          event.origin !== location.origin ||
-@@ -45,11 +74,19 @@ const PDFFrame = (props: {
+@@ -45,11 +104,19 @@ const PDFFrame = (props: {
              type: "openlist:pdf:open",
              url: props.url,
              filename: props.filename,
@@ -336,11 +366,11 @@ index c93c0d1..24e3403 100644
 +        // has dropped it, so load this document once more without it.
 +        if (props.cache) return props.stale()
 +        const reason = event.data.detail
-+        setDetail(typeof reason === "string" ? reason.slice(0, 80) : "")
++        setDetail(typeof reason === "string" ? reason.slice(0, 160) : "")
          setFailed(true)
        }
      }
-@@ -74,9 +111,27 @@ const PDFFrame = (props: {
+@@ -74,9 +141,27 @@ const PDFFrame = (props: {
          src={viewer.href}
          title={props.filename || "PDF"}
          allow="fullscreen"
@@ -369,7 +399,7 @@ index c93c0d1..24e3403 100644
          <Box
            position="absolute"
            top="0"
-@@ -95,6 +150,11 @@ const PDFFrame = (props: {
+@@ -95,6 +180,11 @@ const PDFFrame = (props: {
            <span>
              {chinese() ? "PDF 预览加载失败" : "Unable to load PDF preview"}
            </span>
@@ -381,7 +411,7 @@ index c93c0d1..24e3403 100644
            <Button onClick={props.retry}>{chinese() ? "重试" : "Retry"}</Button>
            <a href={props.url} target="_blank" rel="noopener noreferrer">
              {chinese() ? "打开原文件" : "Open original file"}
-@@ -107,6 +167,10 @@ const PDFFrame = (props: {
+@@ -107,6 +197,10 @@ const PDFFrame = (props: {
  
  const PDFViewer = () => {
    const [attempt, setAttempt] = createSignal(0)
@@ -392,7 +422,7 @@ index c93c0d1..24e3403 100644
    // A new URL/locale/retry replaces the iframe, cancelling its worker and all
    // outstanding range requests instead of leaving the previous file alive.
    const document = createMemo(() =>
-@@ -115,6 +179,8 @@ const PDFViewer = () => {
+@@ -115,6 +209,8 @@ const PDFViewer = () => {
            url: objStore.raw_url,
            locale: currentLang(),
            filename: objStore.obj.name,
@@ -401,16 +431,37 @@ index c93c0d1..24e3403 100644
            attempt: attempt(),
          }
        : undefined,
-@@ -127,7 +193,9 @@ const PDFViewer = () => {
-             url={doc.url}
-             locale={doc.locale}
-             filename={doc.filename}
-+            cache={doc.cache}
-             retry={() => setAttempt((value) => value + 1)}
-+            stale={() => setUncached(true)}
-           />
+@@ -123,12 +219,24 @@ const PDFViewer = () => {
+     <BoxWithFullScreen w="$full" h="var(--preview-h, 60vh)">
+       <Show keyed when={document()}>
+         {(doc) => (
+-          <PDFFrame
+-            url={doc.url}
+-            locale={doc.locale}
+-            filename={doc.filename}
+-            retry={() => setAttempt((value) => value + 1)}
+-          />
++          <Show
++            when={viewerSupported()}
++            fallback={
++              <UnsupportedBrowser
++                url={doc.url}
++                chinese={doc.locale.startsWith("zh")}
++              />
++            }
++          >
++            <PDFFrame
++              url={doc.url}
++              locale={doc.locale}
++              filename={doc.filename}
++              cache={doc.cache}
++              retry={() => setAttempt((value) => value + 1)}
++              stale={() => setUncached(true)}
++            />
++          </Show>
          )}
        </Show>
+     </BoxWithFullScreen>
 diff --git a/src/pages/home/previews/ppt.tsx b/src/pages/home/previews/ppt.tsx
 index 8cbdd01..3c46cac 100644
 --- a/src/pages/home/previews/ppt.tsx

@@ -96,6 +96,17 @@ test("an outdated viewer path or a cache failure recovers by itself", () => {
   assert.match(pdf, /stale=\{\(\) => setUncached\(true\)\}/)
 })
 
+test("browsers the bundled viewer cannot run on get a notice, not a blank frame", () => {
+  const pdf = read("src/pages/home/previews/pdf.tsx")
+  // PDF.js 6.3 calls these while its modules load and ships no polyfill.
+  assert.match(pdf, /\.withResolvers ===\s+"function"/)
+  assert.match(pdf, /AbortSignal as \{ any\?: unknown \}\)\.any === "function"/)
+  assert.match(pdf, /when=\{viewerSupported\(\)\}/)
+  assert.match(pdf, /<UnsupportedBrowser/)
+  // The file itself stays one tap away in the browser's own viewer.
+  assert.match(pdf, /<Button as="a" href=\{props\.url\} target="_blank"/)
+})
+
 test("text, image and slide previews read through the same cache", () => {
   const text = read("src/hooks/useUtil.ts")
   assert.match(text, /await fetchDocument\(fileurl, id\)/)

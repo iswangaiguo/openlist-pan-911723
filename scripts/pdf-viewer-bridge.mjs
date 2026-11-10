@@ -106,5 +106,16 @@ try {
   send("openlist:pdf:ready")
 } catch (error) {
   cleanup()
-  send("openlist:pdf:error", error)
+  // No document has been opened yet, so the message cannot quote a file URL.
+  // It names what the browser lacks; drop any query string all the same.
+  parent.postMessage(
+    {
+      type: "openlist:pdf:error",
+      detail:
+        `${String(error?.name || "Error")}: ${String(error?.message || "")}`
+          .replace(/\?[^\s"')]*/g, "")
+          .slice(0, 160),
+    },
+    origin,
+  )
 }
