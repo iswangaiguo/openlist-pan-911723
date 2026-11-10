@@ -59,7 +59,17 @@ export function patchPdfRangeCache(source) {
         helper,
         `
 function openListFetchUrl(url, headers, withCredentials, abortController) {
-  const request = () => fetchUrl(url, headers, withCredentials, abortController);
+  // request(true) also bypasses the browser HTTP cache for a full read whose
+  // bytes will be stored; request() is the unchanged PDF.js request.
+  const request = fresh => fresh ? fetch(url, {
+    cache: "no-store",
+    method: "GET",
+    headers,
+    signal: abortController.signal,
+    mode: "cors",
+    credentials: withCredentials ? "include" : "same-origin",
+    redirect: "follow"
+  }) : fetchUrl(url, headers, withCredentials, abortController);
   const cache = globalThis.openListPdfFetch;
   return typeof cache === "function" ? cache(url, headers, request) : request();
 }${helper}`,

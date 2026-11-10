@@ -390,8 +390,14 @@ test("whole documents round-trip and the least recently used are evicted", async
     clock += 6000
     out.expired = await cache.prune()
     out.afterExpiry = await cache.readDocument("c", c.length)
-    out.sharedStore = await storeDocument("s", a.length, new Blob([a]))
-    out.sharedRead = await same(await readDocument("s", a.length), a)
+    out.sharedStore = await storeDocument(
+      "s",
+      a.length,
+      new Blob([a], { type: "image/svg+xml" }),
+    )
+    const shared = await readDocument("s", a.length)
+    out.sharedRead = await same(shared, a)
+    out.sharedType = shared.type
     await clearDocuments()
     out.cleared = await readDocument("s", a.length)
     return out
@@ -414,6 +420,7 @@ test("whole documents round-trip and the least recently used are evicted", async
     afterExpiry: null,
     sharedStore: true,
     sharedRead: true,
+    sharedType: "image/svg+xml",
     cleared: null,
   })
 })

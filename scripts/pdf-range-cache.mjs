@@ -158,7 +158,7 @@ export function createDocumentCache(scope = globalThis, options = {}) {
     const parts = await read(key, 0, total - 1)
     if (!parts) return null
     await save(record)
-    return new Blob(parts)
+    return new Blob(parts, { type: record.type || "" })
   }
 
   /** Store a complete file; refused unless it matches the listed size. */
@@ -167,7 +167,7 @@ export function createDocumentCache(scope = globalThis, options = {}) {
       return false
     const bytes = await blob.arrayBuffer()
     await remove(key)
-    await save({ key, length })
+    await save({ key, length, type: blob.type || "" })
     const entries = []
     for (let offset = 0; offset < length; offset += CHUNK_SIZE)
       entries.push([
@@ -369,7 +369,8 @@ export function createPdfSession(cache, { url, key, length, onStale }) {
         headers["Content-Disposition"] = record.disposition
       return synthetic(200, headers, cachedBody())
     }
-    const response = await request()
+    // These bytes may be stored, so they must not come from a stale HTTP cache.
+    const response = await request(true)
     state.origin = originOf(response.url)
     if (!state.enabled || response.status !== 200 || !response.body)
       return response

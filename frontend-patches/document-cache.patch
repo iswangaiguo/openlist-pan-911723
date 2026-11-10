@@ -1,10 +1,12 @@
 diff --git a/src/hooks/useDocumentIdentity.ts b/src/hooks/useDocumentIdentity.ts
 new file mode 100644
-index 0000000..2838722
+index 0000000..854fa16
 --- /dev/null
 +++ b/src/hooks/useDocumentIdentity.ts
-@@ -0,0 +1,9 @@
+@@ -0,0 +1,69 @@
++import { createEffect, createSignal, onCleanup, untrack } from "solid-js"
 +import { me, objStore } from "~/store"
++import { fetchDocument } from "~/utils/document-cache"
 +import { documentIdentity } from "~/utils/document-identity"
 +import { useRouter } from "./useRouter"
 +
@@ -13,6 +15,100 @@ index 0000000..2838722
 +  const { pathname } = useRouter()
 +  return () => documentIdentity(me().id, pathname(), objStore.obj)
 +}
++
++// Origins whose files cannot be read by script (no CORS): load them directly
++// instead of failing a cached download first on every file.
++const unreadable = new Set<string>()
++const originOf = (url: string) => {
++  try {
++    return new URL(url, location.href).origin
++  } catch {
++    return ""
++  }
++}
++
++/**
++ * A URL for an element such as <img>. Files opened before come from the
++ * document cache as an object URL; undefined while that is being resolved.
++ * Anything that cannot be cached keeps its original URL.
++ */
++export const useCachedUrl = (url: () => string) => {
++  const identity = useDocumentIdentity()
++  const [source, setSource] = createSignal<string>()
++  let objectUrl: string | undefined
++  const release = () => {
++    if (objectUrl) URL.revokeObjectURL(objectUrl)
++    objectUrl = undefined
++  }
++  createEffect(() => {
++    const target = url()
++    // Read with the URL it belongs to: the path changes before the file is
++    // loaded, and usePath stores the file's details before its URL.
++    const id = untrack(identity)
++    release()
++    if (!target || !id || unreadable.has(originOf(target))) {
++      setSource(target || undefined)
++      return
++    }
++    setSource(undefined)
++    // Leaving the file stops the download and keeps it out of the cache.
++    const loading = new AbortController()
++    onCleanup(() => loading.abort())
++    fetchDocument(target, id, loading.signal).then(
++      (blob) => {
++        if (loading.signal.aborted) return
++        objectUrl = URL.createObjectURL(blob)
++        setSource(objectUrl)
++      },
++      (error) => {
++        if (loading.signal.aborted) return
++        // A cross-origin network error is how a missing CORS policy shows up.
++        const origin = originOf(target)
++        if (error instanceof TypeError && origin !== location.origin)
++          unreadable.add(origin)
++        setSource(target)
++      },
++    )
++  })
++  onCleanup(release)
++  return source
++}
+diff --git a/src/hooks/useUtil.ts b/src/hooks/useUtil.ts
+index 4eb0f71..ba7d55a 100644
+--- a/src/hooks/useUtil.ts
++++ b/src/hooks/useUtil.ts
+@@ -2,7 +2,9 @@ import { createResource } from "solid-js"
+ import { getHideFiles, objStore } from "~/store"
+ import { Obj } from "~/types"
+ import { decodeText, fetchText, notify, pathJoin } from "~/utils"
++import { fetchDocument } from "~/utils/document-cache"
+ import { useT, useLink, useRouter } from "."
++import { useDocumentIdentity } from "./useDocumentIdentity"
+ 
+ async function checkClipboardPermission(
+   mode: "clipboard-read" | "clipboard-write",
+@@ -87,8 +89,21 @@ export const useUtil = () => {
+ 
+ export function useFetchText() {
+   const { proxyLink } = useLink()
++  const identity = useDocumentIdentity()
+   const fetchContent = async () => {
+     let fileurl = proxyLink(objStore.obj, true)
++    const id = identity()
++    if (id) {
++      try {
++        const blob = await fetchDocument(fileurl, id)
++        return {
++          content: await blob.arrayBuffer(),
++          contentType: blob.type || undefined,
++        }
++      } catch {
++        // Fall through to the uncached request and its own error text.
++      }
++    }
+     return fetchText(fileurl)
+   }
+   return createResource("", fetchContent)
 diff --git a/src/pages/home/previews/doc.tsx b/src/pages/home/previews/doc.tsx
 index 71e1031..ed03d72 100644
 --- a/src/pages/home/previews/doc.tsx
@@ -48,6 +144,115 @@ index 71e1031..ed03d72 100644
  
        // 使用docx-preview渲染文档
        if (resultRef) {
+diff --git a/src/pages/home/previews/image.tsx b/src/pages/home/previews/image.tsx
+index 6ea689a..2bdeeef 100644
+--- a/src/pages/home/previews/image.tsx
++++ b/src/pages/home/previews/image.tsx
+@@ -38,9 +38,11 @@ import {
+   ImageWithError,
+ } from "~/components"
+ import { useCDN, useRouter, useT } from "~/hooks"
++import { useCachedUrl, useDocumentIdentity } from "~/hooks/useDocumentIdentity"
+ import { objStore } from "~/store"
+ import { Obj, ObjType } from "~/types"
+ import { ext, formatDate, getFileSize, loadScriptIIFE } from "~/utils"
++import { fetchDocument } from "~/utils/document-cache"
+ 
+ const HEIF_EXTS = new Set(["heic", "heif", "avif", "vvc", "avc"])
+ const isHeif = (name: string) => HEIF_EXTS.has(ext(name).toLowerCase())
+@@ -62,6 +64,7 @@ const HeifView = (props: {
+ }) => {
+   const t = useT()
+   const { libHeifPath } = useCDN()
++  const identity = useDocumentIdentity()
+   const [loading, setLoading] = createSignal(true)
+   const [error, setError] = createSignal(false)
+   let canvas: HTMLCanvasElement | undefined
+@@ -83,10 +86,12 @@ const HeifView = (props: {
+         libheif = window.libheif({ wasmBinary: wasm })
+         decoder = new libheif.HeifDecoder()
+       }
+-      const buffer = await fetch(url).then((r) => {
+-        if (!r.ok) throw "File fetch failed"
+-        return r.arrayBuffer()
+-      })
++      const buffer = await fetchDocument(url, identity()).then(
++        (blob) => blob.arrayBuffer(),
++        () => {
++          throw "File fetch failed"
++        },
++      )
+       const images = decoder.decode(buffer)
+       if (!images?.length) throw "No decodable image"
+       const img = images[0]
+@@ -155,6 +160,10 @@ const Preview = (props: PreviewProps) => {
+   const [showInfo, setShowInfo] = createSignal(false)
+   const [imgSize, setImgSize] = createSignal({ w: 0, h: 0 })
+   const [isFullscreen, setIsFullscreen] = createSignal(false)
++  // Regular images are shown from the document cache once they were opened.
++  const imageSource = useCachedUrl(() =>
++    isHeif(objStore.obj.name) ? "" : objStore.raw_url,
++  )
+ 
+   let containerRef!: HTMLDivElement
+   let areaRef!: HTMLDivElement
+@@ -493,30 +502,32 @@ const Preview = (props: PreviewProps) => {
+           >
+             <Switch
+               fallback={
+-                <ImageWithError
+-                  src={objStore.raw_url}
+-                  fallback={<FullLoading />}
+-                  fallbackErr={
+-                    <Error msg={t("home.preview.failed_load_img")} />
+-                  }
+-                  onLoad={onImgLoad}
+-                  {...(fitMode() === "contain"
+-                    ? { w: "$full", h: "$full", objectFit: "contain" }
+-                    : {
+-                        css:
+-                          fitMode() === "height"
+-                            ? {
+-                                height: "100%",
+-                                width: "auto",
+-                                "max-width": "none",
+-                              }
+-                            : {
+-                                width: "100%",
+-                                height: "auto",
+-                                "max-height": "none",
+-                              },
+-                      })}
+-                />
++                <Show when={imageSource()} fallback={<FullLoading />}>
++                  <ImageWithError
++                    src={imageSource()}
++                    fallback={<FullLoading />}
++                    fallbackErr={
++                      <Error msg={t("home.preview.failed_load_img")} />
++                    }
++                    onLoad={onImgLoad}
++                    {...(fitMode() === "contain"
++                      ? { w: "$full", h: "$full", objectFit: "contain" }
++                      : {
++                          css:
++                            fitMode() === "height"
++                              ? {
++                                  height: "100%",
++                                  width: "auto",
++                                  "max-width": "none",
++                                }
++                              : {
++                                  width: "100%",
++                                  height: "auto",
++                                  "max-height": "none",
++                                },
++                        })}
++                  />
++                </Show>
+               }
+             >
+               <Match when={isHeif(objStore.obj.name)}>
 diff --git a/src/pages/home/previews/pdf.tsx b/src/pages/home/previews/pdf.tsx
 index c93c0d1..948d4fa 100644
 --- a/src/pages/home/previews/pdf.tsx
@@ -126,6 +331,53 @@ index c93c0d1..948d4fa 100644
            />
          )}
        </Show>
+diff --git a/src/pages/home/previews/ppt.tsx b/src/pages/home/previews/ppt.tsx
+index 8cbdd01..3c46cac 100644
+--- a/src/pages/home/previews/ppt.tsx
++++ b/src/pages/home/previews/ppt.tsx
+@@ -1,6 +1,8 @@
+ import { BoxWithFullScreen, Error as Erro, FullLoading } from "~/components"
+ import { Box, Button, IconButton, Tooltip } from "@hope-ui/solid"
+ import { loadScriptIIFE, loadCSS } from "~/utils"
++import { fetchDocument } from "~/utils/document-cache"
++import { useDocumentIdentity } from "~/hooks/useDocumentIdentity"
+ import { createSignal, onMount, onCleanup, Show } from "solid-js"
+ import { useLink, useT, useCDN } from "~/hooks"
+ import {
+@@ -19,6 +21,10 @@ declare global {
+ const PPTViewerApp = () => {
+   const t = useT()
+   const { currentObjLink } = useLink()
++  const identity = useDocumentIdentity()
++  // pptxjs downloads the file itself; hand it the cached copy as an object URL.
++  let cachedUrl: string | undefined
++  onCleanup(() => cachedUrl && URL.revokeObjectURL(cachedUrl))
+   const { npm, pptBasePath } = useCDN()
+   const [loading, setLoading] = createSignal(true)
+   const [error, setError] = createSignal(false)
+@@ -79,10 +85,21 @@ const PPTViewerApp = () => {
+         injectStylesToShadow(shadowHostRef.shadowRoot)
+       }
+ 
++      let pptxFileUrl = currentObjLink()
++      const id = identity()
++      if (id) {
++        try {
++          cachedUrl = URL.createObjectURL(await fetchDocument(pptxFileUrl, id))
++          pptxFileUrl = cachedUrl
++        } catch {
++          // Let pptxjs request the original link as before.
++        }
++      }
++
+       // 初始化pptxToHtml（渲染到Shadow DOM内的resultRef）
+       if (resultRef) {
+         window.$(resultRef).pptxToHtml({
+-          pptxFileUrl: currentObjLink(),
++          pptxFileUrl,
+           slideMode: false,
+           keyBoardShortCut: false,
+           slideModeConfig: {
 diff --git a/src/pages/home/previews/xls.tsx b/src/pages/home/previews/xls.tsx
 index e1ddcf2..76d8cdd 100644
 --- a/src/pages/home/previews/xls.tsx
@@ -186,10 +438,10 @@ index 3f6efab..2b90c33 100644
      })
 diff --git a/src/utils/document-cache.ts b/src/utils/document-cache.ts
 new file mode 100644
-index 0000000..32952f3
+index 0000000..ce482a7
 --- /dev/null
 +++ b/src/utils/document-cache.ts
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,60 @@
 +import { joinBase } from "./path"
 +import type { DocumentIdentity } from "./document-identity"
 +
@@ -213,24 +465,31 @@ index 0000000..32952f3
 +  ).catch(() => undefined))
 +
 +/**
-+ * Download a document for an in-page preview. A file opened before is read
-+ * from the browser's cache; the cache never turns a working download into an
-+ * error.
++ * Download a file for an in-page preview. A file opened before is read from
++ * the browser's cache; the cache never turns a working download into an error.
++ * What gets stored is always read from the network, not from the HTTP cache,
++ * so an older copy cannot be saved under the identity of a newer file.
 + */
 +export async function fetchDocument(
 +  url: string,
 +  identity?: DocumentIdentity,
++  signal?: AbortSignal,
 +): Promise<Blob> {
 +  const cache = identity ? await load() : undefined
 +  if (cache && identity) {
 +    const hit = await cache
 +      .readDocument(identity.key, identity.size)
 +      .catch(() => null)
-+    if (hit) return hit
++    if (hit && !signal?.aborted) return hit
 +  }
-+  const response = await fetch(url)
++  const response = await fetch(url, {
++    signal,
++    ...(identity ? { cache: "no-store" as const } : {}),
++  })
 +  if (!response.ok) throw new Error("Failed to fetch document file")
 +  const blob = await response.blob()
++  // A superseded request must not leave its bytes under this identity.
++  if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
 +  if (cache && identity)
 +    void cache
 +      .storeDocument(identity.key, identity.size, blob)
